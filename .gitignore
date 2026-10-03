@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pio/
+output/
+outputs/
+runs/
+tmp/
+logs/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.pt

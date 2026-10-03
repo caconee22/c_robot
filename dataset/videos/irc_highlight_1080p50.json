@@ -1,0 +1,13 @@
+{
+  "source": "img\\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!.mp4",
+  "source_width": 1280,
+  "source_height": 720,
+  "source_fps": 29.97002997002997,
+  "source_frames": 8428,
+  "output_width": 1920,
+  "output_height": 1080,
+  "output_fps": 50.0,
+  "output_frames": 14061,
+  "codec": "mp4v",
+  "fps_method": "timestamp-based frame repetition"
+}

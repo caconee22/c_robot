@@ -1,0 +1,72 @@
+{
+  "source": "img\\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!.mp4",
+  "frame_index": 344,
+  "image": "dataset\\green_cylinder\\images\\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!_frame_000344.jpg",
+  "mask": "dataset\\green_cylinder\\masks\\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!_frame_000344.png",
+  "debug": "dataset\\green_cylinder\\debug\\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!_frame_000344.jpg",
+  "params": {
+    "h_min": 35,
+    "h_max": 85,
+    "s_min": 45,
+    "s_max": 255,
+    "v_min": 35,
+    "v_max": 255,
+    "g_r_min": 15,
+    "g_b_min": 25,
+    "hl_s_max": 70,
+    "hl_v_min": 215,
+    "min_area_ratio": 0.001,
+    "kernel": 5,
+    "max_candidates": 3,
+    "show_mask": true,
+    "seek": 40
+  },
+  "best_bbox": [
+    131,
+    50,
+    67,
+    95
+  ],
+  "candidate_count": 3,
+  "candidates": [
+    {
+      "score": 0.9057087498979253,
+      "bbox": [
+        131,
+        50,
+        67,
+        95
+      ],
+      "area": 4962.5,
+      "aspect": 1.4179104477611941,
+      "green_score": 0.8,
+      "highlight_ratio": 0.0
+    },
+    {
+      "score": 0.8758393779790489,
+      "bbox": [
+        484,
+        58,
+        69,
+        90
+      ],
+      "area": 4855.0,
+      "aspect": 1.3043478260869565,
+      "green_score": 0.7365539452495974,
+      "highlight_ratio": 0.0
+    },
+    {
+      "score": 0.6532625125977002,
+      "bbox": [
+        207,
+        170,
+        23,
+        23
+      ],
+      "area": 342.0,
+      "aspect": 1.0,
+      "green_score": 0.7145557655954632,
+      "highlight_ratio": 0.0
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "source": "img\\20221027_141934.jpg",
+  "params": {
+    "h_min": 35,
+    "h_max": 85,
+    "s_min": 45,
+    "s_max": 255,
+    "v_min": 35,
+    "v_max": 255,
+    "g_r_min": 15,
+    "g_b_min": 25,
+    "hl_s_max": 70,
+    "hl_v_min": 215,
+    "min_area_ratio": 0.0005,
+    "kernel": 5,
+    "max_candidates": 3,
+    "show_mask": true,
+    "seek": 920
+  },
+  "candidate_count": 1,
+  "best_bbox": [
+    344,
+    61,
+    132,
+    188
+  ],
+  "candidates": [
+    {
+      "score": 0.950728459641665,
+      "bbox": [
+        344,
+        61,
+        132,
+        188
+      ],
+      "area": 18762.0,
+      "aspect": 1.4242424242424243,
+      "green_score": 0.7780913813555855,
+      "highlight_ratio": 0.014869439071566732
+    }
+  ],
+  "outputs": {
+    "image": "dataset\\green_cylinder_preprocessed_defaults\\images\\20221027_141934.jpg",
+    "full_mask": "dataset\\green_cylinder_preprocessed_defaults\\full_masks\\20221027_141934_full_mask.png",
+    "best_mask": "dataset\\green_cylinder_preprocessed_defaults\\best_candidate_masks\\20221027_141934_best_mask.png",
+    "debug": "dataset\\green_cylinder_preprocessed_defaults\\debug\\20221027_141934_debug.jpg",
+    "review": "dataset\\green_cylinder_preprocessed_defaults\\review\\20221027_141934_review.jpg"
+  }
+}

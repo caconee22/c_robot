@@ -1,0 +1,49 @@
+{
+  "source": "img\\KakaoTalk_20220726_033758780_25.jpg",
+  "params": {
+    "h_min": 35,
+    "h_max": 85,
+    "s_min": 45,
+    "s_max": 255,
+    "v_min": 35,
+    "v_max": 255,
+    "g_r_min": 15,
+    "g_b_min": 25,
+    "hl_s_max": 70,
+    "hl_v_min": 215,
+    "min_area_ratio": 0.0005,
+    "kernel": 5,
+    "max_candidates": 3,
+    "show_mask": true,
+    "seek": 920
+  },
+  "candidate_count": 1,
+  "best_bbox": [
+    291,
+    0,
+    97,
+    112
+  ],
+  "candidates": [
+    {
+      "score": 0.9042870400731404,
+      "bbox": [
+        291,
+        0,
+        97,
+        112
+      ],
+      "area": 8856.0,
+      "aspect": 1.1546391752577319,
+      "green_score": 0.8329496270374804,
+      "highlight_ratio": 0.0004602356406480118
+    }
+  ],
+  "outputs": {
+    "image": "dataset\\green_cylinder_preprocessed_defaults\\images\\KakaoTalk_20220726_033758780_25.jpg",
+    "full_mask": "dataset\\green_cylinder_preprocessed_defaults\\full_masks\\KakaoTalk_20220726_033758780_25_full_mask.png",
+    "best_mask": "dataset\\green_cylinder_preprocessed_defaults\\best_candidate_masks\\KakaoTalk_20220726_033758780_25_best_mask.png",
+    "debug": "dataset\\green_cylinder_preprocessed_defaults\\debug\\KakaoTalk_20220726_033758780_25_debug.jpg",
+    "review": "dataset\\green_cylinder_preprocessed_defaults\\review\\KakaoTalk_20220726_033758780_25_review.jpg"
+  }
+}

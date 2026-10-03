@@ -1,0 +1,5 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "YD-ESP32-S3") (type "KiCad") (uri "${KIPRJMOD}/libraries/YD-ESP32-S3.kicad_sym") (options "") (descr "Project-local symbol library for YD-ESP32-S3"))
+	(lib (name "HW-617") (type "KiCad") (uri "${KIPRJMOD}/libraries/HW-617.kicad_sym") (options "") (descr "Project-local symbol library for HW-617 TCA9548A module"))
+)

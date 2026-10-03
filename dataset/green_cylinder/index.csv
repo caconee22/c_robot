@@ -1,0 +1,2 @@
+﻿source,frame_index,image,mask,debug,best_bbox,candidate_count
+img\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!.mp4,344,dataset\green_cylinder\images\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!_frame_000344.jpg,dataset\green_cylinder\masks\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!_frame_000344.png,dataset\green_cylinder\debug\[IRC 씨름 로봇 대회] 2022 IRC 씨름 로봇 경기 하이라이트 모음! 2022 ROBIT Robot Sumo Highlight Video!_frame_000344.jpg,"131,50,67,95",3
