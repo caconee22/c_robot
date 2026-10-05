@@ -371,6 +371,13 @@ V1 컬러 센서의 개별 오류는 이 집계 고장에 연결하지 않고 �
 
 ## PlatformIO 환경
 
+별도 실물 시험 환경 `robot_bench` / `robot_bench_tcs34725`는 `src/bench_main.cpp`와
+`src/bench/bench_controller.cpp`를 사용하며 기존 공격 FSM 메인을 실행하지 않는다.
+UART0 57600에서 MODE MOTOR/MANUAL/DATA/ALIGN/FOLLOW/AVOID/STOP을 선택한다.
+모드 변경 시 정지 후 SW2로 재시작해야 한다. 수동 DRIVE 명령은 250ms 유지 제한,
+시험 출력은 최대 20%다. 상세 사용법/미검증 사항은 BENCH_TESTS.md를 읽는다.
+AVOID만 바닥 판정을 검사하며 Unknown/오래된 판정은 정지한다.
+
 생산용 FSM 펌웨어 빌드:
 
 ```powershell

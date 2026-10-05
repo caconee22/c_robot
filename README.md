@@ -26,6 +26,7 @@ ESP32-S3 주행 제어, 라즈베리파이 영상 처리, 회로 설계를 관�
 | 공격 FSM | 탐색·목표 확인·정렬·접근·돌진·급정거·삽입·밀기·회피 연결 |
 | PC 자동 검증 | 두 센서 구성 각각 12개 시험 그룹 통과 |
 | ESP32 빌드 | 생산/센서 전용 × 두 센서 구성, 네 환경 통과 |
+| 별도 실물 시험 펌웨어 | 모터/UART 수동/데이터/회전 정렬/추적/바닥 회피 구현, 두 센서 구성 빌드·PC 검사 통과 |
 | 실물 성능·브레이크·색 임계값·전략 튜닝 | 미완료, 하드웨어 확보 후 진행 |
 
 V1에는 IR, 거리센서, IMU, 전류센서, 엔코더, 배터리 ADC를 사용하지 않는다.
@@ -44,6 +45,7 @@ AS7341을 약 5ms 단일 수광(F2/F3/F5/F6/F7/Clear) 연속 측정으로 변경
 
 - [`ESP_MAIN/`](ESP_MAIN/): 주행 펌웨어와 하드웨어 없는 자동 시험.
 - [`ESP_MAIN/README.md`](ESP_MAIN/README.md): 펌웨어의 빠른 시작 안내.
+- [`ESP_MAIN/BENCH_TESTS.md`](ESP_MAIN/BENCH_TESTS.md): 별도 시험 펌웨어의 모터/수동 UART/데이터/회전 정렬/추적/구역 회피 모드.
 - [`ESP_MAIN/VERIFICATION.md`](ESP_MAIN/VERIFICATION.md): 요구사항 대응, 실행 흐름, 수정 내역, 시험 범위와 한계.
 - [`ESP_MAIN/AGENTS.md`](ESP_MAIN/AGENTS.md): 사용자 요구사항과 다른 AI/개발자를 위한 작업 기준.
 - [`scripts/`](scripts/): 영상 처리·시험 영상 준비 등의 파이썬 코드.

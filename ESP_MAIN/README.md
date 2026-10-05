@@ -9,6 +9,7 @@ PC 검증과 ESP32 빌드는 통과했으며 실물 시연과 튜닝은 남아 �
 - [프로젝트 README와 진행 상황](../README.md)
 - [요구사항·워크플로우·검증·실물 확인 사항](VERIFICATION.md)
 - [사용자 요구사항 및 작업 기준](AGENTS.md)
+- [모터·수동 UART·정렬·추적·회피 실물 테스트](BENCH_TESTS.md)
 
 ## 빠른 실행
 
