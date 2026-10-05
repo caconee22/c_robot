@@ -8,6 +8,7 @@ struct SensorDevice {
   bool highBank = false;
   uint8_t reg[256] = {};
   uint32_t smuxStarted = 0, measurementStarted = 0;
+  uint32_t completedCycles = 0;
   std::array<uint16_t, 6> low{{100,100,100,100,1000,10}};
   std::array<uint16_t, 6> high{{100,100,100,100,1000,10}};
   std::array<uint16_t, 4> rgbc{{1000,100,100,100}};

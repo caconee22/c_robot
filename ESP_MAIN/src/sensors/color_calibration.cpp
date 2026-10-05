@@ -175,6 +175,8 @@ void printStepPrompt() {
   Serial.printf("[CAL] Floor=%s, position=%s\n",
                 floorColorName(latestStatus.color),
                 calibrationPoseName(latestStatus.pose));
+  Serial.printf("[CAL] Set sensor-to-floor gap to %u mm (manual).\n",
+                config::sensors::CALIBRATION_HEIGHT_MM[static_cast<uint8_t>(latestStatus.pose)]);
   if (latestStatus.pose == CalibrationPose::Level) {
     Serial.println("[CAL] Keep the robot level.");
   } else if (latestStatus.pose == CalibrationPose::Lifted) {
@@ -194,13 +196,10 @@ void printRaw(const ColorRawSample& sample) {
 
   if (ColorSensorManager::model() == ColorSensorModel::AS7341) {
     Serial.printf(
-        "[CAL][PREVIEW] S%u F1=%u F2=%u F3=%u F4=%u F5=%u "
-        "F6=%u F7=%u F8=%u C=%u NIR=%u\n",
+        "[CAL][PREVIEW] S%u F2=%u F3=%u F5=%u F6=%u F7=%u C=%u\n",
         static_cast<unsigned>(latestStatus.sensorIndex + 1),
-        sample.channel[0], sample.channel[1], sample.channel[2],
-        sample.channel[3], sample.channel[4], sample.channel[5],
-        sample.channel[6], sample.channel[7], sample.channel[8],
-        sample.channel[9]);
+        sample.channel[1], sample.channel[2], sample.channel[4],
+        sample.channel[5], sample.channel[6], sample.channel[8]);
   } else {
     Serial.printf("[CAL][PREVIEW] S%u R=%u G=%u B=%u C=%u\n",
                   static_cast<unsigned>(latestStatus.sensorIndex + 1),

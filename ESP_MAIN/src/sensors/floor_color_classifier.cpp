@@ -8,9 +8,9 @@
 namespace {
 using std::isfinite;
 
-constexpr float MINIMUM_SCALE = 0.005f;
-constexpr float MAXIMUM_MATCH_SCORE = 1.0f;
-constexpr float MINIMUM_WINNER_GAP = 0.08f;
+constexpr float MINIMUM_SCALE = config::sensors::MATCH_MINIMUM_SCALE;
+constexpr float MAXIMUM_MATCH_SCORE = config::sensors::MATCH_MAXIMUM_SCORE;
+constexpr float MINIMUM_WINNER_GAP = config::sensors::MATCH_MINIMUM_WINNER_GAP;
 
 float maximum(float a, float b) { return a > b ? a : b; }
 
@@ -21,15 +21,15 @@ uint8_t dominanceConfidence(float winner, float runnerUp) {
       constrain(static_cast<int>(50.0f + separation * 100.0f), 0, 100));
 }
 
-FloorColorResult classifyFallback(const ColorRawSample& sample) {
+FloorColorResult classifyFallback(uint8_t sensorIndex, const ColorRawSample& sample) {
   FloorColorResult result;
   result.timestampMs = sample.timestampMs;
   result.brightness = sample.brightness;
 
   const bool as7341 = ColorSensorManager::model() == ColorSensorModel::AS7341;
   const uint16_t blackLimit =
-      as7341 ? config::sensors::FALLBACK_AS7341_BLACK_CLEAR_MAX
-             : config::sensors::FALLBACK_TCS34725_BLACK_CLEAR_MAX;
+      as7341 ? config::sensors::FALLBACK_AS7341_BLACK_CLEAR_BY_SENSOR[sensorIndex]
+             : config::sensors::FALLBACK_TCS34725_BLACK_CLEAR_BY_SENSOR[sensorIndex];
   if (sample.brightness <= blackLimit) {
     result.color = FloorColor::Black;
     result.confidence = 70;
@@ -43,9 +43,9 @@ FloorColorResult classifyFallback(const ColorRawSample& sample) {
   float yellow = 0.0f;
   if (as7341) {
     blue = (sample.normalized[1] + sample.normalized[2]) * 0.5f;
-    green = (sample.normalized[3] + sample.normalized[4]) * 0.5f;
-    yellow = (sample.normalized[4] + sample.normalized[5]) * 0.5f;
-    red = (sample.normalized[6] + sample.normalized[7]) * 0.5f;
+    green = sample.normalized[4];
+    yellow = sample.normalized[5];
+    red = sample.normalized[6];
   } else {
     red = sample.normalized[0];
     green = sample.normalized[1];
@@ -133,7 +133,7 @@ FloorColorResult FloorColorClassifier::classify(
           static_cast<uint8_t>(ColorSensorManager::model()) ||
       calibration.settingsSignature !=
           ColorSensorManager::settingsSignature()) {
-    return classifyFallback(sample);
+    return classifyFallback(sensorIndex, sample);
   }
 
   const float ratioMargin =
@@ -158,8 +158,9 @@ FloorColorResult FloorColorClassifier::classify(
       const float brightness =
           brightnessScore(sample, reference, brightnessMargin);
       const bool black = color == static_cast<uint8_t>(FloorColor::Black);
-      const float score = black ? ratio * 0.45f + brightness * 0.55f
-                                : ratio * 0.80f + brightness * 0.20f;
+      const float weight = black ? config::sensors::MATCH_BLACK_BRIGHTNESS_WEIGHT
+                                 : config::sensors::MATCH_COLOR_BRIGHTNESS_WEIGHT;
+      const float score = ratio * (1.0f - weight) + brightness * weight;
       if (score < colorBestScore) {
         colorBestScore = score;
         colorBestPose = static_cast<CalibrationPose>(pose);

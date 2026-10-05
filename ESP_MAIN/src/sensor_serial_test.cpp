@@ -3,6 +3,7 @@
 #include "pins.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/color_sensor_types.hpp"
+#include "sensors/sensor_config.hpp"
 
 namespace {
 
@@ -25,18 +26,17 @@ void printColorSensor(uint8_t index) {
     return;
   }
   if (!sample.valid) {
-    Serial.printf("WAITING_OR_INVALID error=%u\n", static_cast<unsigned>(ColorSensorManager::status().error[index]));
-    return;
+    Serial.printf("INVALID error=%u ", static_cast<unsigned>(ColorSensorManager::status().error[index]));
+    // Keep raw counts visible for close-range saturation / weak-light tuning.
   }
 
   if (ColorSensorManager::model() == ColorSensorModel::AS7341) {
     Serial.printf(
-        "F1=%u F2=%u F3=%u F4=%u F5=%u F6=%u F7=%u F8=%u "
-        "C=%u NIR=%u\n",
-        sample.channel[0], sample.channel[1], sample.channel[2],
-        sample.channel[3], sample.channel[4], sample.channel[5],
-        sample.channel[6], sample.channel[7], sample.channel[8],
-        sample.channel[9]);
+        "F2=%u F3=%u F5=%u F6=%u F7=%u C=%u seq=%lu age=%lums\n",
+        sample.channel[1], sample.channel[2], sample.channel[4],
+        sample.channel[5], sample.channel[6], sample.channel[8],
+        static_cast<unsigned long>(sample.sequence),
+        static_cast<unsigned long>(millis() - sample.timestampMs));
   } else {
     Serial.printf("R=%u G=%u B=%u C=%u\n", sample.channel[0],
                   sample.channel[1], sample.channel[2], sample.channel[8]);
@@ -56,6 +56,12 @@ void setup() {
   Serial.println("Motor pins are not initialized or changed by this test.");
   const bool ready = ColorSensorManager::begin();
   const ColorSensorStatus status = ColorSensorManager::status();
+  if (status.model == ColorSensorModel::AS7341) {
+    Serial.printf("AS7341 continuous F2/F3/F5/F6/F7/C exposure=%luus gainCode=%u LED=%u\n",
+                  static_cast<unsigned long>(config::sensors::AS7341_EXPOSURE_US),
+                  static_cast<unsigned>(config::sensors::AS7341_GAIN),
+                  config::sensors::AS7341_LED_ENABLED ? 1 : 0);
+  }
   Serial.printf("Color model=%s readyMask=0x%02X allReady=%u\n",
                 status.model == ColorSensorModel::AS7341 ? "AS7341"
                                                          : "TCS34725",

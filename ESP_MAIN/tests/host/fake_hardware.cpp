@@ -94,7 +94,13 @@ uint8_t TwoWire::endTransmission(bool) {
 #else
   pointer=outgoing[0]&0x1F;
 #endif
-  for(size_t i=1;i<outgoing.size();++i) s.reg[pointer+i-1]=outgoing[i];
+  for(size_t i=1;i<outgoing.size();++i) {
+#if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
+    if(pointer+i-1==0x93) s.reg[0x93]&=~outgoing[i];  // Write-one-to-clear.
+    else
+#endif
+      s.reg[pointer+i-1]=outgoing[i];
+  }
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
   if(pointer==0 && outgoing.size()>4) s.highBank=s.reg[3]==0x40;
   const uint8_t enableReg=0x80;
@@ -103,7 +109,7 @@ uint8_t TwoWire::endTransmission(bool) {
 #endif
   if(pointer==enableReg && outgoing.size()==2) {
     if(outgoing[1]&0x10) s.smuxStarted=millis();
-    if(outgoing[1]&0x02) s.measurementStarted=millis();
+    if(outgoing[1]&0x02) { s.measurementStarted=millis(); s.completedCycles=0; }
   }
   return 0;
 }
@@ -119,7 +125,15 @@ size_t TwoWire::requestFrom(uint8_t, uint8_t size) {
   if(!s.smuxStuck && millis()-s.smuxStarted>=1) s.reg[0x80]&=~0x10;
   s.reg[0xA3]=!s.conversionStuck && (s.reg[0x80]&2) &&
       millis()-s.measurementStarted>=config::sensors::AS7341_INTEGRATION_MS ? 0x40 : 0;
-  const auto& words=s.highBank ? s.high : s.low;
+  if(!s.conversionStuck && (s.reg[0x80]&2)) {
+    const uint32_t cycles=(millis()-s.measurementStarted)/config::sensors::AS7341_INTEGRATION_MS;
+    if(cycles>s.completedCycles) {
+      s.completedCycles=cycles;
+      if(s.reg[0xF9]&4) s.reg[0x93]|=8;
+    }
+  }
+  const std::array<uint16_t,6> floorWords{{s.low[1],s.low[2],s.high[0],s.high[1],s.high[2],s.high[4]}};
+  const auto& words=s.reg[8]==0x60 ? floorWords : (s.highBank ? s.high : s.low);
   for(size_t i=0;i<6;++i) { s.reg[0x95+i*2]=words[i]&0xFF; s.reg[0x96+i*2]=words[i]>>8; }
 #else
   s.reg[0x12]=0x44;

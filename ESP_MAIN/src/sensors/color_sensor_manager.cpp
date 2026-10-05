@@ -11,13 +11,11 @@ using namespace config::sensors;
 
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
 constexpr uint8_t SENSOR_ADDRESS = 0x39;
-// Same SMUX routing as Adafruit AS7341 1.4.1: F1..F4 / F5..F8, Clear, NIR.
-constexpr uint8_t SMUX_LOW[20] = {
-    0x30, 0x01, 0, 0, 0, 0x42, 0, 0, 0x50, 0,
-    0, 0, 0x20, 0x04, 0, 0x30, 0x01, 0x50, 0, 0x06};
-constexpr uint8_t SMUX_HIGH[20] = {
-    0, 0, 0, 0x40, 0x02, 0, 0x10, 0x03, 0x50, 0x10,
-    0x03, 0, 0, 0, 0x24, 0, 0, 0x50, 0, 0x06};
+// Adafruit photodiode positions; ADC0..5 = F2,F3,F5,F6,F7,Clear.
+constexpr uint8_t SMUX_FLOOR[20] = {
+    0x20, 0, 0, 0, 0x04, 0x01, 0x30, 0x05, 0x60, 0x30,
+    0x05, 0, 0x10, 0, 0x40, 0x20, 0, 0x60, 0, 0};
+constexpr uint8_t FLOOR_CHANNELS[6] = {1, 2, 4, 5, 6, 8};
 #elif COLOR_SENSOR_MODEL == COLOR_SENSOR_TCS34725
 constexpr uint8_t SENSOR_ADDRESS = 0x29;
 #else
@@ -25,11 +23,10 @@ constexpr uint8_t SENSOR_ADDRESS = 0x29;
 #endif
 
 // Each visit performs a small I2C step; integration waits never block loop().
-enum class ReadPhase : uint8_t { Start, LowSmux, LowData, HighSmux, HighData };
+enum class ReadPhase : uint8_t { Start, LowSmux, LowData };
 struct SensorRead {
   ReadPhase phase = ReadPhase::Start;
   uint32_t phaseStartedMs = 0;
-  uint16_t low[6] = {};
   bool saturated = false;
 };
 
@@ -112,11 +109,21 @@ bool initializeSensor(uint8_t index) {
   if (!readByte(0x92, id) || (id & 0xFC) != 0x24) return false;
   if (!writeRegister(0x80, 0x01)) return false;
   delay(1);  // Initial internal setup is about 300 us; boot only.
+  const uint16_t ledMa = AS7341_LED_CURRENT_MA[index];
+  if (ledMa < 4 || ledMa > 150 || (ledMa & 1U)) return false;
+  if (!writeRegister(0xA9, 0x10) ||  // Low bank: CONFIG and LED.
+      !writeRegister(0x70, AS7341_LED_ENABLED ? 0x08 : 0x00) ||
+      !writeRegister(0x74, static_cast<uint8_t>(
+          (AS7341_LED_ENABLED ? 0x80 : 0) | ((ledMa - 4) / 2)))) return false;
   return writeRegister(0xA9, 0x00) &&  // High register bank.
          writeRegister(0x81, AS7341_INTEGRATION_ATIME) &&
          writeRegister(0xCA, static_cast<uint8_t>(AS7341_INTEGRATION_ASTEP)) &&
          writeRegister(0xCB, static_cast<uint8_t>(AS7341_INTEGRATION_ASTEP >> 8)) &&
-         writeRegister(0xAA, static_cast<uint8_t>(AS7341_GAIN));
+         writeRegister(0xAA, static_cast<uint8_t>(AS7341_GAIN)) &&
+         writeRegister(0xD6, AS7341_AUTOZERO_INTERVAL) &&
+         writeRegister(0xBD, 0x00) &&  // AINT for every completed cycle.
+         writeRegister(0xF9, 0x04) &&  // SP_IEN; no external INT wiring needed.
+         writeRegister(0x93, 0x08);
 #else
   if (!readByte(0x92, id) || (id != 0x44 && id != 0x4D)) return false;
   if (!writeRegister(0x80, 0x01)) return false;
@@ -130,24 +137,20 @@ void publishSample(uint8_t index, ColorRawSample& sample, uint16_t limit) {
   sample.timestampMs = millis();
   sample.sequence = samples[index].sequence + 1;
   sample.brightness = sample.channel[8];
-  sample.valid = sample.brightness > 0;
+  sample.valid = sample.brightness >= MINIMUM_CLEAR_COUNTS && sample.brightness > 0;
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
-  if (reads[index].saturated || reads[index].low[4] >= limit ||
-      reads[index].low[5] >= limit) sample.valid = false;
+  if (reads[index].saturated) sample.valid = false;
 #endif
   for (size_t i = 0; i < COLOR_CHANNEL_COUNT; ++i) {
     if (sample.channel[i] >= limit) sample.valid = false;
   }
   if (sample.valid) {
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
-    sample.featureMask = 0x02FFU;
+    sample.featureMask = 0x0076U;
     for (size_t i = 0; i < 8; ++i) {
-      // F1..F4 and F5..F8 are acquired at different times.
-      const uint16_t clear = i < 4 ? reads[index].low[4] : sample.brightness;
-      if (clear == 0) { sample.valid = false; break; }
-      sample.normalized[i] = static_cast<float>(sample.channel[i]) / clear;
+      if ((sample.featureMask & (1U << i)) != 0)
+        sample.normalized[i] = static_cast<float>(sample.channel[i]) / sample.brightness;
     }
-    sample.normalized[9] = static_cast<float>(sample.channel[9]) / sample.brightness;
 #else
     sample.featureMask = 0x0007U;
     for (size_t i = 0; i < 3; ++i) {
@@ -161,13 +164,15 @@ void publishSample(uint8_t index, ColorRawSample& sample, uint16_t limit) {
                                            : ColorSensorError::Range;
   if (sample.valid) ++latestStatus.successfulReads;
   else ++latestStatus.failedReads;
+#if COLOR_SENSOR_MODEL == COLOR_SENSOR_TCS34725
   reads[index].phase = ReadPhase::Start;
+#endif
 }
 
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
-bool configureSmux(bool high) {
+bool configureSmux() {
   return writeRegister(0x80, 0x01) && writeRegister(0xAF, 0x10) &&
-         writeRegister(0x00, high ? SMUX_HIGH : SMUX_LOW, 20) &&
+         writeRegister(0x00, SMUX_FLOOR, 20) &&
          writeRegister(0x80, 0x11);
 }
 
@@ -176,47 +181,39 @@ bool stepSensor(uint8_t index, uint32_t nowMs) {
   uint8_t status = 0;
   if (read.phase == ReadPhase::Start) {
     read.saturated = false;
-    if (!configureSmux(false)) return false;
+    if (!configureSmux()) return false;
     read.phase = ReadPhase::LowSmux;
     read.phaseStartedMs = millis();
-  } else if (read.phase == ReadPhase::LowSmux ||
-             read.phase == ReadPhase::HighSmux) {
+  } else if (read.phase == ReadPhase::LowSmux) {
     if (!readByte(0x80, status)) return false;
     if ((status & 0x10) == 0) {
       if (!writeRegister(0x80, 0x03)) return false;
-      read.phase = read.phase == ReadPhase::LowSmux ? ReadPhase::LowData
-                                                   : ReadPhase::HighData;
+      read.phase = ReadPhase::LowData;
       read.phaseStartedMs = millis();
     } else if (nowMs - read.phaseStartedMs >= SMUX_TIMEOUT_MS) {
       failSensor(index, ColorSensorError::Timeout);
     }
   } else {
-    if (!readByte(0xA3, status)) return false;
-    if ((status & 0x40) == 0) {
+    // AVALID alone cannot identify a new cycle in continuous mode.
+    if (!readByte(0x93, status)) return false;
+    if ((status & 0x08) == 0) {
       if (nowMs - read.phaseStartedMs >=
           AS7341_INTEGRATION_MS + CONVERSION_TIMEOUT_MARGIN_MS) {
         failSensor(index, ColorSensorError::Timeout);
       }
       return true;
     }
-    if (read.phase == ReadPhase::LowData) {
-      if (!readSpectrum(read.low, read.saturated) || !configureSmux(true)) return false;
-      read.phase = ReadPhase::HighSmux;
-      read.phaseStartedMs = millis();
-    } else {
-      uint16_t high[6];
-      if (!readSpectrum(high, read.saturated) || !writeRegister(0x80, 0x01)) return false;
-      ColorRawSample sample;
-      for (size_t i = 0; i < 4; ++i) {
-        sample.channel[i] = read.low[i];
-        sample.channel[i + 4] = high[i];
-      }
-      sample.channel[8] = high[4];
-      sample.channel[9] = high[5];
-      const uint32_t counts = (AS7341_INTEGRATION_ATIME + 1UL) *
-                               (AS7341_INTEGRATION_ASTEP + 1UL);
-      publishSample(index, sample, static_cast<uint16_t>(min(counts, uint32_t{65535})));
-    }
+    // Also avoid recounting a cycle that completed during a previous burst.
+    if (nowMs - read.phaseStartedMs < AS7341_INTEGRATION_MS) return true;
+    uint16_t words[6];
+    read.saturated = false;
+    if (!writeRegister(0x93, 0x08) || !readSpectrum(words, read.saturated)) return false;
+    ColorRawSample sample;
+    for (size_t i = 0; i < 6; ++i) sample.channel[FLOOR_CHANNELS[i]] = words[i];
+    const uint32_t counts = (AS7341_INTEGRATION_ATIME + 1UL) *
+                           (AS7341_INTEGRATION_ASTEP + 1UL);
+    publishSample(index, sample, static_cast<uint16_t>(min(counts, uint32_t{65535})));
+    read.phaseStartedMs = millis();
   }
   return true;
 }
@@ -272,14 +269,16 @@ bool ColorSensorManager::begin() {
 void ColorSensorManager::update(uint32_t nowMs) {
   if (nowMs - lastSlotMs < config::sensors::COLOR_SENSOR_SLOT_PERIOD_MS) return;
   lastSlotMs = nowMs;
-  latestStatus.lastReadSensor = nextSensor;
-  if (available(nextSensor)) {
-    if (!selectChannel(config::sensors::COLOR_SENSOR_TCA_CHANNELS[nextSensor]) ||
-        !stepSensor(nextSensor, nowMs)) {
-      failSensor(nextSensor, ColorSensorError::I2c);
+  for (uint8_t visit = 0; visit < COLOR_SENSOR_VISITS_PER_UPDATE; ++visit) {
+    latestStatus.lastReadSensor = nextSensor;
+    if (available(nextSensor)) {
+      if (!selectChannel(COLOR_SENSOR_TCA_CHANNELS[nextSensor]) ||
+          !stepSensor(nextSensor, millis())) {
+        failSensor(nextSensor, ColorSensorError::I2c);
+      }
     }
+    nextSensor = (nextSensor + 1) % ::COLOR_SENSOR_COUNT;
   }
-  nextSensor = (nextSensor + 1) % ::COLOR_SENSOR_COUNT;
 }
 
 ColorRawSample ColorSensorManager::sample(uint8_t index) {
@@ -304,12 +303,15 @@ uint32_t ColorSensorManager::settingsSignature() {
   mix(config::sensors::AS7341_INTEGRATION_ATIME);
   mix(config::sensors::AS7341_INTEGRATION_ASTEP);
   mix(static_cast<uint8_t>(config::sensors::AS7341_GAIN));
+  mix(config::sensors::AS7341_LED_ENABLED);
+  mix(config::sensors::AS7341_AUTOZERO_INTERVAL);
+  for (uint16_t current : config::sensors::AS7341_LED_CURRENT_MA) mix(current);
 #else
   mix(static_cast<uint8_t>(config::sensors::TCS34725_INTEGRATION));
   mix(static_cast<uint8_t>(config::sensors::TCS34725_GAIN));
 #endif
   // Routing and per-bank normalization also affect calibration validity.
-  mix(2);
+  mix(3);  // Single-exposure floor routing.
   for (uint8_t channel : config::sensors::COLOR_SENSOR_TCA_CHANNELS) mix(channel);
   return signature;
 }

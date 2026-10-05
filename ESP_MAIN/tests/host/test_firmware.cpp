@@ -247,7 +247,8 @@ void testColorsAndErrors() {
   CHECK(ColorSensorManager::status().error[0]==ColorSensorError::Range);
   CHECK(ColorSensorManager::available(0));
   auto raw=ColorSensorManager::sample(1);
-  raw.normalized[0]=std::numeric_limits<float>::quiet_NaN();
+  raw.normalized[ColorSensorManager::model()==ColorSensorModel::AS7341 ? 1 : 0]=
+      std::numeric_limits<float>::quiet_NaN();
   CHECK(!FloorColorClassifier::classify(1,raw,ColorCalibration::data()).reliable);
 }
 
@@ -265,6 +266,40 @@ void testThreeSamples() {
   fake::floor(0,2); const uint32_t previousSequence=oldSequence;
   while(ColorSensorManager::sample(0).sequence==previousSequence) { fake::advance(1); SensorManager::update(); }
   CHECK(!SensorManager::snapshot().floorColor[0].reliable);
+}
+
+void testContinuousFloorMode() {
+#if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
+  fixture(); CHECK(SensorManager::begin());
+  fake::floor(0,0); sensorTicks(40);
+  const auto before=ColorSensorManager::sample(0);
+  CHECK(before.valid); CHECK(before.featureMask==0x76);
+  CHECK(before.channel[1]==80 && before.channel[2]==80);
+  CHECK(before.channel[4]==200 && before.channel[5]==200 && before.channel[6]==700);
+  CHECK(before.channel[8]==1000 && before.channel[0]==0 && before.channel[9]==0);
+  CHECK(fake::sensors[0].reg[0x80]==3);
+  CHECK(fake::sensors[0].reg[0xBD]==0 && fake::sensors[0].reg[0xF9]==4);
+  CHECK(fake::sensors[0].reg[0xD6]==255);
+  const uint8_t route[20]={0x20,0,0,0,4,1,0x30,5,0x60,0x30,5,0,0x10,0,0x40,0x20,0,0x60,0,0};
+  for(unsigned i=0;i<20;++i) CHECK(fake::sensors[0].reg[i]==route[i]);
+  const uint32_t start=fake::sensors[0].measurementStarted;
+  for(int i=0;i<100;++i) SensorManager::update();
+  CHECK(ColorSensorManager::sample(0).sequence==before.sequence);
+  // AVALID stays true, but no new completion event means no new sample.
+  fake::sensors[0].conversionStuck=true;
+  sensorTicks(25);
+  CHECK(ColorSensorManager::sample(0).sequence==before.sequence);
+  fake::sensors[0].conversionStuck=false; sensorTicks(15);
+  CHECK(ColorSensorManager::sample(0).sequence>before.sequence);
+  CHECK(fake::sensors[0].measurementStarted==start);  // No stop/restart per read.
+  fake::sensors[0].saturated=true; sensorTicks(10);
+  CHECK(!ColorSensorManager::sample(0).valid);
+  fake::sensors[0].saturated=false; sensorTicks(10);
+  CHECK(ColorSensorManager::sample(0).valid);
+  auto raw=ColorSensorManager::sample(0);
+  raw.brightness=0; raw.valid=false;
+  CHECK(!FloorColorClassifier::classify(0,raw,ColorCalibration::data()).reliable);
+#endif
 }
 
 void testCalibration() {
@@ -418,6 +453,7 @@ int main(int argc,char** argv) {
       {"buttons/ESTOP/race",testButtonsAndEstop},{"system start/fault/calibration",testSystem},
       {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},
       {"color sampling/errors/no recovery",testColorsAndErrors},{"three independent samples",testThreeSamples},
+      {"continuous single-exposure floor mode",testContinuousFloorMode},
       {"48-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},
       {"real main loop integration",testMainIntegration},
       {"I2C time/optional sensors/boot ESTOP",testRealisticTimingAndBoot}};
