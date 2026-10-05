@@ -344,6 +344,7 @@ def main() -> None:
             frame_number += 1
             loop_ms = (time.perf_counter() - loop_started) * 1000
             loop_times.append(loop_ms)
+            del loop_times[:-60]
             recent = loop_times[-60:]
             fps = 1000.0 / max(sum(recent) / len(recent), 1e-9)
             if not args.quiet and frame_number % max(1, args.print_every) == 0:

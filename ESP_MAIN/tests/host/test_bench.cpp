@@ -29,6 +29,9 @@ SensorSnapshot floor(uint32_t now, FloorColor color = FloorColor::Black) {
 void logicTests() {
   SensorSnapshot s; auto v=target(); BenchController::begin();
   CHECK(stopped(BenchController::update(0,true,s,v)));
+  BenchController::select(static_cast<BenchMode>(255));
+  CHECK(BenchController::mode()==BenchMode::Stop);
+  CHECK(stopped(BenchController::update(0,true,s,v)));
   BenchController::select(BenchMode::Data); CHECK(stopped(BenchController::update(0,true,s,v)));
   BenchController::select(BenchMode::Motor);
   auto c=BenchController::update(100,true,s,v); CHECK(c.leftPermille==120 && c.rightPermille==0);
@@ -94,6 +97,11 @@ void integrationTests() {
   CHECK(MotorController::outputLimit()==200); CHECK(!SystemManager::motorAllowed());
   send("MODE MANUAL"); send("DRIVE 100 100");
   CHECK(!SystemManager::motorAllowed()); CHECK(!MotorController::status().outputsActive);
+  fake::level(pins::START_SWITCH,LOW); ticks(10);
+  send("MODE FOLLOW"); ticks(50);
+  fake::level(pins::START_SWITCH,HIGH); ticks(50);
+  CHECK(!SystemManager::motorAllowed());
+  send("MODE MANUAL");
   startButton(); CHECK(SystemManager::motorAllowed());
   send("DRIVE 100 -100"); CHECK(MotorController::status().appliedLeftPermille==100);
   ticks(260); CHECK(!MotorController::status().outputsActive);

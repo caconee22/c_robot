@@ -34,7 +34,8 @@ DriveIntent intent(DriveIntentType type, uint16_t duty = 0,
 
 bool isHazardColor(const FloorColorResult& result) {
   if (!result.reliable || result.color == FloorColor::Unknown ||
-      result.color == FloorColor::Black) {
+      result.color == FloorColor::Black ||
+      static_cast<uint8_t>(result.color) >= FLOOR_COLOR_COUNT) {
     return false;
   }
   const uint8_t bit = 1U << static_cast<uint8_t>(result.color);
@@ -146,6 +147,21 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
   }
 
   if (currentState == RobotState::ZoneEscape) {
+    const bool front = (hazards & 0x03U) != 0;
+    const bool rear = (hazards & 0x0CU) != 0;
+    const bool reversing = (activeHazardSensors & 0x03U) != 0;
+    const uint32_t elapsed = nowMs - stateEnteredMs;
+    // Never complete an old timed movement into a newly detected groove.
+    if ((front && rear) ||
+        (elapsed < config::control::ZONE_ESCAPE_REVERSE_MS &&
+         ((reversing && rear) || (!reversing && front)))) {
+      activeHazardSensors = hazards;
+      stateEnteredMs = nowMs;
+      return intent(DriveIntentType::Brake);
+    }
+    if (elapsed >= config::control::ZONE_ESCAPE_REVERSE_MS && hazards != 0) {
+      activeHazardSensors = hazards;
+    }
     const uint32_t escapeDuration = config::control::ZONE_ESCAPE_REVERSE_MS +
                                     config::control::ZONE_ESCAPE_TURN_MS;
     if (nowMs - stateEnteredMs < escapeDuration) {

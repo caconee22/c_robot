@@ -116,6 +116,7 @@ void ButtonInterrupts::update(uint32_t nowMs) {
     if (startStablePressed == startRawPressed &&
         nowMs - startRawChangedMs >= config::switches::DEBOUNCE_MS) {
       startDebounceActive = false;
+      if (!startRawPressed) startHasSeenReleased = true;
     }
     return;
   }
@@ -183,9 +184,13 @@ bool ButtonInterrupts::startPressed() {
 }
 
 void ButtonInterrupts::cancelStartGesture() {
+  const bool released = !readStartPressed() && !startStablePressed &&
+                        !startDebounceActive;
   portENTER_CRITICAL(&buttonMux);
   pendingStartEvents = 0;
   startPressQualified = false;
+  // A held or not-yet-debounced press cannot arm a later mode on release.
+  startHasSeenReleased = released;
   portEXIT_CRITICAL(&buttonMux);
 }
 

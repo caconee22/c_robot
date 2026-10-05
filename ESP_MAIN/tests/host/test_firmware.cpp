@@ -85,6 +85,9 @@ void testMotor() {
   // A deadline of zero at millis rollover is an actual deadline.
   fake::now=UINT32_MAX-99; CHECK(MotorController::forward(200,running(),100));
   fake::advance(100); CHECK(!MotorController::status().outputsActive);
+  CHECK(!MotorController::forward(200,running(),UINT32_MAX));
+  CHECK(MotorController::status().lastResult==MotorControlResult::InvalidArgument);
+  CHECK(!MotorController::status().outputsActive);
   SafetyStatus invalid=running(); invalid.state=SafetyState::WaitingForStart;
   CHECK(!MotorController::forward(200,invalid)); CHECK(!MotorController::clearEmergencyStop(invalid));
 }
@@ -136,6 +139,18 @@ void testSystem() {
   pressStart(); CHECK(!SystemManager::status().runRequested);
   SystemManager::setCalibrationActive(false); CHECK(!SystemManager::running());
   pressStart(); CHECK(SystemManager::running()); SystemManager::requestStop(); CHECK(!SystemManager::running());
+  // STOP cancels both a stable press and a press still being debounced.
+  for (uint32_t held : {10U, 50U}) {
+    fixture();
+    fake::level(pins::START_SWITCH,LOW); SystemManager::update(millis());
+    fake::advance(held); SystemManager::update(millis());
+    SystemManager::requestStop();
+    fake::advance(50); SystemManager::update(millis());
+    fake::level(pins::START_SWITCH,HIGH); SystemManager::update(millis());
+    fake::advance(40); SystemManager::update(millis());
+    CHECK(!SystemManager::running());
+    pressStart(); CHECK(SystemManager::running());
+  }
 }
 
 void testProtocol() {
@@ -205,6 +220,15 @@ void testFsm() {
     sensors=SensorSnapshot{}; RobotFsm::update(1370,sensors,missing,running()); CHECK(RobotFsm::state()==RobotState::Search);
   }
   // millis wrap and frame timestamp zero are valid values.
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  CHECK(RobotFsm::update(10,sensors,missing,running()).type==DriveIntentType::Reverse);
+  sensors.floorColor[0]=FloorColorResult{};
+  sensors.floorColor[2].color=FloorColor::Blue; sensors.floorColor[2].reliable=true;
+  CHECK(RobotFsm::update(20,sensors,missing,running()).type==DriveIntentType::Brake);
+  CHECK(RobotFsm::update(21,sensors,missing,running()).type==DriveIntentType::Approach);
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  CHECK(RobotFsm::update(22,sensors,missing,running()).type==DriveIntentType::Brake);
   sensors=SensorSnapshot{}; RobotFsm::begin();
   RobotFsm::update(UINT32_MAX-10,sensors,target(1,UINT32_MAX-10),running());
   RobotFsm::update(0,sensors,target(2,0),running());
@@ -310,6 +334,8 @@ void testCalibration() {
   command("ABORT"); CHECK(!ColorCalibration::active());
   command("CAL START"); ColorCalibration::update(millis(),false); CHECK(!ColorCalibration::active());
   command("CAL START"); command("CAL MARGIN 20 40");
+  command("CAL MARGIN 10 30 JUNK");
+  command("CAL MARGIN 4294967316 4294967336");
   for(uint8_t step=0;step<48;++step) {
     auto status=ColorCalibration::status(); fake::floor(status.sensorIndex,static_cast<uint8_t>(status.color));
     // Model a different brightness for level/lifted/pressed references.
@@ -344,6 +370,8 @@ void testCalibration() {
   fake::nvsWriteOk=false; command("CAL SAVE"); CHECK(ColorCalibration::status().state==CalibrationState::Error);
   fake::nvsWriteOk=true; command("CAL SAVE"); CHECK(ColorCalibration::hasStoredData());
   CHECK(!ColorCalibration::active()); CHECK(!fake::nvs.empty());
+  CHECK(ColorCalibration::data().ratioMarginPermille==200);
+  CHECK(ColorCalibration::data().brightnessMarginPermille==400);
   for(uint8_t corner=0;corner<4;++corner) {
     for(uint8_t color=0;color<4;++color) {
       fake::floor(corner,color); sensorTicks(200);

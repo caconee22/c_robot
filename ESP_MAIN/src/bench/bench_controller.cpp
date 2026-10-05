@@ -53,7 +53,11 @@ MotorCommand track(uint32_t now, const VisionSnapshot& vision) {
 }
 
 void BenchController::begin() { selected = BenchMode::Stop; resetMotion(); }
-void BenchController::select(BenchMode mode) { selected = mode; resetMotion(); }
+void BenchController::select(BenchMode mode) {
+  selected = static_cast<uint8_t>(mode) <= static_cast<uint8_t>(BenchMode::Avoid)
+                 ? mode : BenchMode::Stop;
+  resetMotion();
+}
 BenchMode BenchController::mode() { return selected; }
 bool BenchController::finished() { return done; }
 const char* BenchController::modeName(BenchMode mode) {
@@ -126,6 +130,7 @@ MotorCommand BenchController::update(uint32_t now, bool allowed,
         return command(now, duty, duty);
       }
       if (elapsed < ESCAPE_MOVE_MS + ESCAPE_TURN_MS) {
+        if (hazards) escapeMask = hazards;
         const bool turnRight = (escapeMask & 0x05) != 0;
         return turnRight ? command(now, TURN_DUTY, -TURN_DUTY)
                          : command(now, -TURN_DUTY, TURN_DUTY);

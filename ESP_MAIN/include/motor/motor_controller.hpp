@@ -42,6 +42,7 @@ class MotorController {
   // the current runtime output limit.
   static bool apply(const MotorCommand& command, const SafetyStatus& safety);
 
+  // timeoutMs=0 uses the default; values above INT32_MAX are rejected.
   static bool setTank(int16_t leftPermille, int16_t rightPermille,
                       const SafetyStatus& safety,
                       uint32_t timeoutMs = 0);

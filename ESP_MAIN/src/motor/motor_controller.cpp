@@ -212,6 +212,11 @@ bool MotorController::apply(const MotorCommand& command,
 bool MotorController::setTank(int16_t leftPermille, int16_t rightPermille,
                               const SafetyStatus& safety,
                               uint32_t timeoutMs) {
+  if (timeoutMs > INT32_MAX) {
+    MotorLock lock;
+    rejectLocked(MotorControlResult::InvalidArgument, StopMode::Brake);
+    return false;
+  }
   const uint32_t nowMs = millis();
   if (timeoutMs == 0) {
     timeoutMs = config::motor::DEFAULT_COMMAND_TIMEOUT_MS;

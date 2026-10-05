@@ -335,6 +335,26 @@ void printStatus() {
       workingData.brightnessMarginPermille / 10);
 }
 
+bool parseMargins(const char* text, unsigned& ratio, unsigned& brightness) {
+  unsigned values[2] = {};
+  for (uint8_t index = 0; index < 2; ++index) {
+    unsigned& value = values[index];
+    while (*text == ' ') ++text;
+    if (*text < '0' || *text > '9') return false;
+    uint8_t digits = 0;
+    while (*text >= '0' && *text <= '9') {
+      if (++digits > 3) return false;
+      value = value * 10 + (*text++ - '0');
+    }
+    if (value < 1 || value > 100) return false;
+    if (index == 0 && *text != ' ') return false;
+  }
+  while (*text == ' ') ++text;
+  if (*text != '\0') return false;
+  ratio = values[0]; brightness = values[1];
+  return true;
+}
+
 void handleCommand(const char* command, uint32_t nowMs, bool allowed) {
   if (strcmp(command, "CAL STATUS") == 0 || strcmp(command, "STATUS") == 0) {
     printStatus();
@@ -369,10 +389,9 @@ void handleCommand(const char* command, uint32_t nowMs, bool allowed) {
 
   unsigned ratioPercent = 0;
   unsigned brightnessPercent = 0;
-  if (sscanf(command, "CAL MARGIN %u %u", &ratioPercent,
-             &brightnessPercent) == 2) {
-    if (ratioPercent < 1 || ratioPercent > 100 || brightnessPercent < 1 ||
-        brightnessPercent > 100) {
+  if (strncmp(command, "CAL MARGIN", 10) == 0) {
+    if (command[10] != ' ' ||
+        !parseMargins(command + 11, ratioPercent, brightnessPercent)) {
       Serial.println("[CAL] Margin range is 1..100 percent.");
     } else {
       workingData.ratioMarginPermille = ratioPercent * 10;

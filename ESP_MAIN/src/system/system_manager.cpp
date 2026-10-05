@@ -122,6 +122,7 @@ void setHealth(bool healthy, bool& destination, FaultCode fault,
   destination = healthy;
   if (!healthy) {
     latestStatus.runRequested = false;
+    ButtonInterrupts::cancelStartGesture();
     storedFault = fault;
     storedDetail = detail;
     EventLogger::faultChanged(source, fault, true, detail);
@@ -216,6 +217,7 @@ void SystemManager::update(uint32_t nowMs) {
 }
 
 void SystemManager::requestStop() {
+  ButtonInterrupts::cancelStartGesture();
   latestStatus.runRequested = false;
   updateState(millis());
   MotorController::brake();
@@ -226,6 +228,7 @@ void SystemManager::setCalibrationActive(bool active) {
   latestStatus.calibrationActive = active;
   if (active) {
     latestStatus.runRequested = false;
+    ButtonInterrupts::cancelStartGesture();
     MotorController::brake();
   }
   updateState(millis());

@@ -457,8 +457,11 @@ def main() -> None:
                         time.sleep(0)
             loop_ms = (time.perf_counter() - loop_started) * 1000.0
             if frame_number > max(0, args.warmup_frames):
-                process_values.append(process_ms)
+                if args.benchmark:
+                    process_values.append(process_ms)
                 loop_values.append(loop_ms)
+                if not args.benchmark:
+                    del loop_values[:-60]
             if args.max_frames > 0 and frame_number >= args.max_frames:
                 break
     except KeyboardInterrupt:
