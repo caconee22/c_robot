@@ -3,6 +3,11 @@
 ESP32-S3 주행 제어, 라즈베리파이 영상 처리, 회로 설계를 관리하는 저장소다.
 현재 주행 펌웨어는 **V1 하드웨어**를 대상으로 한다.
 
+처음 사용하는 사람은 [펌웨어 구조·사용법 전체 설명](ESP_MAIN/README.md)을 먼저 읽는다.
+파일별 책임, 실제 FSM/안전 흐름, 센서 설정·교정, UART 규격, 모터 API, 주기와 실물 시험 순서를 설명한다.
+별도 벤치의 콘솔/CSV는 [BENCH_TESTS.md](ESP_MAIN/BENCH_TESTS.md), 검토 근거는
+[VERIFICATION.md](ESP_MAIN/VERIFICATION.md)에 있다. 아래는 저장소 전체와 영상 프로그램 안내다.
+
 ## 현재 진행 상황
 
 2026-10-05 기준, ESP32 펌웨어는 부팅부터 센서·통신·안전·FSM·모터 출력까지 연결했다.
@@ -25,7 +30,7 @@ ESP32-S3 주행 제어, 라즈베리파이 영상 처리, 회로 설계를 관�
 | 이벤트 로그 / WS2812 LED | 변경 감지·중복 억제·우선순위 표시 구현 |
 | 공격 FSM | 탐색·목표 확인·정렬·접근·돌진·급정거·삽입·밀기·회피 연결 |
 | PC 자동 검증 | 두 센서 구성 각각 12개 시험 그룹 통과 |
-| ESP32 빌드 | 생산/센서 전용 × 두 센서 구성, 네 환경 통과 |
+| ESP32 빌드 | 생산/센서 전용/벤치 × 두 센서 구성, 여섯 환경 통과 |
 | 별도 실물 시험 펌웨어 | 모터/UART 수동/데이터/회전 정렬/추적/바닥 회피 구현, 두 센서 구성 빌드·PC 검사 통과 |
 | 실물 성능·브레이크·색 임계값·전략 튜닝 | 미완료, 하드웨어 확보 후 진행 |
 
@@ -44,7 +49,7 @@ AS7341을 약 5ms 단일 수광(F2/F3/F5/F6/F7/Clear) 연속 측정으로 변경
 ## 저장소 안내
 
 - [`ESP_MAIN/`](ESP_MAIN/): 주행 펌웨어와 하드웨어 없는 자동 시험.
-- [`ESP_MAIN/README.md`](ESP_MAIN/README.md): 펌웨어의 빠른 시작 안내.
+- [`ESP_MAIN/README.md`](ESP_MAIN/README.md): 펌웨어의 의도·파일별 역할·안전/FSM·센서·통신·사용법 전체 설명.
 - [`ESP_MAIN/BENCH_TESTS.md`](ESP_MAIN/BENCH_TESTS.md): 별도 시험 펌웨어의 모터/수동 UART/데이터/회전 정렬/추적/구역 회피 모드.
 - [`ESP_MAIN/VERIFICATION.md`](ESP_MAIN/VERIFICATION.md): 요구사항 대응, 실행 흐름, 수정 내역, 시험 범위와 한계.
 - [`ESP_MAIN/AGENTS.md`](ESP_MAIN/AGENTS.md): 사용자 요구사항과 다른 AI/개발자를 위한 작업 기준.
@@ -114,6 +119,8 @@ pio run -e yd_esp32_s3
 | `yd_esp32_s3_tcs34725` | TCS34725를 지정한 생산 펌웨어 | 57600 |
 | `sensor_serial_test` | 설정 파일에서 선택한 센서 전용 점검 | 115200 |
 | `sensor_serial_test_tcs34725` | TCS34725 센서 전용 점검 | 115200 |
+| `robot_bench` | 설정 파일의 센서로 저출력 단계별 실물 시험 | 57600 |
+| `robot_bench_tcs34725` | TCS34725 실물 시험 | 57600 |
 
 업로드와 생산 펌웨어 모니터:
 
@@ -166,10 +173,12 @@ TCS34725 전용 환경은 빌드 옵션으로 종류를 지정한다.
 
 | 검증 | 결과 |
 |---|---|
-| AS7341 PC 자동 시험 | 11개 그룹, assert 4,845회 통과 |
-| TCS34725 PC 자동 시험 | 11개 그룹, assert 4,542회 통과 |
-| ESP32 네 환경 빌드 | 모두 성공 |
-| Cppcheck | 두 센서 구성의 소스 정적 검사 통과 |
+| AS7341 PC 생산 시험 | 12그룹, assert 4,994회 통과 |
+| TCS34725 PC 생산 시험 | 12그룹, assert 4,555회 통과 |
+| PC 벤치 시험 | 두 센서 구성 각각 67회 통과 |
+| ESP32 여섯 환경 빌드 | 모두 성공 |
+| Python 핵심 시험 | 가상 이미지 기반 5개 테스트 통과 |
+| 두 Pi 추적기 | 로컬 영상 각각 20프레임, 화면 없이 실행·종료 확인 |
 
 assert 횟수에는 반복 측정 확인이 포함되며 서로 다른 시나리오 개수는 아니다.
 실제 생산 소스와 `setup()/loop()`를 가짜 GPIO/UART/I2C/NVS에 연결해 검증한다.
@@ -179,10 +188,119 @@ assert 횟수에는 반복 측정 확인이 포함되며 서로 다른 시나리
 cd D:\C_ROBOT\ESP_MAIN
 .\tests\run_host_tests.ps1
 .\tests\run_host_tests.ps1 -Demo
+.\tests\run_host_tests.ps1 -Bench
 ```
 
-두 번째 명령은 공격 상태와 좌우 출력을 가상 입력으로 보여주는 텍스트 데모다.
+`-Demo`는 공격 상태와 좌우 출력을 가상 입력으로 보여주는 텍스트 데모다.
 시험 상세와 수정한 오류는 [검증 기록](ESP_MAIN/VERIFICATION.md)에 정리했다.
+
+## 영상 코드의 구성과 의도
+
+바닥의 네 색 판별은 ESP32의 광학 센서 코드다. 아래 Python 코드의 녹색 타워 검출과
+교정 데이터를 공유하지 않는다. 라즈는 영상만 처리하고, 주행 판단/안전은 ESP32에서 수행하는 구조다.
+
+```text
+카메라 또는 영상 파일
+  → 저해상도 BGR/ExG 후보 → 후보 ROI 확대 → 원본 해상도 BGR/ExG/HSV/Lab 검증
+  → 마스크 정리 → 연결 성분 / 후보 선택(최대2개) → 전역 좌표
+  → 텍스트 / JSON / 화면 / 성능 보고서
+  → [미구현: 14바이트 UART 패킷 송신] → ESP32 RaspberryLink → FSM → 모터
+```
+
+현재 Pi 추적기는 pyserial/UART 송신을 하지 않는다. `--json`은 좌표를 표준출력에 쓰는 옵션이다.
+그 JSON에는 현재 박스 폭/높이 등 ESP 패킷 필드가 전부 들어 있지도 않다.
+실물 ALIGN/FOLLOW/AVOID에는 규격 송신기가 필요하며, JSON을 그대로 UART1에 보내면 안 된다.
+50fps 카메라 설정도 실제 처리/송신 50Hz를 증명하지 않는다.
+
+| 파일 | 역할과 사용 의도 |
+|---|---|
+| `scripts/color_detection_core.py` | 원본 전체 프레임 검출 기준. BGR/ExG/HSV/Lab, 융합, 모폴로지, 연결 성분, 후보 자료형 |
+| `scripts/color_detection_lightweight.py` | 작은 후보 영상에서 ROI를 찾고 원본 ROI만 정밀 검증. 전역 bbox/centroid/contour 변환으로 계산량 감소 |
+| `scripts/pi_green_tracker.py` | 공유 검출기를 파일/USB카메라/Picamera2에 연결. JSON/미리보기/파일 반복/측정/내보내기 UI |
+| `raspberry_pi_green_tracker_single.py` | 복사하기 쉬운 단일 파일 Pi 검출기. 상단 고정 녹색 임계값과 미소 타워의 엄격한 필터 |
+| `scripts/color_detector_ui.py` | 실행 입구. 기본 단계별 wizard, --advanced-ui 전체 설정 UI, --benchmark 화면 없는 측정 |
+| `scripts/color_detector_wizard.py` | 순서대로 BGR→ExG→HSV→Lab→융합→후처리 튜닝, ROI 자동 조정, 설정/스냅샷/내보내기 |
+| `scripts/benchmark_lightweight_compare.py` | 동일 영상의 전체 프레임/ROI 검출 시간·마스크·후보 비교. 실행 순서를 번갈아 편향 완화 |
+| `scripts/color_detector_export.py` | 기준 검출기의 원본/결과/각 마스크를 분석 영상으로 저장 |
+| `scripts/export_lightweight_full_video.py` | ROI 검출기의 전체 분석 영상 저장. 실제 제어 루프에서 인코딩하지 않고 별도 실행 |
+| `scripts/prepare_test_video.py` | 시험 영상을1920×1080/50fps로 리사이즈·시간 기반 프레임 반복, 메타데이터 검증 |
+| `scripts/green_cylinder_video_live.py` | 초기 녹색 검출기 재생/슬라이더/마스크/샘플 저장. 현재 공유 검출기와 별도 실험 구현 |
+| `scripts/green_cylinder_image_batch.py` | img 이미지의 초기 녹색 후보를 일괄 검출해 주석 이미지/CSV 생성 |
+| `scripts/preprocess_green_images.py` | 초기 영상 검출기 기본 설정으로 이미지·마스크·검출 데이터를 준비 |
+| `scripts/opencv_green_cylinder_demo.py` | 합성 도형으로 OpenCV 검출/마스크 저장의 간단한 설치 점검 |
+| `scripts/face_tracking_demo.py` | Haar 얼굴 검출 설치 점검. 경기 타워 검출이나 FSM에 사용하지 않음 |
+| `cv_live_view.py` | 별도 합성 영상 data/synthetic.avi의 루프 표시 예제. 그 입력 파일이 있어야 하며 주요 Pi 실행 입구가 아님 |
+| `scripts/generate_htd5m_20t_pulley.py` | CadQuery/DXF 기반 기구 STEP/STL 생성. 주행/CV와 무관, 별도 CadQuery 환경 필요 |
+| `tests/test_vision.py` | 가상 대상/비대상색·좌표·ROI 병합·경계·마스크 형식 검증. 실제 카메라 성능 시험은 아님 |
+| `setup_raspberry_pi.sh` | Raspberry Pi OS의 OpenCV/NumPy/Picamera2 시스템 패키지 설치 |
+| `run_pi_tracker.sh` | 저장소 위치로 이동 후 Pi 카메라 입력50fps로 공유 추적기 실행 |
+
+공유 검출기는 `config/color_detector_last.json`을 기본값 위에 덮어쓴다.
+단일 파일 추적기는 이 JSON을 읽지 않는다. 따라서 UI 설정을 저장했다고 두 추적기 임계값이
+동시에 바뀌지는 않는다. 단일 파일은 상단 상수를 조정해야 한다.
+예를 들어 순수(0,255,0) 녹색도 단일 파일의 좁은 HSV/Lab 범위 밖이면 거부될 수 있다.
+저해상도 후보를 놓친 대상은 ROI 정밀 검증에 들어오지 않는다. 두 방식의 검출 결과가 항상 같지는 않다.
+
+### 로컬 Windows에서 실행
+
+프로젝트 루트에서 가상환경 Python을 사용한다. 기존 `.venv`가 없다면 생성 후 의존성을 준비한다.
+핵심 CV 실행에는 OpenCV/NumPy가 필요하고 저장소 전체 `requirements.txt`는 다른 실험용 패키지도 포함한다.
+
+```powershell
+cd D:\C_ROBOT
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install opencv-python==4.12.0.88 numpy
+# 기존 환경을 쓰면 위 생성/설치는 생략
+.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --source dataset/videos/irc_highlight_1080p50.mp4 --preview --realtime
+```
+
+Q 종료, M 마스크 표시, E 전체 파일 내보내기. `--realtime`은 파일 원래 FPS에 맞춰 기다리므로
+순수 처리 성능 시험에서는 빼야 한다. `--loop`는 파일을 반복한다.
+GUI는 실제 데스크톱 세션이 필요하다. 파일/카메라 해상도와 처리 시간은 별도 확인한다.
+
+화면 유무 비교와 좌표 출력:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --quiet --benchmark --max-frames 300
+.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --quiet --benchmark --max-frames 300 --preview
+.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --json --max-frames 20
+.\.venv\Scripts\python.exe raspberry_pi_green_tracker_single.py --source dataset/videos/irc_highlight_1080p50.mp4 --preview
+.\.venv\Scripts\python.exe scripts/color_detector_ui.py
+```
+
+벤치 보고서는 `output/color_detector/benchmarks`에 저장된다. 기본10프레임 예열은 통계에서 제외한다.
+검출 시간과 입력/표시/대기 포함 loop 시간을 구분한다. 일반 실행의 FPS 이력은60프레임으로 제한하고,
+명시적 --benchmark는 전체 통계를 위한 목록을 보관하므로 장시간 운전 옵션이 아니라 유한 시험용으로 쓴다.
+전체 프레임/ROI 비교가 필요하면 benchmark_lightweight_compare.py를 실행한다.
+각 보조 도구의 옵션은 `--help`, 튜닝·GUI·내보내기의 상세 키는 [COLOR_DETECTOR.md](COLOR_DETECTOR.md).
+
+### 라즈베리파이에서 실행
+
+Raspberry Pi OS의 Picamera2는 시스템 패키지와 카메라 드라이버가 필요하다.
+일반 PC에 pip로 설치한 OpenCV만으로 카메라 입력이 되지는 않는다.
+
+```bash
+bash setup_raspberry_pi.sh
+python3 -m venv --system-site-packages .venv
+.venv/bin/python scripts/pi_green_tracker.py --source camera --fps 50 --preview
+# 또는 시스템 Python 실행 래퍼:
+bash run_pi_tracker.sh --preview
+```
+
+이미 설정한 환경이라면 설치를 반복할 필요 없다. 현재 Windows 검토는 라즈에 원격 접속하거나
+패키지를 변경하지 않았다. 실행 중인 카메라/GUI/50Hz UART의 실측과 종단간 검증은 남아 있다.
+
+### Python 검증 재실행
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall -q scripts tests cv_live_view.py raspberry_pi_green_tracker_single.py
+```
+
+이 검증은 주요 공유/단일 검출기의 오프라인 논리를 검사한다. 모든 GUI/내보내기/CAD 경로,
+실제 영상의 정답 정확도, 카메라 성능과 UART 송신까지 보증하는 시험은 아니다.
+영상·출력·가상환경·빌드 결과물은 Git에 올리지 않으므로 새 clone에는 기본 시험 영상이 없을 수 있다.
+영상이 없으면 별도로 준비하거나 --source로 실제 파일을 지정한다.
 
 ## 다음 단계
 
