@@ -95,7 +95,13 @@ class PiCameraSource:
         self.camera.close()
 
 
-def print_targets(frame_number: int, result, process_ms: float, as_json: bool) -> None:
+def print_targets(
+    frame_number: int,
+    result,
+    process_ms: float,
+    effective_fps: float,
+    as_json: bool,
+) -> None:
     targets = [
         {
             "id": index + 1,
@@ -109,7 +115,12 @@ def print_targets(frame_number: int, result, process_ms: float, as_json: bool) -
     if as_json:
         print(
             json.dumps(
-                {"frame": frame_number, "process_ms": round(process_ms, 2), "targets": targets},
+                {
+                    "frame": frame_number,
+                    "process_ms": round(process_ms, 2),
+                    "fps": round(effective_fps, 2),
+                    "targets": targets,
+                },
                 ensure_ascii=False,
             ),
             flush=True,
@@ -120,7 +131,10 @@ def print_targets(frame_number: int, result, process_ms: float, as_json: bool) -
         for item in targets
     )
     print(
-        f"frame={frame_number} process={process_ms:.2f}ms targets={len(targets)} {compact}".rstrip(),
+        (
+            f"frame={frame_number} fps={effective_fps:.1f} "
+            f"process={process_ms:.2f}ms targets={len(targets)} {compact}"
+        ).rstrip(),
         flush=True,
     )
 
@@ -323,6 +337,11 @@ def main() -> None:
     if args.preview:
         cv2.namedWindow("Pi green tracker", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Pi green tracker", 1280, 720)
+        cv2.setWindowProperty(
+            "Pi green tracker",
+            cv2.WND_PROP_FULLSCREEN,
+            cv2.WINDOW_FULLSCREEN,
+        )
 
         def on_mouse(event: int, x: int, y: int, _flags: int, _data: Any) -> None:
             if isinstance(source, VideoSource) and 670 <= y <= 719 and (
@@ -368,7 +387,13 @@ def main() -> None:
             process_ms = float(result.timings_ms["total"])
             frame_number += 1
             if not args.quiet and frame_number % max(1, args.print_every) == 0:
-                print_targets(frame_number, result, process_ms, args.json)
+                recent_loops = np.asarray(loop_values[-60:], dtype=np.float64)
+                live_fps = (
+                    float(1000.0 / recent_loops.mean())
+                    if recent_loops.size
+                    else 0.0
+                )
+                print_targets(frame_number, result, process_ms, live_fps, args.json)
             if args.preview:
                 progress = (
                     f"BENCH {max(0, frame_number - args.warmup_frames)}/{max(0, args.max_frames - args.warmup_frames)}"

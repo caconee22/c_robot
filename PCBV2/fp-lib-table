@@ -1,0 +1,6 @@
+(fp_lib_table
+	(version 7)
+	(lib (name "YD-ESP32-S3") (type "KiCad") (uri "${KIPRJMOD}/libraries/YD-ESP32-S3.pretty") (options "") (descr "Project-local footprint library for YD-ESP32-S3"))
+	(lib (name "HW-617") (type "KiCad") (uri "${KIPRJMOD}/libraries/HW-617.pretty") (options "") (descr "Project-local footprint library for HW-617 TCA9548A module"))
+	(lib (name "XL4015") (type "KiCad") (uri "${KIPRJMOD}/libraries/XL4015.pretty") (options "") (descr "Project-local footprint library for XL4015 DC-DC converter module"))
+)
