@@ -108,7 +108,7 @@ def detect(frame, method):
     return masks, fused, target
 
 
-def render(frame, masks, fused, target, method, index, milliseconds, fps):
+def render(frame, masks, fused, target, method, index, milliseconds, fps, show_timing=True):
     """Fixed 3x2 canvas: annotated source, up to 4 raw masks, final mask."""
     tile_w, tile_h = 270, 480
     canvas = np.zeros((tile_h * 2, tile_w * 3, 3), np.uint8)
@@ -135,10 +135,10 @@ def render(frame, masks, fused, target, method, index, milliseconds, fps):
         cv2.putText(canvas, label, (tx + 5, ty + 22), cv2.FONT_HERSHEY_SIMPLEX,
                     .43, (255, 255, 255), 1, cv2.LINE_AA)
         if i == 0:
-            cv2.putText(canvas, f"#{index} {index / fps:.2f}s {milliseconds:.2f}ms",
+            cv2.putText(canvas, f"#{index} {index / fps:.2f}s" + (f" {milliseconds:.2f}ms" if show_timing else ""),
                         (tx + 5, ty + 44), cv2.FONT_HERSHEY_SIMPLEX,
                         .42, (0, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(canvas, f"CV-only {1000 / max(milliseconds, .0001):.1f} FPS",
+            cv2.putText(canvas, f"CV-only {1000 / max(milliseconds, .0001):.1f} FPS" if show_timing else f"INPUT {fps:.2f} FPS / VIDEO ONLY",
                         (tx + 5, ty + 57), cv2.FONT_HERSHEY_SIMPLEX,
                         .35, (0, 255, 255), 1, cv2.LINE_AA)
         if i == 5 and target:

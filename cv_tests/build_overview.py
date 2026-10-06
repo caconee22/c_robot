@@ -61,7 +61,7 @@ def main():
                     cv2.drawMarker(image, center, (0, 0, 255), cv2.MARKER_CROSS, 8, 1)
                 if index in labels:
                     truth = labels[index]["box"]
-                    status = ("CORRECT" if matches(target, truth) else "MISS/WRONG") if truth else (
+                    status = ("BOX MATCH" if matches(target, truth) else "BOX MISMATCH") if truth else (
                         "TRUE ABSENT" if target is None else "FALSE POSITIVE")
                 else:
                     status = "FOUND - UNLABELED" if target else "NO DETECTION"

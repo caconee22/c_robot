@@ -36,17 +36,17 @@ def report(output):
         f"{info['source_width']}×{info['source_height']}, {info['source_fps']:.2f}fps, "
         f"{info['processed_frames']}/{info['source_frames']}프레임. 모든 프레임을 8개 방식에 입력했습니다.", "",
         "## 결과", "", "큰 초록 배경을 선택한 것은 순위에서 제외합니다. 실제 타워에 대응하는 후보가 최종 마스크에 남았는지 평가합니다.", "",
-        "| 방식 | 타워 후보/48표본 | 합성 스트레스/48 | 최대영역 선택 정답(참고) | 평균 ms | p99 ms |",
-        "|---|---:|---:|---:|---:|---:|"]
+        "| 방식 | 타워 후보/48표본 | 합성 스트레스/48 | 최대영역 선택 정답(참고) | 평균 ms | p99 ms | 전체 검출없음 프레임 |",
+        "|---|---:|---:|---:|---:|---:|---:|"]
     for name in ranked:
         e,t=evaluation["methods"][name],info["methods"][name]
         lines.append(f"| {name} | {e['candidate_hits']}/{e['visible']} | {e['stress_hits']}/{e['stress_n']} | "
-                     f"{e['largest_hits']}/{e['visible']} | {t['mean_ms']:.2f} | {t['p99_ms']:.2f} |")
+                     f"{e['largest_hits']}/{e['visible']} | {t['mean_ms']:.2f} | {t['p99_ms']:.2f} | {t['empty']} |")
     fast = [n for n in ranked if info["methods"][n]["p99_ms"] <= 20]
     baseline = info["methods"]["01_four_vote"]["mean_ms"]
     lines += ["", f"표본 후보 유지 → 스트레스 후보 유지 → p95 시간 순 후보: `{ranked[0]}`.",
               f"이 PC에서 p99 검출시간 20ms 이하인 후보 중 위 기준 선두: `{fast[0] if fast else '없음'}`.","",
-              "4필터 대비 평균 검출시간 감소:"]
+              "4필터 대비 평균 검출시간 감소:", ""]
     for name in ("02_no_exg","03_no_lab","04_no_bgr"):
         lines.append(f"- {name}: {(1-info['methods'][name]['mean_ms']/baseline)*100:.1f}%")
     lines += ["", "## 평가 범위와 사용법", "",
@@ -54,16 +54,19 @@ def report(output):
         "- 스트레스는 표본 중 매 4번째(12개)에 밝기 0.5배/1.4배, 노이즈 σ12, Gaussian 5×5를 가한 합성 48건입니다. 실전 정확도가 아닙니다.",
         "- 4필터는 3/4 투표, 3필터는 2/3 투표입니다. 속도는 제거한 계산량을 비교하지만 정확도 차이는 투표 기준 변화의 영향도 포함합니다.",
         "- 전체 프레임에 수작업 정답은 없습니다. 48/48이어도 영상 전체에서 한 번도 놓치지 않았음을 증명하지 않습니다.",
+        "- 전체 검출없음 프레임 수는 실제 놓침 수가 아닙니다. 타워가 화면 밖인 경우도 포함하며, 배경 검출은 검출있음으로 집계됩니다.",
+        f"- 표본의 대략적인 정답 박스 폭은 원본 기준 최소 {evaluation.get('smallest_annotated_width_px', float('nan')):.0f}px입니다. 약 10px 폭 극소 표적의 성능은 별도 영상으로 검증해야 합니다.",
         "- 타워 후보가 존재하는 것과 UART로 보낼 최대영역 박스가 정확한 것은 다릅니다. 최대영역 선택 정답은 참고용으로 함께 기록했습니다.",
         "- 시간은 현재 Windows PC의 필터·마스크·윤곽·선택 계산만 측정한 값이며 디코딩/표시/저장 제외입니다. 최초 30프레임은 시간 집계에서 제외했습니다.",
         "- 실행 순서는 프레임마다 회전합니다. 실행 중 일부 평가/회귀 검사도 함께 수행했으므로 CPU가 완전히 독점된 벤치마크는 아닙니다.",
         "- 휴대폰 입력은 약 30fps입니다. 50Hz 카메라 입력, 라즈베리파이 실시간 성능, UART 주기는 검증하지 않았습니다.",
         "- 종합 영상은 원본+8개 박스 비교, 개별 영상은 원본/성분 마스크/최종 마스크 6칸입니다. 초 단위 표시에는 명목 FPS를 사용합니다.", "",
-        "## 영상", "", "[8방식 종합 비교](00_all_methods_overview.mp4)"]
+        "## 영상", "", "[8방식 종합 비교](00_all_methods_overview.mp4)", ""]
     for name in METHODS:
         lines.append(f"- [{name} — 성분 및 최종 마스크]({name}.mp4)")
     (output/"REPORT.md").write_text("\n".join(lines)+"\n",encoding="utf-8")
-    print("\n".join(lines[:24]),flush=True)
+    # Keep terminal output ASCII; Windows cp949 cannot print every Markdown symbol.
+    print(f"Saved report: {output / 'REPORT.md'}",flush=True)
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -134,6 +137,7 @@ def main():
     args.output.mkdir(parents=True,exist_ok=True)
     result={"source_sha256":digest,"annotations":str(args.annotations.resolve()),
             "scope":"Sparse candidate recall; unrelated larger background selection excluded from ranking",
+            "smallest_annotated_width_px":min(labels[i]["box"][2] for i in visible),
             "csv_cross_checked":bool(csv_targets),"methods":counts}
     (args.output/"candidate_evaluation.json").write_text(json.dumps(result,indent=2),encoding="utf-8")
     with (args.output/"candidate_evaluation.csv").open("w",newline="",encoding="utf-8") as file:
