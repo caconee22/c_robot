@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1050" viewBox="-42 -8 78 105">
+  <defs>
+    <marker id="arrow" markerWidth="5" markerHeight="5" refX="2.5" refY="2.5" orient="auto-start-reverse">
+      <path d="M0,0 L5,2.5 L0,5 Z" fill="#222"/>
+    </marker>
+  </defs>
+  <rect x="-42" y="-8" width="78" height="105" fill="#fbfbfb"/>
+
+  <!-- Geometry: screen Y = 90 - mechanical Y -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="0" cy="90" r="15.915494" stroke="#999" stroke-width="0.35" stroke-dasharray="1.2 1.2"/>
+    <circle cx="0" cy="11" r="15.915494" stroke="#999" stroke-width="0.35" stroke-dasharray="1.2 1.2"/>
+    <line x1="-15.915494" y1="8" x2="-15.915494" y2="92" stroke="#ef8a00" stroke-width="0.45" stroke-dasharray="2 1"/>
+
+    <!-- Recommended M8 slot: 9 mm wide, 7 mm center travel, 16 mm overall -->
+    <path d="M -24 42.5 L -17 42.5 A 4.5 4.5 0 0 1 -17 51.5 L -24 51.5 A 4.5 4.5 0 0 1 -24 42.5 Z"
+          fill="#d7e3ea" fill-opacity="0.75" stroke="#465a64" stroke-width="0.45"/>
+    <line x1="-24" y1="47" x2="-17" y2="47" stroke="#465a64" stroke-width="0.25" stroke-dasharray="1 1"/>
+
+    <!-- Bearing at the 260 mm theoretical point -->
+    <circle cx="-18.249328" cy="47" r="11" fill="#ddd" stroke="#222" stroke-width="0.5"/>
+    <circle cx="-18.249328" cy="47" r="4" fill="#fbfbfb" stroke="#222" stroke-width="0.4"/>
+    <circle cx="-18.249328" cy="47" r="0.65" fill="#222" stroke="none"/>
+
+    <!-- Current 260 mm pitch path -->
+    <path stroke="#086ea8" stroke-width="0.55"
+      d="M -15.556819 86.640189
+         A 15.915494 15.915494 0 1 0 15.915494 90
+         L 15.915494 11
+         A 15.915494 15.915494 0 1 0 -15.377220 15.104152
+         L -7.621357 44.163414
+         A 11 11 0 0 1 -7.497227 49.322135
+         L -15.556819 86.640189"/>
+
+    <!-- Dimensions -->
+    <line x1="-18.249328" y1="64" x2="-15.915494" y2="64" stroke="#222" stroke-width="0.25" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <line x1="-15.915494" y1="59" x2="-7.249328" y2="59" stroke="#b03030" stroke-width="0.25" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <line x1="-24" y1="34" x2="-17" y2="34" stroke="#222" stroke-width="0.25" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <line x1="-28.5" y1="29" x2="-12.5" y2="29" stroke="#222" stroke-width="0.25" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <line x1="-31.5" y1="42.5" x2="-31.5" y2="51.5" stroke="#222" stroke-width="0.25" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  </g>
+
+  <g font-family="Arial, 'Noto Sans KR', sans-serif" font-size="2.7" fill="#111">
+    <text x="-24.5" y="67">중심↔기존 피치선 2.334 mm</text>
+    <text x="-14.8" y="57.5" fill="#a02020">베어링 누름량 8.666 mm</text>
+    <text x="-23.3" y="32.8">중심 이동 7 mm</text>
+    <text x="-26.7" y="27.7">슬롯 전체 길이 16 mm</text>
+    <text x="-39.5" y="47.8">폭 9 mm</text>
+    <text x="-40" y="73">위 풀리 중심 기준</text>
+    <text x="-40" y="76.5">아이들러: 왼쪽 18.249 / 아래 36 mm</text>
+    <text x="-40" y="80">슬롯 중심 범위: 왼쪽 17~24 mm</text>
+    <text x="-40" y="83.5">17 mm 방향 = 장력 증가</text>
+    <text x="-40" y="87">24 mm 방향 = 벨트 장착 여유</text>
+    <text x="5" y="5" fill="#ef8a00">아이들러 없을 때 기존 직선 피치선</text>
+    <text x="5" y="8.5" fill="#086ea8">260 mm 피치 경로</text>
+  </g>
+</svg>
