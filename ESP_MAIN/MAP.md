@@ -1,5 +1,8 @@
 # ESP_MAIN 지도 — 작업 전에 이것부터 읽는다
 
+코딩을 모르는 현장 팀원과 작업할 때는 [TEAM_GUIDE.md](TEAM_GUIDE.md)도 함께 읽고,
+그 문서의 용어와 설명 수준에 맞춰 답한다.
+
 이 문서는 펌웨어 구조를 한 장으로 요약한다. 규칙은 [AGENTS.md](AGENTS.md),
 설명과 사용법은 [README.md](README.md), 검증 이력은 [VERIFICATION.md](VERIFICATION.md)에 있다.
 각 모듈의 역할·호출 위치·안전 여부는 해당 헤더 맨 위 `// Contract` 주석에 있으니
