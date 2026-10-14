@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 #include <string.h>
-#include "sensors/color_calibration.hpp"
+#include "sensors/calibration_store.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/floor_color_classifier.hpp"
 #include "sensors/sensor_config.hpp"
@@ -78,14 +78,13 @@ bool SensorManager::begin() {
     confirmation = ColorConfirmation{};
   }
   ColorSensorManager::begin();
-  ColorCalibration::begin();
-  calibrationGeneration = ColorCalibration::generation();
+  CalibrationStore::load();
+  calibrationGeneration = CalibrationStore::generation();
   for (auto& error : reportedError) error = ColorSensorError::None;
   reportErrors();
   latestSnapshot.colorSensorReadyMask =
       ColorSensorManager::status().readyMask;
-  latestSnapshot.colorCalibrationValid =
-      ColorCalibration::hasStoredData();
+  latestSnapshot.colorCalibrationValid = CalibrationStore::valid();
   // Color sensors are optional at boot. Missing sensors remain UNKNOWN and
   // are logged once. Failed channels require reboot after a wiring repair.
   return true;
@@ -98,8 +97,8 @@ void SensorManager::update() {
   const uint32_t nowMs = millis();
   latestSnapshot.timestampMs = nowMs;
   reportErrors();
-  if (calibrationGeneration != ColorCalibration::generation()) {
-    calibrationGeneration = ColorCalibration::generation();
+  if (calibrationGeneration != CalibrationStore::generation()) {
+    calibrationGeneration = CalibrationStore::generation();
     for (size_t i = 0; i < COLOR_SENSOR_COUNT; ++i) {
       confirmations[i] = ColorConfirmation{};
       latestSnapshot.floorColor[i] = FloorColorResult{};
@@ -108,8 +107,7 @@ void SensorManager::update() {
   }
   latestSnapshot.colorSensorReadyMask =
       ColorSensorManager::status().readyMask;
-  latestSnapshot.colorCalibrationValid =
-      ColorCalibration::hasStoredData();
+  latestSnapshot.colorCalibrationValid = CalibrationStore::valid();
   for (uint8_t index = 0; index < COLOR_SENSOR_COUNT; ++index) {
     const ColorRawSample raw = ColorSensorManager::sample(index);
     latestSnapshot.colorRaw[index] = raw;
@@ -124,7 +122,7 @@ void SensorManager::update() {
     }
     lastColorSequence[index] = raw.sequence;
     const FloorColorResult measured = FloorColorClassifier::classify(
-        index, raw, ColorCalibration::data());
+        index, raw, CalibrationStore::data());
     latestSnapshot.floorColor[index] = confirmColor(index, measured);
   }
 }

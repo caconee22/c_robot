@@ -24,20 +24,16 @@ struct ColorCalibrationStatus {
 };
 
 // Contract
-// Role: UART0 guided calibration (4 sensors x 4 colors x 3 poses) and NVS
-//   storage. Not part of match driving.
-// Called from: loop(); while active() the loop brakes and skips the FSM.
-// Rule: runs only while waiting for start; SW2 aborts it.
+// Role: UART0 guided calibration (4 sensors x 4 colors x 3 poses). Saves
+//   through CalibrationStore. Not linked into the production firmware.
+// Called from: calibration_main.cpp only (PlatformIO env color_calibration).
+//   That firmware never initializes the motors; their pins stay LOW.
+// Rule: call CalibrationStore::load() before begin().
 class ColorCalibration {
  public:
   static void begin();
-
-  // allowed is true only while the robot is waiting for its start button.
-  static void update(uint32_t nowMs, bool allowed);
+  static void update(uint32_t nowMs);
 
   static bool active();
-  static bool hasStoredData();
-  static uint32_t generation();
-  static const ColorCalibrationData& data();
   static ColorCalibrationStatus status();
 };

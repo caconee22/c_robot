@@ -11,6 +11,7 @@ $buildDirectory = Join-Path $projectRoot '.pio\host-tests'
 New-Item -ItemType Directory -Force -Path $buildDirectory | Out-Null
 $sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src') -Filter '*.cpp' -Recurse |
     Where-Object { $_.Name -ne 'sensor_serial_test.cpp' -and
+        $_.Name -ne 'calibration_main.cpp' -and
         $(if ($Bench) { $_.Name -ne 'main.cpp' } else { $_.Name -ne 'bench_main.cpp' }) } |
     ForEach-Object FullName)
 $sourceFiles += Join-Path $PSScriptRoot 'host\fake_hardware.cpp'

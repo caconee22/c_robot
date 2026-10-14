@@ -30,7 +30,7 @@ S1..S4는 사용자 표시 번호다. 배열 인덱스와 TCA 기본 채널은 0
 | 신호 | GPIO | 의미 |
 |---|---:|---|
 | SW1 / SW2 | 15 / 16 | GND 연결 능동 LOW, 내부 풀업 |
-| UART0 TX / RX | 43 / 44 | 이벤트·교정 또는 벤치 콘솔, COM/SiK 공유 |
+| UART0 TX / RX | 43 / 44 | 이벤트 로그, 벤치 콘솔 또는 교정 콘솔, COM/SiK 공유 |
 | UART1 TX / RX | 17 / 18 | 라즈 UART, 상대 TX→ESP RX, 공통 GND |
 | I2C SDA / SCL | 11 / 12 | TCA9548A 기본 0x70 |
 | 내장 / 외부 WS2812 | 48 / 13 | 각각 1개 |
@@ -54,9 +54,11 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 | `robot_bench_tcs34725` | 같은 파일 | TCS34725 벤치 | 57600 |
 | `sensor_serial_test` | `src/sensor_serial_test.cpp` | 설정 파일의 센서 원시값만 확인 | 115200 |
 | `sensor_serial_test_tcs34725` | 같은 파일 | TCS34725 원시값만 확인 | 115200 |
+| `color_calibration` | `src/calibration_main.cpp` | 설정 파일의 센서로 48단계 교정, NVS 저장 | 57600 |
+| `color_calibration_tcs34725` | 같은 파일 | TCS34725 교정 | 57600 |
 
 생산 환경은 벤치 컨트롤러를 빌드하지 않는다. 벤치는 생산 FSM 메인을 실행하지 않는다.
-센서 전용은 모터·버튼 ISR·시스템 안전관리도 실행하지 않는다.
+센서 전용과 교정 펌웨어는 모터·버튼 ISR·시스템 안전관리도 실행하지 않는다.
 **센서 전용 시험에서는 모터 전원을 물리적으로 분리한다.**
 `platformio.ini`의 source filter가 진입점을 나누며 공용 센서/모터 코드를 복제하지 않는다.
 
@@ -77,14 +79,16 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 | `hardware/board_io` | 부팅 초기에 PWM/EN LOW 설정, 일반 핀모드 초기화 |
 | `hardware/reset_manager` | ESP 리셋 원인과 재무장 필요 플래그 제공. 자동 리셋은 실행하지 않음 |
 | `interrupts/button_interrupts` | SW1 영구 래치, SW2 에지·디바운스·해제 이벤트, ESTOP 영구 루프 |
-| `system/system_manager` | SW2 이벤트 단독 소비자. 운전 요청·교정·집계 고장을 합쳐 motorAllowed 결정 |
+| `system/system_manager` | SW2 이벤트 단독 소비자. 운전 요청·집계 고장을 합쳐 motorAllowed 결정 |
 | `system/event_logger` | 번호/문자열 고정 큐, 변경·중복 억제, 일반 UART 쓰기 지연 |
 | `system/status_led` | 주체별 요청 보존, 우선순위·TTL로 두 WS2812 표시 결정 |
 | `sensors/color_sensor_types` | 모델·모서리·색·원시값·교정 기준·판정 결과와 출력 이름 |
 | `include/sensors/sensor_config.hpp` | 모델, 수광·게인·조명, TCA 채널, 확정 횟수, 임시 임계값, 교정 여유 |
 | `sensors/color_sensor_manager` | Wire/TCA/레지스터 담당. 수광 완료 확인과 새 원시 측정 발행 |
 | `sensors/floor_color_classifier` | 원시값을 네 바닥색/Unknown으로 판별. I2C·UART·모터를 건드리지 않음 |
-| `sensors/color_calibration` | 시작 전 UART 안내식 교정과 NVS 저장. 판별 알고리즘과 분리 |
+| `sensors/calibration_store` | NVS 교정값 읽기·검증·저장·삭제. 생산은 부팅 때 읽기만 함 |
+| `calibration/color_calibration` | 교정 펌웨어 전용 UART 안내식 48단계 교정. 생산에 링크되지 않음 |
+| `src/calibration_main.cpp` | 교정 펌웨어 진입점. 모터 미초기화, 모터 핀 LOW 고정 |
 | `sensors/sensor_manager` | 새 sequence만 판별, 3회 확정, 무효/오래된 판정 폐기, 오류 변경 기록, snapshot |
 | `include/communication/vision_protocol.hpp` | 패킷·상태 비트·범위·오류번호. Pi 송신기와 맞춰야 하는 계약 |
 | `communication/raspberry_link` | UART1 재조립, 헤더 재동기화, 중복 sequence와 영상 신선도 처리 |
@@ -94,7 +98,7 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 | `include/motor/motor_config.hpp` | PWM·방향 반전·출력 상한·명령 만료·브레이크 전기 조합 |
 | `motor/motor_controller` | 공용 API, 안전 검사, 제한, 뮤텍스, 만료 감시 태스크, 상태 반환 |
 | `motor/bts7960_driver` | BTS7960 하나의 실제 PWM/EN 쓰기, 방향 전환 deadtime, 영구 금지 확인 |
-| `src/bench_main.cpp` | 벤치 콘솔·안전·센서/비전·CSV 연결. 교정 콘솔은 실행하지 않음 |
+| `src/bench_main.cpp` | 벤치 콘솔·안전·센서/비전·CSV 연결. 교정은 하지 않고 NVS 값만 사용 |
 | `bench/bench_controller` | MOTOR/MANUAL/DATA/ALIGN/FOLLOW/AVOID의 시간 기반 명령 생성 |
 | `include/bench/bench_config.hpp` | 시험 출력/유지시간/추적·회피 조건. 생산 전략 설정과 분리 |
 | `src/sensor_serial_test.cpp` | 모터를 건드리지 않고 100ms마다 버튼/센서 원시값 출력 |
@@ -113,13 +117,11 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 전원/리셋
   → PWM/EN LOW → 리셋 원인 → UART0 → 모터/PWM/만료 감시
   → 버튼 ISR → LED → 컬러 센서/NVS → UART1 → 시스템 관리자
-  → 시작 대기
-       ├─ CAL START → 48단계 측정 → CAL SAVE → 시작 대기
-       └─ SW2 정상 눌림/해제 → Running
+  → 시작 대기 → SW2 정상 눌림/해제 → Running
+  (교정은 color_calibration 펌웨어를 따로 업로드해서 진행)
 
 생산 loop()
   안전/버튼 → 라즈 수신 → 센서 짧은 I2C 단계 → 안전 재확인
-  → 교정 콘솔 (교정 중이면 모터 정지, FSM 생략)
   → 센서/비전 snapshot → FSM 의도 → 좌우 명령 → 제한/PWM
   → LED → 이벤트 큐 출력 → delay(1)
 
@@ -185,7 +187,11 @@ WaitStart → Search → TargetConfirm → TrackAlign / Approach
 - 일반 목표 상실: 마지막 새 목표부터 260ms 이내는 마지막 방향 회전, 이후 Search.
 - ZoneEscape: 빨강/노랑/파랑 위험. 전방이면360ms 후진, 후방이면 전진,
   이어 반대 방향 회전320ms. 여전히 위험하면 탈출 재판단.
-  이동 방향에 새 위험이면 브레이크 한 번 후 방향을 새로 판단한다. 전후방 동시 위험은 정지한다.
+  이동 방향에 새 위험이면 브레이크 한 번 후 방향을 새로 판단한다.
+- 홈 안 갇힘(전후방 동시 위험): BOTH_HAZARD_BRAKE_MS 동안 브레이크 후, 마지막으로 한쪽 끝만
+  위험색이었던 방향의 반대로 ZONE_ESCAPE_DUTY 직진한다(뒤가 마지막이면 전진, 앞이면 후진).
+  기록이 없으면 Backoff 중 진입은 전진, 그 외는 후진. GROOVE_EXIT_FLIP_MS마다 방향을 뒤집는다.
+  한쪽 끝이 빠지면 일반 ZoneEscape로 이어간다. 시간 값은 실물 미검증 시작값이다.
   회전 단계는 현재 위험 방향을 반영하며, 위험이 없으면 짧은 예정 탈출 후 Search로 돌아간다.
 
 박스 높이는 거리계가 아니며 스포크 삽입 성공을 확인하지 않는다.
@@ -268,9 +274,17 @@ TCS 전용 환경은 빌드 옵션 `COLOR_SENSOR_MODEL=2`로 기본값을 덮어
 
 ## 9. 컬러 교정 사용법
 
-**생산 펌웨어** 시작 대기 중 UART0 57600에서 실행한다. 벤치는 NVS를 불러오지만 교정 콘솔은
-실행하지 않는다. 센서 전용도 교정이 없다. 네 채널 모두 초기화돼야 CAL START를 받는다.
-SW1 래치 후에는 교정도 불가능하다. LF/CRLF 줄바꿈, 소문자는 대문자로 변환한다.
+교정은 **별도 펌웨어** `color_calibration`(TCS는 `color_calibration_tcs34725`)에서 한다.
+생산·벤치 펌웨어에는 교정 콘솔이 없고 부팅 때 NVS 값만 읽는다.
+교정 펌웨어는 모터를 초기화하지 않고 모터 핀을 LOW로 고정하지만, 모터 전원은 분리한다.
+네 채널 모두 초기화돼야 CAL START를 받는다. LF/CRLF 줄바꿈, 소문자는 대문자로 변환한다.
+
+```powershell
+pio run -e color_calibration -t upload
+pio device monitor -b 57600
+# CAL SAVE 후
+pio run -e yd_esp32_s3 -t upload
+```
 
 ```text
 CAL START
@@ -287,7 +301,7 @@ IMU는 사용하지 않는다. 유효한 새 측정으로 평균·표준편차·
 
 | 명령 | 조건 / 의미 |
 |---|---|
-| CAL START | 운전 전 새 교정, 기존 저장 기준은 SAVE 전까지 유지 |
+| CAL START | 새 교정 시작, 기존 저장 기준은 SAVE 전까지 유지 |
 | READY | 배치 완료 후 준비/측정 |
 | ACCEPT | 결과 수락, 다음 단계 |
 | RETRY | 현재 결과 폐기, 다시 READY 대기 |
@@ -296,12 +310,12 @@ IMU는 사용하지 않는다. 유효한 새 측정으로 평균·표준편차·
 | CAL MARGIN 20 40 | 교정 중 비율20% / 밝기40% 여유, 두 정수1..100만 허용 |
 | ABORT | 작업 중단, 기존 저장 교정 유지 |
 | CAL SAVE | 전체 완료 후 NVS 저장, 실패는 오류 후 수동 재시도 가능 |
-| CAL ERASE | 운전 전 저장 기준 삭제, 임시 기준 전환 |
+| CAL ERASE | 저장 기준 삭제, 다음 부팅부터 임시 기준 사용 |
 
 3초 내 유효5샘플 미만이면 그 단계를 재안내한다. 긴 수광은 측정 시간도 조정한다.
 NVS color-cal/data 한 블롭의 길이·버전·모델·설정 서명·유한값을 확인한다.
 저장/삭제 실패 시 기존 RAM 기준을 보존한다. SAVE 전 중간 측정은 재부팅하면 사라진다.
-교정 중 SW2는 교정을 중단하고 제스처를 버린다. 완전히 놓은 뒤 새로 눌렀다 놓아야 출발한다.
+교정 펌웨어에서는 SW1/SW2를 사용하지 않는다. 교정 후 생산 펌웨어를 다시 올려야 주행할 수 있다.
 
 ## 10. 라즈 UART 규격과 수신 의미
 
@@ -425,14 +439,14 @@ SW1 영구 루프 진입 후 일반 큐를 버리고 ESTOP만3초마다 출력�
 | 센서 방문 | 메인 최소1ms 슬롯 | AS 매번4개, TCS1개. 샘플 Hz와 다름 |
 | AS 수광 | 내부 연속 약5ms | 이론 약200회/s, I2C/보정/누락으로 실제 낮아질 수 있음 |
 | UART1 | 메인 제한 처리 | 송신 목표50Hz, 프레임 신선도120ms |
-| FSM/명령 생성 | 교정 아닌 메인 반복 | 별도 고정주기 태스크 아님 |
+| FSM/명령 생성 | 메인 반복마다 | 별도 고정주기 태스크 아님 |
 | LED | 최소20ms | 최대 갱신 시도50Hz, 변경색만 전송 |
 | 이벤트 | 루프 끝 최대2개 | 사건/변경 시 기록, 낮은 처리 순서 |
 | 벤치 데이터 | 100ms마다5행 시도 | 최대10Hz, 80ms 내 못 보내면 프레임 생략 |
 | 센서 전용 출력 | 약100ms | 약10Hz, 수광 주기와 다름 |
 
 FreeRTOS는 Arduino 내부에도 사용된다. 직접 분리한 기능 태스크는 모터 만료뿐이다.
-I2C·FSM·UART·교정·로그가 모두 독립 태스크라는 의미는 아니다.
+I2C·FSM·UART·로그가 모두 독립 태스크라는 의미는 아니다.
 I2C가 밀리면 만료 감시가 모터를 정지할 수 있고 다음 새 명령으로 다시 적용된다.
 0.5m/s에서 순수5ms 수광 이동은2.5mm다. 색 변경 직후 혼합된 첫 결과를 버리는 이상적 모델의
 3회 확정은 약20ms/10mm이지만 최대 반응거리 보장이 아니다.
@@ -456,7 +470,7 @@ pio device monitor -e robot_bench -b 57600
 3. MODE MOTOR→SW2→좌/우 정역 각3초(12%), 사이0.5초 정지 확인.
 4. SW1 차단·브레이크·ESTOP·해제 후 미복구 확인. 다음 시험은 재부팅.
 5. MODE MANUAL→SW2→DRIVE 100 100 등을250ms보다 빠르게 반복, STOP/입력 상실 정지 확인.
-6. 생산 환경으로 수광/게인 조정·교정 저장 후 벤치로 돌아와 NVS 기준 사용.
+6. 수광/게인 조정 후 color_calibration으로 교정 저장, 벤치/생산으로 돌아와 NVS 기준 사용.
 7. 규격 송신기 연결 후 ALIGN→FOLLOW→AVOID. 처음 두 모드는 바닥 보호가 없다.
 8. 낮은 생산 출력으로 회피/비전 분리 시험 후 공격 시간/출력 조정.
 
@@ -472,7 +486,7 @@ cd D:\C_ROBOT\ESP_MAIN
 .\tests\run_host_tests.ps1
 .\tests\run_host_tests.ps1 -Bench
 .\tests\run_host_tests.ps1 -Demo
-pio run -e yd_esp32_s3 -e yd_esp32_s3_tcs34725 -e sensor_serial_test -e sensor_serial_test_tcs34725 -e robot_bench -e robot_bench_tcs34725
+pio run -e yd_esp32_s3 -e yd_esp32_s3_tcs34725 -e sensor_serial_test -e sensor_serial_test_tcs34725 -e robot_bench -e robot_bench_tcs34725 -e color_calibration -e color_calibration_tcs34725
 cd D:\C_ROBOT
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```

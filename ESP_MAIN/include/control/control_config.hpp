@@ -38,6 +38,12 @@ constexpr uint32_t BACKOFF_MS = 260;
 
 constexpr uint32_t ZONE_ESCAPE_REVERSE_MS = 360;
 constexpr uint32_t ZONE_ESCAPE_TURN_MS = 320;
+// Front and rear both on a hazard color (robot inside a groove): brake for a
+// short time, then drive out opposite to the end that entered last. Flip the
+// direction if the robot is still inside after each GROOVE_EXIT_FLIP_MS.
+// Start values; not yet verified on the real field.
+constexpr uint32_t BOTH_HAZARD_BRAKE_MS = 150;
+constexpr uint32_t GROOVE_EXIT_FLIP_MS = 1500;
 constexpr uint32_t COMMAND_VALID_MS = 80;
 
 constexpr uint8_t colorBit(FloorColor color) {

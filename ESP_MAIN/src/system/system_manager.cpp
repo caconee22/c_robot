@@ -41,7 +41,6 @@ SystemState selectState() {
   if (!latestStatus.applicationHealthy) return SystemState::SystemFault;
   if (!latestStatus.motorsHealthy) return SystemState::MotorFault;
   if (!latestStatus.sensorsHealthy) return SystemState::SensorFault;
-  if (latestStatus.calibrationActive) return SystemState::Calibration;
   if (!latestStatus.runRequested) return SystemState::WaitingForStart;
   return SystemState::Running;
 }
@@ -177,7 +176,7 @@ void SystemManager::update(uint32_t nowMs) {
   }
 
   if (ButtonInterrupts::consumeStartEvent()) {
-    if (latestStatus.calibrationActive || !latestStatus.motorsHealthy ||
+    if (!latestStatus.motorsHealthy ||
         !latestStatus.applicationHealthy || !latestStatus.sensorsHealthy) {
       latestStatus.runRequested = false;
       EventLogger::log(EventId::SafetyBlocked, 1, 0);
@@ -221,17 +220,6 @@ void SystemManager::requestStop() {
   latestStatus.runRequested = false;
   updateState(millis());
   MotorController::brake();
-}
-
-void SystemManager::setCalibrationActive(bool active) {
-  if (latestStatus.calibrationActive == active) return;
-  latestStatus.calibrationActive = active;
-  if (active) {
-    latestStatus.runRequested = false;
-    ButtonInterrupts::cancelStartGesture();
-    MotorController::brake();
-  }
-  updateState(millis());
 }
 
 void SystemManager::setSensorHealthy(bool healthy, FaultCode fault,

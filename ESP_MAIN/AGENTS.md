@@ -109,23 +109,24 @@
   확인·소거하고 최소 수광 간격도 확인하며, AVALID만으로 새 샘플을 세지 않는다.
 - I2C/수광 타임아웃 오류 채널은 재부팅 전까지 비활성화한다. 다른 채널은 계속 읽는다.
   무수광/포화는 해당 측정만 무효이며 재초기화하지 않고 다음 정상 측정을 진행한다.
-- `FloorColorClassifier`와 `ColorCalibration`은 별도 파일로 유지한다.
+- `FloorColorClassifier`, `CalibrationStore`(NVS 읽기·저장), `ColorCalibration`(교정 절차)은 별도 파일로 유지한다.
 - 기체에 추가 가림막/구조물을 설치할 수 없다. 자체 LED로 비추며 10mm 단차 때문에
   센서-바닥 간격은 3/10/20mm로 변한다. 고정 높이로 가정하지 않는다.
   근접 포화, 20mm 유색 바닥의 검정 오인, 경계 혼합을 고려하고 다음 작업에서도
   이 조건을 고려하고 있음을 사용자에게 설명한다. 상세 설정과 미검증 사항은 README §7·§8을 읽는다.
-- UART0에서 `CAL START`를 입력하면 시작 대기 상태에서만 48단계 안내식 교정을 시작한다.
-  센서별로 빨강/노랑/파랑/검정과 평행10mm/들림20mm/눌림3mm를 각각 3초 측정한다. 명령 목록은 README §9.
-- 캘리브레이션 중 SW2가 눌리면 현재 시작 제스처를 폐기하고 측정을 중단한다.
-  모터는 계속 정지하며 구동하려면 SW2를 다시 정상적으로 눌렀다가 놓아야 한다.
+- 교정은 생산 펌웨어에 넣지 않는다. 별도 환경 `color_calibration`을 업로드해 진행하고,
+  `CAL SAVE` 후 생산 펌웨어를 다시 업로드한다. 생산 펌웨어는 `CalibrationStore::load()`로 NVS 값만 읽는다.
+- 교정 펌웨어는 모터를 초기화하지 않고 BTS7960 PWM/EN 핀을 LOW로만 고정한다. 그래도 모터 전원은 분리한다.
+- 교정은 센서별로 빨강/노랑/파랑/검정과 평행10mm/들림20mm/눌림3mm를 각각 3초 측정한다(48단계).
+  NVS 형식(magic, version, 설정 서명)은 두 펌웨어가 공유하므로 한쪽만 바꾸지 않는다. 명령 목록은 README §9.
 
 ## 시스템 상태 관리자
 
 - `SystemManager`가 SW2 해제 이벤트를 단독으로 소비하고 모터 허용 여부를 결정한다.
   다른 모듈은 버튼을 직접 운전 상태로 해석하지 않고 `SystemStatus` 또는 `SafetyStatus`를 조회한다.
   안전 상태의 원본은 `SystemManager` 하나만 둔다.
-- 상태는 Booting, WaitingForStart, Running, Calibration, SensorFault, MotorFault, SystemFault,
-  EmergencyStop이다(`system_manager.hpp`).
+- 상태는 Booting, WaitingForStart, Running, SensorFault, MotorFault, SystemFault,
+  EmergencyStop이다(`system_manager.hpp`). `Calibration` 값은 로그 번호 유지를 위한 예약값이며 진입하지 않는다.
 - 라즈 UART 패킷 파서는 시스템 상태 관리자와 분리되어 있다. 라즈 상태는
   `RaspberryLink::latest()`로 구동 FSM에서만 판단한다. 라즈가 없거나 끊겨도
   `SystemManager`의 상태와 모터 허용 여부는 바뀌지 않는다.
@@ -150,15 +151,18 @@
 
 - `src/main.cpp`는 안전 관리자와 모터 워치독을 가장 먼저 갱신한다. 실행 순서는 MAP.md §3.
 - 라즈베리파이 패킷과 네 컬러 센서를 비블로킹 방식으로 갱신한다.
-- 캘리브레이션 중에는 모터를 정지하고 FSM을 실행하지 않는다.
 - FSM 우선순위는 안전 정지, 색상 위험구역 회피, 목표 확인·정렬·접근,
   돌진·급정지·스포크 삽입·밀기, 비전이 없을 때 탐색 순서다.
+- 앞뒤 센서가 동시에 위험색이면 짧게 브레이크한 뒤 마지막으로 한쪽 끝만 위험색이었던 방향의
+  반대로 빠져나온다. 기록이 없으면 Backoff 중 진입은 전진, 그 외는 후진이며 일정 시간마다 방향을 뒤집는다.
+  홈 안에서 계속 정지하지 않는다(10초 규정).
 - 공격 시퀀스가 시작되면 짧은 카메라 가림에는 중단하지 않는다. 시간 값은 `control_config.hpp`,
   상태 흐름 설명은 README §6.
 
 ## 별도 펌웨어 환경
 
-- 보드에는 생산(`yd_esp32_s3`), 벤치(`robot_bench`), 센서 점검(`sensor_serial_test`) 중 하나만 업로드한다.
+- 보드에는 생산(`yd_esp32_s3`), 벤치(`robot_bench`), 센서 점검(`sensor_serial_test`),
+  교정(`color_calibration`) 중 하나만 업로드한다.
   환경 목록은 README §2.
 - 센서 점검 펌웨어는 모터 핀을 건드리지 않는다. 센서 시험 중에는 모터 전원을 분리한다.
 - 벤치 펌웨어는 생산 FSM을 실행하지 않는다. 모드 변경 시 정지 후 SW2로 재시작해야 하고,

@@ -4,9 +4,7 @@
 #include "communication/raspberry_link.hpp"
 #include "control/drive_logic.hpp"
 #include "control/robot_fsm.hpp"
-#include "interrupts/button_interrupts.hpp"
 #include "motor/motor_controller.hpp"
-#include "sensors/color_calibration.hpp"
 #include "sensors/sensor_manager.hpp"
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
@@ -74,45 +72,14 @@ void setup() {
 
 void loop() {
   uint32_t nowMs = millis();
-  const bool calibrationWasActive = ColorCalibration::active();
 
   // Safety comes first; each sensor step only performs short I2C transfers.
   SystemManager::update(nowMs);
-  if (calibrationWasActive && ButtonInterrupts::startPressed()) {
-    ButtonInterrupts::cancelStartGesture();
-  }
-
   RaspberryLink::poll();
   SensorManager::update();
   nowMs = millis();
   SystemManager::update(nowMs);
-  if (calibrationWasActive && ButtonInterrupts::startPressed()) {
-    ButtonInterrupts::cancelStartGesture();
-  }
-
-  SystemStatus system = SystemManager::status();
-  const bool calibrationAllowed =
-      (system.state == SystemState::WaitingForStart ||
-       system.state == SystemState::Calibration) &&
-      !ButtonInterrupts::startPressed();
-  ColorCalibration::update(nowMs, calibrationAllowed);
-
-  const bool calibrationActive = ColorCalibration::active();
-  SystemManager::setCalibrationActive(calibrationActive);
-  if (calibrationWasActive && !calibrationActive) {
-    SystemManager::requestStop();
-  }
-  system = SystemManager::status();
-
-  if (calibrationActive || calibrationWasActive) {
-    MotorController::brake();
-    StatusLed::update(nowMs);
-    EventLogger::process();
-    delay(1);
-    return;
-  }
-
-  nowMs = millis();
+  const SystemStatus system = SystemManager::status();
 
   const SensorSnapshot sensors = SensorManager::snapshot();
   const VisionSnapshot vision = RaspberryLink::latest();

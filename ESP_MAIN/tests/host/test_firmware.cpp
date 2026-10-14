@@ -10,7 +10,8 @@
 #include "interrupts/button_interrupts.hpp"
 #include "motor/motor_controller.hpp"
 #include "pins.hpp"
-#include "sensors/color_calibration.hpp"
+#include "calibration/color_calibration.hpp"
+#include "sensors/calibration_store.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/floor_color_classifier.hpp"
 #include "sensors/sensor_config.hpp"
@@ -63,9 +64,9 @@ void sensorTicks(uint32_t duration, bool manager=false) {
     CHECK(millis()==before);
   }
 }
-void command(const std::string& text, bool allowed=true) {
+void command(const std::string& text) {
   Serial.inject(text+"\n");
-  while(Serial.available()) ColorCalibration::update(millis(),allowed);
+  while(Serial.available()) ColorCalibration::update(millis());
 }
 
 void testMotor() {
@@ -135,9 +136,6 @@ void testSystem() {
   pressStart(); CHECK(!SystemManager::status().runRequested);
   SystemManager::setMotorHealthy(true); CHECK(!SystemManager::motorAllowed());
   pressStart(); CHECK(SystemManager::motorAllowed());
-  SystemManager::setCalibrationActive(true); CHECK(!SystemManager::motorAllowed());
-  pressStart(); CHECK(!SystemManager::status().runRequested);
-  SystemManager::setCalibrationActive(false); CHECK(!SystemManager::running());
   pressStart(); CHECK(SystemManager::running()); SystemManager::requestStop(); CHECK(!SystemManager::running());
   // STOP cancels both a stable press and a press still being debounced.
   for (uint32_t held : {10U, 50U}) {
@@ -229,6 +227,39 @@ void testFsm() {
   CHECK(RobotFsm::update(21,sensors,missing,running()).type==DriveIntentType::Approach);
   sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
   CHECK(RobotFsm::update(22,sensors,missing,running()).type==DriveIntentType::Brake);
+  // Whole robot over a groove: brake briefly, then drive out opposite to the
+  // end that touched the hazard last, flipping if it is still inside.
+  for(bool rearFirst : {false,true}) {
+    const uint8_t first=rearFirst?2:0, second=rearFirst?0:2;
+    const auto out=rearFirst?DriveIntentType::Approach:DriveIntentType::Reverse;
+    const auto back=rearFirst?DriveIntentType::Reverse:DriveIntentType::Approach;
+    for(int run=0;run<2;++run) {
+      RobotFsm::begin(); sensors=SensorSnapshot{};
+      sensors.floorColor[first].color=FloorColor::Red; sensors.floorColor[first].reliable=true;
+      RobotFsm::update(10,sensors,missing,running());
+      sensors.floorColor[second].color=FloorColor::Red; sensors.floorColor[second].reliable=true;
+      CHECK(RobotFsm::update(20,sensors,missing,running()).type==DriveIntentType::Brake);
+      CHECK(RobotFsm::update(169,sensors,missing,running()).type==DriveIntentType::Brake);
+      CHECK(RobotFsm::update(170,sensors,missing,running()).type==out);
+      CHECK(RobotFsm::state()==RobotState::ZoneEscape);
+      if(run==0) {
+        CHECK(RobotFsm::update(1669,sensors,missing,running()).type==out);
+        CHECK(RobotFsm::update(1670,sensors,missing,running()).type==back);
+      } else {
+        // The end that went in last comes out first; keep moving the same way.
+        sensors.floorColor[second]=FloorColorResult{};
+        CHECK(RobotFsm::update(171,sensors,missing,running()).type==out);
+        CHECK(RobotFsm::update(400,sensors,missing,running()).type==out);
+        CHECK(RobotFsm::state()==RobotState::ZoneEscape);
+      }
+    }
+  }
+  // Both ends at once with no history: back out.
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  sensors.floorColor[1].color=FloorColor::Yellow; sensors.floorColor[1].reliable=true;
+  sensors.floorColor[3].color=FloorColor::Yellow; sensors.floorColor[3].reliable=true;
+  CHECK(RobotFsm::update(10,sensors,missing,running()).type==DriveIntentType::Brake);
+  CHECK(RobotFsm::update(160,sensors,missing,running()).type==DriveIntentType::Reverse);
   sensors=SensorSnapshot{}; RobotFsm::begin();
   RobotFsm::update(UINT32_MAX-10,sensors,target(1,UINT32_MAX-10),running());
   RobotFsm::update(0,sensors,target(2,0),running());
@@ -273,7 +304,7 @@ void testColorsAndErrors() {
   auto raw=ColorSensorManager::sample(1);
   raw.normalized[ColorSensorManager::model()==ColorSensorModel::AS7341 ? 1 : 0]=
       std::numeric_limits<float>::quiet_NaN();
-  CHECK(!FloorColorClassifier::classify(1,raw,ColorCalibration::data()).reliable);
+  CHECK(!FloorColorClassifier::classify(1,raw,CalibrationStore::data()).reliable);
 }
 
 void testThreeSamples() {
@@ -322,17 +353,16 @@ void testContinuousFloorMode() {
   CHECK(ColorSensorManager::sample(0).valid);
   auto raw=ColorSensorManager::sample(0);
   raw.brightness=0; raw.valid=false;
-  CHECK(!FloorColorClassifier::classify(0,raw,ColorCalibration::data()).reliable);
+  CHECK(!FloorColorClassifier::classify(0,raw,CalibrationStore::data()).reliable);
 #endif
 }
 
 void testCalibration() {
-  fixture(); SensorManager::begin(); command("CAL START",false); CHECK(!ColorCalibration::active());
+  fixture(); SensorManager::begin(); ColorCalibration::begin();
   command(std::string(80,'X')+"CAL START"); CHECK(!ColorCalibration::active());
   command("CAL START"); CHECK(ColorCalibration::active());
   command("READY"); CHECK(ColorCalibration::status().state==CalibrationState::Countdown);
   command("ABORT"); CHECK(!ColorCalibration::active());
-  command("CAL START"); ColorCalibration::update(millis(),false); CHECK(!ColorCalibration::active());
   command("CAL START"); command("CAL MARGIN 20 40");
   command("CAL MARGIN 10 30 JUNK");
   command("CAL MARGIN 4294967316 4294967336");
@@ -348,50 +378,50 @@ void testCalibration() {
     command("READY");
     // Two 3-second intervals: countdown then independent samples.
     for(int i=0;i<6100;++i) {
-      fake::advance(1); SensorManager::update(); ColorCalibration::update(millis(),true);
+      fake::advance(1); SensorManager::update(); ColorCalibration::update(millis());
     }
     CHECK(ColorCalibration::status().state==CalibrationState::WaitingForAccept);
     CHECK(ColorCalibration::status().sampleCount>=config::sensors::CALIBRATION_MIN_SAMPLES);
     if(step==0) {
       command("RETRY"); CHECK(ColorCalibration::status().state==CalibrationState::WaitingForReady);
       command("READY");
-      for(int i=0;i<6100;++i) { fake::advance(1); SensorManager::update(); ColorCalibration::update(millis(),true); }
+      for(int i=0;i<6100;++i) { fake::advance(1); SensorManager::update(); ColorCalibration::update(millis()); }
     }
     command("ACCEPT");
     if(step==0) {
       command("BACK"); CHECK(ColorCalibration::status().step==0);
       command("READY");
-      for(int i=0;i<6100;++i) { fake::advance(1); SensorManager::update(); ColorCalibration::update(millis(),true); }
+      for(int i=0;i<6100;++i) { fake::advance(1); SensorManager::update(); ColorCalibration::update(millis()); }
       command("ACCEPT"); CHECK(ColorCalibration::status().step==1);
     }
   }
   CHECK(ColorCalibration::status().state==CalibrationState::Completed);
   command("STATUS"); CHECK(Serial.tx.find("step=48/48")!=std::string::npos);
   fake::nvsWriteOk=false; command("CAL SAVE"); CHECK(ColorCalibration::status().state==CalibrationState::Error);
-  fake::nvsWriteOk=true; command("CAL SAVE"); CHECK(ColorCalibration::hasStoredData());
+  fake::nvsWriteOk=true; command("CAL SAVE"); CHECK(CalibrationStore::valid());
   CHECK(!ColorCalibration::active()); CHECK(!fake::nvs.empty());
-  CHECK(ColorCalibration::data().ratioMarginPermille==200);
-  CHECK(ColorCalibration::data().brightnessMarginPermille==400);
+  CHECK(CalibrationStore::data().ratioMarginPermille==200);
+  CHECK(CalibrationStore::data().brightnessMarginPermille==400);
   for(uint8_t corner=0;corner<4;++corner) {
     for(uint8_t color=0;color<4;++color) {
       fake::floor(corner,color); sensorTicks(200);
       const auto raw=ColorSensorManager::sample(corner);
-      const auto result=FloorColorClassifier::classify(corner,raw,ColorCalibration::data());
+      const auto result=FloorColorClassifier::classify(corner,raw,CalibrationStore::data());
       CHECK(result.reliable); CHECK(static_cast<uint8_t>(result.color)==color);
     }
   }
   const auto saved=fake::nvs;
-  ColorCalibration::begin(); CHECK(ColorCalibration::hasStoredData());
-  fake::nvsWriteOk=false; command("CAL ERASE"); CHECK(ColorCalibration::hasStoredData());
-  fake::nvsWriteOk=true; command("CAL ERASE"); CHECK(!ColorCalibration::hasStoredData()); CHECK(fake::nvs.empty());
+  CalibrationStore::load(); ColorCalibration::begin(); CHECK(CalibrationStore::valid());
+  fake::nvsWriteOk=false; command("CAL ERASE"); CHECK(CalibrationStore::valid());
+  fake::nvsWriteOk=true; command("CAL ERASE"); CHECK(!CalibrationStore::valid()); CHECK(fake::nvs.empty());
   fake::nvs=saved; auto corrupt=ColorCalibrationData{}; std::memcpy(&corrupt,fake::nvs.data(),sizeof(corrupt));
   corrupt.settingsSignature^=1; std::memcpy(fake::nvs.data(),&corrupt,sizeof(corrupt));
-  ColorCalibration::begin(); CHECK(!ColorCalibration::hasStoredData());
+  CalibrationStore::load(); CHECK(!CalibrationStore::valid());
   fake::nvs=saved; std::memcpy(&corrupt,fake::nvs.data(),sizeof(corrupt));
   corrupt.reference[0][0][0].brightnessMean=std::numeric_limits<float>::quiet_NaN();
-  std::memcpy(fake::nvs.data(),&corrupt,sizeof(corrupt)); ColorCalibration::begin(); CHECK(!ColorCalibration::hasStoredData());
-  fake::nvs=saved; fake::nvs.pop_back(); ColorCalibration::begin(); CHECK(!ColorCalibration::hasStoredData());
-  fake::nvs=saved; fake::nvsReadOk=false; ColorCalibration::begin(); CHECK(!ColorCalibration::hasStoredData());
+  std::memcpy(fake::nvs.data(),&corrupt,sizeof(corrupt)); CalibrationStore::load(); CHECK(!CalibrationStore::valid());
+  fake::nvs=saved; fake::nvs.pop_back(); CalibrationStore::load(); CHECK(!CalibrationStore::valid());
+  fake::nvs=saved; fake::nvsReadOk=false; CalibrationStore::load(); CHECK(!CalibrationStore::valid());
 }
 
 void testLogsAndLeds() {
@@ -441,11 +471,9 @@ void testMainIntegration() {
   for(uint8_t i=0;i<4;++i) fake::floor(i,3);
   for(int i=0;i<300;++i) loop();
   CHECK(!MotorController::status().outputsActive);
-  Serial.inject("CAL START\n"); loop(); CHECK(ColorCalibration::active()); CHECK(!SystemManager::motorAllowed());
-  fake::level(pins::START_SWITCH,LOW); for(int i=0;i<50;++i) loop();
-  CHECK(!ColorCalibration::active()); CHECK(!SystemManager::motorAllowed());
-  fake::level(pins::START_SWITCH,HIGH); for(int i=0;i<50;++i) loop();
-  CHECK(!SystemManager::motorAllowed());
+  // Calibration is a separate firmware: production ignores its commands.
+  Serial.inject("CAL START\n"); for(int i=0;i<10;++i) loop();
+  CHECK(!SystemManager::motorAllowed()); CHECK(Serial.tx.find("[CAL]")==std::string::npos);
   fake::level(pins::START_SWITCH,LOW); for(int i=0;i<50;++i) loop();
   fake::level(pins::START_SWITCH,HIGH); for(int i=0;i<50;++i) loop();
   CHECK(SystemManager::motorAllowed()); CHECK(MotorController::status().outputsActive);
@@ -478,7 +506,7 @@ int main(int argc,char** argv) {
     if(argc>1 && std::string(argv[1])=="--demo") { demo(); return 0; }
     struct Test { const char* name; void (*run)(); };
     const Test tests[]={{"motor limit/watchdog/rollover",testMotor},
-      {"buttons/ESTOP/race",testButtonsAndEstop},{"system start/fault/calibration",testSystem},
+      {"buttons/ESTOP/race",testButtonsAndEstop},{"system start/fault",testSystem},
       {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},
       {"color sampling/errors/no recovery",testColorsAndErrors},{"three independent samples",testThreeSamples},
       {"continuous single-exposure floor mode",testContinuousFloorMode},

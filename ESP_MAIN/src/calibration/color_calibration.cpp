@@ -1,23 +1,17 @@
-#include "sensors/color_calibration.hpp"
+#include "calibration/color_calibration.hpp"
 
-#include <Preferences.h>
+#include <Arduino.h>
 #include <ctype.h>
 #include <cmath>
 #include <string.h>
 
+#include "sensors/calibration_store.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/sensor_config.hpp"
 
 namespace {
-using std::isfinite;
-
-constexpr uint32_t CALIBRATION_MAGIC = 0x43414C31UL;
-constexpr uint16_t CALIBRATION_VERSION = 2;
 constexpr uint8_t TOTAL_STEPS =
     COLOR_SENSOR_COUNT * FLOOR_COLOR_COUNT * CALIBRATION_POSE_COUNT;
-constexpr char NVS_NAMESPACE[] = "color-cal";
-constexpr char NVS_KEY[] = "data";
-
 struct MeasurementAccumulator {
   uint32_t count = 0;
   uint16_t featureMask = 0;
@@ -29,7 +23,6 @@ struct MeasurementAccumulator {
   uint16_t brightnessMax = 0;
 };
 
-ColorCalibrationData storedData;
 ColorCalibrationData workingData;
 ColorCalibrationReference pendingReference;
 MeasurementAccumulator accumulator;
@@ -42,7 +35,6 @@ uint32_t lastPreviewMs = 0;
 uint32_t lastSampleSequence = 0;
 int8_t lastCountdownNumber = -1;
 bool discardInputLine = false;
-uint32_t dataGeneration = 0;
 
 uint8_t stepSensor(uint8_t step) {
   return step / (FLOOR_COLOR_COUNT * CALIBRATION_POSE_COUNT);
@@ -61,108 +53,6 @@ void setStepFields() {
   latestStatus.sensorIndex = stepSensor(latestStatus.step);
   latestStatus.color = stepColor(latestStatus.step);
   latestStatus.pose = stepPose(latestStatus.step);
-}
-
-void clearData(ColorCalibrationData& value) {
-  // Clear small pieces, not a whole 4.6 KB temporary on the task stack.
-  value.magic = 0;
-  value.version = 0;
-  value.sensorModel = 0;
-  value.sensorCount = 0;
-  value.settingsSignature = 0;
-  value.ratioMarginPermille = 0;
-  value.brightnessMarginPermille = 0;
-  for (auto& sensor : value.reference) {
-    for (auto& color : sensor) {
-      for (auto& reference : color) reference = ColorCalibrationReference{};
-    }
-  }
-}
-
-void initializeData(ColorCalibrationData& value) {
-  clearData(value);
-  value.magic = CALIBRATION_MAGIC;
-  value.version = CALIBRATION_VERSION;
-  value.sensorModel = static_cast<uint8_t>(ColorSensorManager::model());
-  value.sensorCount = COLOR_SENSOR_COUNT;
-  value.settingsSignature = ColorSensorManager::settingsSignature();
-  value.ratioMarginPermille =
-      config::sensors::DEFAULT_RATIO_MARGIN_PERMILLE;
-  value.brightnessMarginPermille =
-      config::sensors::DEFAULT_BRIGHTNESS_MARGIN_PERMILLE;
-}
-
-bool allReferencesValid(const ColorCalibrationData& value) {
-  for (size_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
-    for (size_t color = 0; color < FLOOR_COLOR_COUNT; ++color) {
-      for (size_t pose = 0; pose < CALIBRATION_POSE_COUNT; ++pose) {
-        const auto& ref = value.reference[sensor][color][pose];
-        if (!ref.valid || ref.sampleCount < config::sensors::CALIBRATION_MIN_SAMPLES ||
-            !isfinite(ref.brightnessMean) || !isfinite(ref.brightnessStdDev) ||
-            ref.brightnessMean < 0 || ref.brightnessStdDev < 0 ||
-            ref.brightnessMin > ref.brightnessMax) return false;
-        for (size_t i = 0; i < COLOR_CHANNEL_COUNT; ++i) {
-          if (!isfinite(ref.normalizedMean[i]) || !isfinite(ref.normalizedStdDev[i]) ||
-              ref.normalizedMean[i] < 0 || ref.normalizedStdDev[i] < 0) return false;
-        }
-      }
-    }
-  }
-  return true;
-}
-
-bool dataValid(const ColorCalibrationData& value) {
-  return value.magic == CALIBRATION_MAGIC &&
-         value.version == CALIBRATION_VERSION &&
-         value.sensorModel ==
-             static_cast<uint8_t>(ColorSensorManager::model()) &&
-         value.sensorCount == COLOR_SENSOR_COUNT &&
-         value.settingsSignature == ColorSensorManager::settingsSignature() &&
-         value.ratioMarginPermille > 0 && value.ratioMarginPermille <= 1000 &&
-         value.brightnessMarginPermille > 0 && value.brightnessMarginPermille <= 1000 &&
-         allReferencesValid(value);
-}
-
-bool loadData() {
-  Preferences preferences;
-  if (!preferences.begin(NVS_NAMESPACE, true)) return false;
-  const size_t length = preferences.getBytesLength(NVS_KEY);
-  const size_t read =
-      length == sizeof(storedData)
-          ? preferences.getBytes(NVS_KEY, &storedData, sizeof(storedData))
-          : 0;
-  preferences.end();
-  if (read != sizeof(storedData) || !dataValid(storedData)) {
-    clearData(storedData);
-    return false;
-  }
-  return true;
-}
-
-bool saveData() {
-  if (!dataValid(workingData)) return false;
-  Preferences preferences;
-  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
-  const size_t written =
-      preferences.putBytes(NVS_KEY, &workingData, sizeof(workingData));
-  preferences.end();
-  if (written != sizeof(workingData)) return false;
-  storedData = workingData;
-  ++dataGeneration;
-  return true;
-}
-
-bool eraseData() {
-  Preferences preferences;
-  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
-  const bool removed = preferences.getBytesLength(NVS_KEY) == 0 ||
-                       preferences.remove(NVS_KEY);
-  preferences.end();
-  if (!removed) return false;
-  clearData(storedData);
-  latestStatus.storedDataValid = false;
-  ++dataGeneration;
-  return true;
 }
 
 void printStepPrompt() {
@@ -276,11 +166,12 @@ void finishMeasurement() {
 }
 
 void startCalibration() {
-  initializeData(workingData);
-  if (latestStatus.storedDataValid) {
-    workingData.ratioMarginPermille = storedData.ratioMarginPermille;
+  CalibrationStore::initialize(workingData);
+  if (CalibrationStore::valid()) {
+    workingData.ratioMarginPermille =
+        CalibrationStore::data().ratioMarginPermille;
     workingData.brightnessMarginPermille =
-        storedData.brightnessMarginPermille;
+        CalibrationStore::data().brightnessMarginPermille;
   }
   latestStatus.active = true;
   latestStatus.state = CalibrationState::WaitingForReady;
@@ -355,7 +246,7 @@ bool parseMargins(const char* text, unsigned& ratio, unsigned& brightness) {
   return true;
 }
 
-void handleCommand(const char* command, uint32_t nowMs, bool allowed) {
+void handleCommand(const char* command, uint32_t nowMs) {
   if (strcmp(command, "CAL STATUS") == 0 || strcmp(command, "STATUS") == 0) {
     printStatus();
     return;
@@ -363,20 +254,18 @@ void handleCommand(const char* command, uint32_t nowMs, bool allowed) {
 
   if (!latestStatus.active) {
     if (strcmp(command, "CAL START") == 0) {
-      if (!allowed) {
-        Serial.println("[CAL] Rejected: robot must be waiting for start.");
-      } else if (ColorSensorManager::status().readyMask != 0x0F) {
+      if (ColorSensorManager::status().readyMask != 0x0F) {
         Serial.printf("[CAL] Rejected: sensor ready mask is 0x%02X.\n",
                       ColorSensorManager::status().readyMask);
       } else {
         startCalibration();
       }
     } else if (strcmp(command, "CAL ERASE") == 0) {
-      if (!allowed) {
-        Serial.println("[CAL] Rejected: robot must be waiting for start.");
+      if (CalibrationStore::erase()) {
+        latestStatus.storedDataValid = false;
+        Serial.println("[CAL] Stored calibration erased.");
       } else {
-        Serial.println(eraseData() ? "[CAL] Stored calibration erased."
-                                   : "[CAL] NVS erase failed.");
+        Serial.println("[CAL] NVS erase failed.");
       }
     }
     return;
@@ -438,7 +327,7 @@ void handleCommand(const char* command, uint32_t nowMs, bool allowed) {
   if (strcmp(command, "CAL SAVE") == 0 &&
       (latestStatus.state == CalibrationState::Completed ||
        latestStatus.state == CalibrationState::Error)) {
-    if (saveData()) {
+    if (CalibrationStore::save(workingData)) {
       latestStatus.storedDataValid = true;
       latestStatus.active = false;
       latestStatus.state = CalibrationState::Idle;
@@ -453,7 +342,7 @@ void handleCommand(const char* command, uint32_t nowMs, bool allowed) {
   Serial.println("[CAL] Command is not valid in the current state.");
 }
 
-void pollSerial(uint32_t nowMs, bool allowed) {
+void pollSerial(uint32_t nowMs) {
   size_t processed = 0;
   while (processed++ < 64 && Serial.available() > 0) {
     const int incoming = Serial.read();
@@ -461,7 +350,7 @@ void pollSerial(uint32_t nowMs, bool allowed) {
     if (incoming == '\n') {
       if (!discardInputLine && inputLength > 0) {
         inputLine[inputLength] = '\0';
-        handleCommand(inputLine, nowMs, allowed);
+        handleCommand(inputLine, nowMs);
         inputLength = 0;
       }
       inputLength = 0;
@@ -524,40 +413,23 @@ void updateActiveState(uint32_t nowMs) {
 }  // namespace
 
 void ColorCalibration::begin() {
-  clearData(storedData);
   latestStatus = ColorCalibrationStatus{};
-  latestStatus.storedDataValid = loadData();
-  workingData = storedData;
+  latestStatus.storedDataValid = CalibrationStore::valid();
+  workingData = CalibrationStore::data();
   setStepFields();
   inputLength = 0;
   discardInputLine = false;
-  ++dataGeneration;
   Serial.printf("[CAL] Stored calibration: %s\n",
                 latestStatus.storedDataValid ? "VALID" : "NONE");
-  Serial.println("[CAL] Type CAL START while waiting for the start button.");
+  Serial.println("[CAL] Motors are not initialized in this firmware.");
+  Serial.println("[CAL] Type CAL START to begin, CAL ERASE to delete.");
 }
 
-void ColorCalibration::update(uint32_t nowMs, bool allowed) {
-  if (latestStatus.active && !allowed) {
-    abortCalibration("START_BUTTON_OR_SYSTEM_STATE");
-  }
-  pollSerial(nowMs, allowed);
-  if (!latestStatus.active) return;
-  if (!allowed) {
-    abortCalibration("START_BUTTON_OR_SYSTEM_STATE");
-    return;
-  }
-  updateActiveState(nowMs);
+void ColorCalibration::update(uint32_t nowMs) {
+  pollSerial(nowMs);
+  if (latestStatus.active) updateActiveState(nowMs);
 }
 
 bool ColorCalibration::active() { return latestStatus.active; }
-
-bool ColorCalibration::hasStoredData() {
-  return latestStatus.storedDataValid;
-}
-
-uint32_t ColorCalibration::generation() { return dataGeneration; }
-
-const ColorCalibrationData& ColorCalibration::data() { return storedData; }
 
 ColorCalibrationStatus ColorCalibration::status() { return latestStatus; }

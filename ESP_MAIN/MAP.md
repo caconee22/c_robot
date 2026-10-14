@@ -16,7 +16,8 @@
 | 안전·시작 절차 | `include/system/system_manager.hpp`, `include/interrupts/button_interrupts.hpp` | README §5, AGENTS "안전" |
 | 라즈 UART | `include/communication/vision_protocol.hpp`, `include/communication/raspberry_link.hpp` | README §10 |
 | 실물 벤치 시험 | [BENCH_TESTS.md](BENCH_TESTS.md) | README §14 |
-| 센서 교정 | `include/sensors/color_calibration.hpp` | README §9 (경기 주행과 무관) |
+| 센서 교정 (별도 펌웨어) | `src/calibration_main.cpp`, `include/calibration/color_calibration.hpp` | README §9 |
+| 교정값 저장 형식 | `include/sensors/calibration_store.hpp` | |
 
 ## 2. 값의 원본 (문서에 숫자를 복사하지 않는다)
 
@@ -38,7 +39,6 @@ SystemManager::update      안전 상태 갱신
 RaspberryLink::poll        UART1 최대 128바이트
 SensorManager::update      센서 짧은 I2C 단계
 SystemManager::update      안전 재확인 (의도된 반복)
-ColorCalibration::update   교정 중이면 브레이크 후 이번 루프 종료
 SensorManager::snapshot + RaspberryLink::latest
 RobotFsm::update           → DriveIntent
 DriveLogic::makeCommand    → MotorCommand (80ms 기한)
@@ -70,7 +70,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | 센서 판정 | `sensors/sensor_manager.hpp` | `update`, `snapshot` | loop | |
 | 센서 I2C | `sensors/color_sensor_manager.hpp` | `update`, `sample` | SensorManager | |
 | 색 판별 | `sensors/floor_color_classifier.hpp` | `classify` | SensorManager | |
-| 교정 | `sensors/color_calibration.hpp` | `update`, `active`, `data` | loop | |
+| 교정값 저장소 | `sensors/calibration_store.hpp` | `load`, `data`, `valid` | SensorManager | |
 | 로그 | `system/event_logger.hpp` | `log`, `faultChanged`, `process` | 모든 모듈 | |
 | LED | `system/status_led.hpp` | `setBoth`, `update` | 모든 모듈 | |
 
@@ -88,6 +88,15 @@ StatusLed::update, EventLogger::process, delay(1)
 6. `tests/run_host_tests.ps1`로 기존 회귀 시험을 실행한다.
 
 제거는 역순이다. `loop()`의 한 줄과 표의 한 줄을 지우면 연결이 끊긴다.
+
+교정·벤치·센서 점검은 생산 `main.cpp`에서 진입하지 않는다. 각각 별도 PlatformIO 환경으로 업로드한다.
+
+| 환경 | 진입 파일 | 용도 |
+|---|---|---|
+| `yd_esp32_s3` | `src/main.cpp` | 경기용 생산 펌웨어 |
+| `robot_bench` | `src/bench_main.cpp` | 저출력 실물 시험 |
+| `sensor_serial_test` | `src/sensor_serial_test.cpp` | 센서 원시값 확인 (모터 미사용) |
+| `color_calibration` | `src/calibration_main.cpp` | 48단계 색 교정, NVS 저장 (모터 미사용) |
 
 ## 6. 빌드와 시험
 

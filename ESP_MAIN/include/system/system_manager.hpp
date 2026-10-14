@@ -9,7 +9,7 @@ enum class SystemState : uint8_t {
   Booting,
   WaitingForStart,
   Running,
-  Calibration,
+  Calibration,  // Reserved: calibration is a separate firmware now.
   SensorFault,
   MotorFault,
   SystemFault,
@@ -30,7 +30,6 @@ struct SystemStatus {
   SafetyStatus safety;
   bool runRequested = false;
   bool motorAllowed = false;
-  bool calibrationActive = false;
   bool rearmRequired = false;
   bool sensorsHealthy = true;
   bool motorsHealthy = true;
@@ -44,7 +43,7 @@ struct SystemStatus {
 
 // Contract
 // Role: single owner of "may the motors run" (motorAllowed / SafetyStatus).
-//   Combines SW1, SW2 start, calibration and aggregate health.
+//   Combines SW1, SW2 start and aggregate health.
 // Called from: loop() twice per pass (before and after sensor/UART work);
 //   other modules read status()/safetyStatus() and never decide on their own.
 // Failure: unhealthy -> immediate stop, start request dropped, no auto restart.
@@ -57,7 +56,6 @@ class SystemManager {
 
   // SW2 only starts operation. A software stop must be requested explicitly.
   static void requestStop();
-  static void setCalibrationActive(bool active);
 
   // Health setters log only an actual change. The detail value is normally a
   // motor number, sensor channel, or module-specific short identifier.
