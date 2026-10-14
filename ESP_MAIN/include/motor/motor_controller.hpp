@@ -34,6 +34,14 @@ struct MotorControllerStatus {
   Bts7960Status rightDriver;
 };
 
+// Contract
+// Role: the only public motor output path. Checks safety, limits output
+//   (config::motor::DEFAULT_OUTPUT_LIMIT), expires commands
+//   (DEFAULT_COMMAND_TIMEOUT_MS) and owns both Bts7960Driver instances.
+// Called from: main loop / tasks only, never from an ISR. Mutex protected.
+//   A static watchdog task calls checkTimeout() every WATCHDOG_POLL_MS.
+// Rule: one command producer per firmware mode (FSM in production).
+// Safety code: yes. Do not relax or remove the watchdog task.
 class MotorController {
  public:
   static bool begin();

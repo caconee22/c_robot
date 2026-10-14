@@ -2,6 +2,14 @@
 
 #include "sensors/color_sensor_types.hpp"
 
+// Contract
+// Role: TCA9548A channel select, AS7341/TCS34725 init and round-robin raw
+//   reads in short register steps (no waiting for integration).
+// Called from: SensorManager only. Each Wire transfer is bounded by
+//   config::sensors::I2C_TIMEOUT_MS.
+// Failure: I2C/timeout disables that channel until reboot; saturation or no
+//   light only invalidates that sample. No re-init, no retry loop.
+// Settings: sensor_config.hpp (exposure, gain, LED current are start values).
 class ColorSensorManager {
  public:
   static bool begin();

@@ -56,6 +56,11 @@ struct StatusLedSnapshot {
   uint32_t lastUpdateMs = 0;
 };
 
+// Contract
+// Role: keep one LED request per owner and show the highest priority state.
+// Called from: any module to request; update() at the end of loop() writes
+//   WS2812 at most every config::led::UPDATE_PERIOD_MS.
+// Not needed to understand driving flow.
 class StatusLed {
  public:
   static void begin();

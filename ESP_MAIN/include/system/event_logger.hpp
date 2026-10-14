@@ -89,6 +89,12 @@ struct EventLoggerStatus {
   uint32_t suppressed = 0;
 };
 
+// Contract
+// Role: fixed-size UART0 event queue with repeat and change suppression.
+// Called from: any module to enqueue (not from ISR); process() at the end of
+//   loop() writes at most config::event_log::MAX_RECORDS_PER_PROCESS records.
+// Rule: never waits for UART space; a full queue drops and counts.
+// Not needed to understand driving flow.
 class EventLogger {
  public:
   static void begin();

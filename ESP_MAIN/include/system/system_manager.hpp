@@ -42,6 +42,14 @@ struct SystemStatus {
   uint32_t lastStartEventMs = 0;
 };
 
+// Contract
+// Role: single owner of "may the motors run" (motorAllowed / SafetyStatus).
+//   Combines SW1, SW2 start, calibration and aggregate health.
+// Called from: loop() twice per pass (before and after sensor/UART work);
+//   other modules read status()/safetyStatus() and never decide on their own.
+// Failure: unhealthy -> immediate stop, start request dropped, no auto restart.
+//   Raspberry Pi state never changes motorAllowed.
+// Safety code: yes. Do not merge or drop the repeated update() calls.
 class SystemManager {
  public:
   static void begin();

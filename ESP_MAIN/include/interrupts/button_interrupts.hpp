@@ -10,6 +10,13 @@ struct ButtonStatus {
   uint32_t lastStartChangeMs = 0;
 };
 
+// Contract
+// Role: SW1 ISR latches a permanent drive inhibit and cuts BTS7960 EN at once;
+//   SW2 edges are debounced in update() (config::switches::DEBOUNCE_MS) and
+//   one start event is produced on a qualified press then release.
+// Called from: ISR (internal), update() from SystemManager. SystemManager is
+//   the only consumer of start events.
+// Safety code: yes. SW1 latch is cleared only by reboot.
 class ButtonInterrupts {
  public:
   static void begin();

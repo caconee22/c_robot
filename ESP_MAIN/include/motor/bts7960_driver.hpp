@@ -31,6 +31,12 @@ struct Bts7960Status {
   MotorElectricalState state = MotorElectricalState::Uninitialized;
 };
 
+// Contract
+// Role: raw PWM/EN writes for one BTS7960, direction deadtime and the shared
+//   drive-inhibit latch used by the SW1 ISR.
+// Called from: MotorController only (ISR uses latchPermanentDriveInhibitFromIsr).
+// Brake pin combination: config::motor::BRAKE_STRATEGY, not yet bench-verified.
+// Safety code: yes.
 class Bts7960Driver {
  public:
   explicit Bts7960Driver(const Bts7960Pins& pins);

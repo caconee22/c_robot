@@ -23,6 +23,11 @@ struct ColorCalibrationStatus {
   bool storedDataValid = false;
 };
 
+// Contract
+// Role: UART0 guided calibration (4 sensors x 4 colors x 3 poses) and NVS
+//   storage. Not part of match driving.
+// Called from: loop(); while active() the loop brakes and skips the FSM.
+// Rule: runs only while waiting for start; SW2 aborts it.
 class ColorCalibration {
  public:
   static void begin();

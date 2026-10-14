@@ -159,10 +159,15 @@
 
 펌웨어를 검토하거나 수정하기 전에 반드시 다음 문서를 읽는다.
 
-1. `ESP_MAIN/AGENTS.md`
-2. `ESP_MAIN/README.md`
-3. `ESP_MAIN/VERIFICATION.md`
-4. 실물 시험과 관련된 경우 `ESP_MAIN/BENCH_TESTS.md`
+1. `ESP_MAIN/MAP.md`: 구조, 작업별로 읽을 파일, 값의 원본 위치
+2. `ESP_MAIN/AGENTS.md`: 펌웨어 규칙
+3. 작업 대상 모듈 헤더의 `// Contract` 주석
+
+다음 문서는 MAP.md가 가리키는 절만 필요할 때 읽는다.
+
+- `ESP_MAIN/README.md`: 동작 설명과 사용법
+- `ESP_MAIN/VERIFICATION.md`: 요구사항 대응과 검증 기록. 검증 범위를 판단할 때 읽는다.
+- `ESP_MAIN/BENCH_TESTS.md`: 실물 시험과 관련된 경우
 
 ## 바닥 센서와 기체 조건
 
