@@ -1,0 +1,860 @@
+<title>씨름 로봇 FSM 시뮬레이터</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* layout: 왼쪽 경기장 캔버스, 오른쪽 상태판과 조절값. 좁으면 위아래로 쌓음. 경기장이 검은색이라 어두운 화면 하나로 고정 */
+:root{
+  color-scheme:dark;
+  --bg:#0E1116; --panel:#161B22; --ink:#E6EDF3; --muted:#8B98A8; --line:#2A3340;
+  --accent:#58A6FF; --good:#3FB950; --warn:#D29922; --bad:#F85149;
+  --red:#D73A3A; --blue:#2F6FD6; --yellow:#E3B341; --green:#2EA043;
+  --sans:"IBM Plex Sans KR",system-ui,"Malgun Gothic",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+.wrap{max-width:1280px;margin:0 auto;padding-inline:16px;padding-block:18px 40px;display:grid;gap:14px}
+header h1{font-size:22px;margin:0}
+header p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:14px;align-items:start}
+@media (max-width:900px){.main{grid-template-columns:1fr}}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;min-width:0}
+canvas{display:block;width:100%;height:auto;border-radius:6px;background:#000;touch-action:none}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+button,select{font:inherit;font-size:13px;color:var(--ink);background:#21262D;border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#0B1220;font-weight:700}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.side{display:grid;gap:12px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.card h2{font-size:13px;margin:0 0 8px;color:var(--muted);font-weight:500;letter-spacing:.04em}
+.big{font-family:var(--mono);font-size:20px;font-weight:600}
+.row{display:flex;justify-content:space-between;gap:8px;font-size:13px}
+.row span:first-child{color:var(--muted)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.score{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;text-align:center;gap:6px}
+.score .n{font-family:var(--mono);font-size:30px;font-weight:600}
+.sens{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.sens div{border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;display:flex;justify-content:space-between}
+.chip{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+label.f{display:grid;grid-template-columns:1fr 70px;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:4px 0}
+label.f input[type=range]{grid-column:1/3;width:100%}
+label.f output{font-family:var(--mono);color:var(--ink);text-align:right}
+label.c{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:4px 0}
+.log{font-family:var(--mono);font-size:11.5px;max-height:180px;overflow:auto;white-space:pre;color:var(--muted)}
+details summary{cursor:pointer;font-size:13px;color:var(--muted)}
+.note{font-size:12px;color:var(--muted);margin:8px 0 0}
+.state{display:inline-block;padding:2px 8px;border-radius:4px;background:#1F2A44;color:var(--accent);font-family:var(--mono);font-weight:600}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>씨름 로봇 FSM 시뮬레이터</h1>
+    <p>규정 경기장(2400 × 2400 mm) 위에서 저장소 FSM(robot_fsm.cpp)을 그대로 옮겨 돌립니다. 로직과 시간값 확인용이며 물리는 단순화했습니다.</p>
+  </header>
+
+  <div class="main">
+    <div class="stage">
+      <canvas id="cv" width="900" height="900" aria-label="경기장 시뮬레이션 화면"></canvas>
+      <div class="bar">
+        <button class="primary" id="btnStart" type="button">시작 (SW2)</button>
+        <button id="btnPause" type="button">일시정지</button>
+        <button id="btnReset" type="button">처음 위치로</button>
+        <button id="btnStep" type="button">0.1초 진행</button>
+        <label class="c">속도
+          <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+        </label>
+        <span class="note" style="margin:0">정지 상태에서 로봇을 끌어 옮기고, 휠로 방향을 돌릴 수 있습니다.</span>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <div class="score">
+          <div><div class="note" style="margin:0">우리</div><div class="n" id="scA">0</div></div>
+          <div><div class="big" id="clock">1:30</div><div class="note" style="margin:0" id="phase">대기</div></div>
+          <div><div class="note" style="margin:0">상대</div><div class="n" id="scB">0</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>우리 로봇</h2>
+        <div class="row"><span>FSM 상태</span><span class="state" id="st">WaitStart</span></div>
+        <div class="row"><span>명령</span><span class="mono" id="intent">Brake</span></div>
+        <div class="row"><span>모터 L / R (‰)</span><span class="mono" id="motor">0 / 0</span></div>
+        <div class="row"><span>속도</span><span class="mono" id="vel">0.00 m/s</span></div>
+        <div class="row"><span>타워 (x, 박스 높이)</span><span class="mono" id="vis">—</span></div>
+        <div class="sens" id="sens" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card">
+        <h2>시나리오</h2>
+        <label class="c">프리셋
+          <select id="preset">
+            <option value="edge" selected>시뮬레이션 최적 + 홈 끼고 돌기</option>
+            <option value="best">시뮬레이션 최적 (홈에서 뒤로 빠짐)</option>
+            <option value="firmware">현재 펌웨어 + 예찬 표 그대로</option>
+            <option value="custom">직접 조정</option>
+          </select>
+        </label>
+        <label class="c">우리 FSM
+          <select id="ourFsm">
+            <option value="v2" selected>새 FSM (v2, 처음부터 다시 짠 것)</option>
+            <option value="v1">기존 FSM (v1, 펌웨어 포팅 + 아래 설정)</option>
+          </select>
+        </label>
+        <label class="c">FSM 우선순위 (v1)
+          <select id="order">
+            <option value="rec" selected>권장 (홈 탈출이 출발 기동보다 먼저)</option>
+            <option value="yechan">예찬 표 순서 (출발 기동이 홈보다 먼저)</option>
+          </select>
+        </label>
+        <label class="c">상대 로봇
+          <select id="opp">
+            <option value="v2">새 FSM (v2)</option>
+            <option value="fsm">기존 FSM (v1, 아래 설정 적용)</option>
+            <option value="charge">계속 돌진</option>
+            <option value="wander" selected>무작위 배회</option>
+            <option value="idle">정지</option>
+          </select>
+        </label>
+        <label class="c">우리 시작 위치 (규정 그림 3·4)
+          <select id="startPos">
+            <option value="left" selected>왼쪽 ㄷ자, 아래쪽 벽을 봄</option>
+            <option value="right">오른쪽 ㄷ자, 위쪽 벽을 봄</option>
+          </select>
+        </label>
+        <label class="c">탐색 방식
+          <select id="searchMode">
+            <option value="spin" selected>새 방식: 한 방향으로 360° 계속 회전, 놓친 쪽으로</option>
+            <option value="sweep">현재 펌웨어: 1.2초마다 좌우 왕복</option>
+          </select>
+        </label>
+        <label class="c"><input type="checkbox" id="opening" checked> 출발 기동 사용</label>
+        <label class="c"><input type="checkbox" id="edgeFollow"> 홈을 만나면 가장자리를 끼고 돌며 추적 (실험)</label>
+        <label class="c"><input type="checkbox" id="yellowHazard"> 노란 홈도 위험으로 피하기 (현재 펌웨어 설정)</label>
+        <label class="c"><input type="checkbox" id="pi" checked> 라즈베리파이 연결 (영상 사용)</label>
+        <label class="c"><input type="checkbox" id="flip"> 로봇 그림 앞뒤 뒤집기</label>
+        <label class="c"><input type="checkbox" id="fov" checked> 카메라 시야 표시</label>
+        <label class="f">카메라 수평 화각 (Camera Module 3 Wide = 102°) <output id="o_fovDeg"></output><input type="range" id="fovDeg" min="20" max="160" step="2" value="102"></label>
+        <label class="f">카메라 위치 (로봇 중심에서 앞으로) <output id="o_camOff"></output><input type="range" id="camOff" min="0" max="160" step="5" value="60"></label>
+        <label class="f">카메라 인식 거리 <output id="o_camRange"></output><input type="range" id="camRange" min="500" max="3400" step="50" value="3400"></label>
+      </div>
+
+      <div class="card">
+        <details open>
+          <summary>출발 기동 (시간 기반)</summary>
+          <label class="c">첫 회전 방향
+            <select id="openDir"><option value="left" selected>경기장 중앙 쪽 (로봇 기준 왼쪽)</option><option value="right">벽 쪽 (로봇 기준 오른쪽)</option></select>
+          </label>
+          <label class="f">첫 회전 <output id="o_turnMs"></output><input type="range" id="turnMs" min="0" max="800" step="10" value="250"></label>
+          <label class="f">전진 <output id="o_driveMs"></output><input type="range" id="driveMs" min="0" max="2500" step="50" value="900"></label>
+          <label class="f">반대로 회전하며 탐색 <output id="o_sweepMs"></output><input type="range" id="sweepMs" min="0" max="1500" step="50" value="500"></label>
+          <label class="f">전진 출력 <output id="o_driveDuty"></output><input type="range" id="driveDuty" min="200" max="650" step="10" value="450"></label>
+        </details>
+        <details>
+          <summary>로봇·센서·카메라 (실측 전 가정값)</summary>
+          <label class="f">최고 속도 (출력 1000‰일 때) <output id="o_vmax"></output><input type="range" id="vmax" min="0.4" max="3" step="0.1" value="1.2"></label>
+          <label class="f">센서 샘플 간격 <output id="o_sample"></output><input type="range" id="sample" min="5" max="20" step="1" value="7"></label>
+          <label class="f">상대 출력 비율 <output id="o_oppPow"></output><input type="range" id="oppPow" min="0.3" max="1.5" step="0.05" value="1"></label>
+        </details>
+        <details>
+          <summary>홈 끼고 돌기 (실험)</summary>
+          <label class="f">따라 돌 때 출력 <output id="o_edgeDuty"></output><input type="range" id="edgeDuty" min="200" max="650" step="10" value="350"></label>
+          <label class="f">홈 쪽으로 붙는 정도 (조향) <output id="o_edgeHug"></output><input type="range" id="edgeHug" min="40" max="350" step="10" value="140"></label>
+          <label class="f">최대 지속 시간 <output id="o_edgeMaxMs"></output><input type="range" id="edgeMaxMs" min="500" max="6000" step="100" value="3000"></label>
+          <p class="note">앞 센서 하나가 홈을 보면 그 반대쪽으로 꺾고, 안 보이면 다시 홈 쪽으로 붙습니다. 타워가 홈 반대쪽에 보이거나, 0.9초 동안 홈을 못 보거나, 최대 시간이 지나면 일반 추적으로 돌아갑니다. 뒤 센서가 홈을 보면 기존 탈출을 씁니다.</p>
+        </details>
+        <details>
+          <summary>공격 시간값 (control_config.hpp)</summary>
+          <label class="f">돌진 <output id="o_charge"></output><input type="range" id="charge" min="50" max="600" step="10" value="220"></label>
+          <label class="f">급정지 <output id="o_dive"></output><input type="range" id="dive" min="0" max="300" step="10" value="90"></label>
+          <label class="f">스포크 삽입 <output id="o_spoke"></output><input type="range" id="spoke" min="50" max="800" step="10" value="350"></label>
+          <label class="f">공격 시작 박스 높이 (펌웨어 420, 와이드 카메라 권장 200) <output id="o_atkBox"></output><input type="range" id="atkBox" min="80" max="600" step="10" value="200"></label>
+          <label class="f">탐색 출력 SEARCH_DUTY <output id="o_searchDuty"></output><input type="range" id="searchDuty" min="150" max="650" step="10" value="300"></label>
+          <label class="f">접근 출력 APPROACH_DUTY <output id="o_approachDuty"></output><input type="range" id="approachDuty" min="200" max="650" step="10" value="450"></label>
+          <label class="f">밀기 중 앞 센서가 홈에 들어간 뒤 더 미는 시간 (펌웨어 0) <output id="o_pushThrough"></output><input type="range" id="pushThrough" min="0" max="600" step="25" value="0"></label>
+          <label class="f">탐색 방향 전환 주기 <output id="o_period"></output><input type="range" id="period" min="400" max="3000" step="100" value="1200"></label>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>상태 변화 기록</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">경기장과 시작 위치는 규정 그림 3·4를 따랐습니다 (노란 홈은 원·사분원과 98.5mm 간격, ㄷ자는 벽에서 130mm, 300mm 선이 바닥에서 1350mm). 홈의 10mm 깊이, 센서 높이 3/10/20mm에 따른 오판정, 바퀴 미끄러짐은 넣지 않았습니다. 바닥 센서는 같은 색 3회 연속이면 확정합니다. 점수는 모든 바퀴가 빨강(3점)·파랑(2점)에 들어가면, 5초 유지 +2점, 10초면 처음 위치로, 벽 10초 접촉은 상대 1점입니다.</p>
+</div>
+
+<script>
+(() => {
+'use strict';
+const ROBOT_IMG = new Image();
+ROBOT_IMG.src = 'assets/robot_top.png'; // tools/build_artifact.py가 단일 파일용으로 내장
+
+// ---- arena (mm), world y up ----
+const A = 2400, RED_R = 350, BLUE_R = 700, YEL_L = 450, YEL_W = 70;
+const YEL_D = (RED_R + (Math.hypot(A/2, A/2) - BLUE_R)) / 2; // distance of yellow center from arena center along diagonal
+const yellows = [45, 135, 225, 315].map(deg => {
+  const a = deg * Math.PI / 180;
+  return { cx: A/2 + Math.cos(a) * YEL_D, cy: A/2 + Math.sin(a) * YEL_D, a };
+});
+function floorColor(x, y) {
+  if (Math.hypot(x - A/2, y - A/2) <= RED_R) return 'R';
+  for (const [cx, cy] of [[0,0],[A,0],[0,A],[A,A]]) if (Math.hypot(x - cx, y - cy) <= BLUE_R) return 'B';
+  for (const yl of yellows) {
+    const dx = x - yl.cx, dy = y - yl.cy;
+    const u = dx * Math.cos(yl.a) + dy * Math.sin(yl.a), v = -dx * Math.sin(yl.a) + dy * Math.cos(yl.a);
+    if (Math.abs(u) <= YEL_L/2 && Math.abs(v) <= YEL_W/2) return 'Y';
+  }
+  return 'K';
+}
+
+// ---- control_config.hpp (copied) ----
+const C = { SEARCH_DUTY:300, TARGET_CONFIRM_DUTY:240, ALIGN_DUTY:280, APPROACH_DUTY:450, ATTACK_CHARGE_DUTY:650,
+  SPOKE_INSERT_DUTY:480, PUSH_DUTY:650, BACKOFF_DUTY:450, ZONE_ESCAPE_DUTY:550, APPROACH_STEERING_MAX:120,
+  PUSH_STEERING_MAX:60, TARGET_CENTER_X:960, TARGET_CENTER_DEADBAND:140, ATTACK_CENTER_DEADBAND:75,
+  ATTACK_BOX_HEIGHT:420, TARGET_CONFIRM_FRAMES:2, LOST_TARGET_HOLD_MS:260, SEARCH_DIRECTION_PERIOD_MS:1200,
+  ATTACK_CHARGE_MS:220, DIVE_BRAKE_MS:90, SPOKE_INSERT_MS:350, BLIND_PUSH_HOLD_MS:500, BACKOFF_MS:260,
+  ZONE_ESCAPE_REVERSE_MS:360, ZONE_ESCAPE_TURN_MS:320, BOTH_HAZARD_BRAKE_MS:150, GROOVE_EXIT_FLIP_MS:1500 };
+const OUTPUT_LIMIT = 650; // motor_config DEFAULT_OUTPUT_LIMIT
+const TOWER_H = 80; // 색깔 통 높이 mm
+
+const ui = id => document.getElementById(id);
+const P = {}; // live parameters
+const sliders = { turnMs:v=>v+' ms', driveMs:v=>v+' ms', sweepMs:v=>v+' ms', driveDuty:v=>v+'‰', vmax:v=>(+v).toFixed(1)+' m/s',
+  sample:v=>v+' ms', fovDeg:v=>v+'°', camOff:v=>v+' mm', atkBox:v=>v+' px', searchDuty:v=>v+'‰', pushThrough:v=>v+' ms', edgeDuty:v=>v+'‰', edgeHug:v=>v+'', edgeMaxMs:v=>v+' ms', approachDuty:v=>v+'‰', oppPow:v=>(+v).toFixed(2)+'×', camRange:v=>v+' mm', charge:v=>v+' ms', dive:v=>v+' ms',
+  spoke:v=>v+' ms', period:v=>v+' ms' };
+function readParams() {
+  for (const k of Object.keys(sliders)) { P[k] = +ui(k).value; ui('o_' + k).textContent = sliders[k](ui(k).value); }
+  P.order = ui('order').value; P.opening = ui('opening').checked; P.pi = ui('pi').checked;
+  P.searchMode = ui('searchMode').value; P.openDir = ui('openDir').value; P.yellowHazard = ui('yellowHazard').checked; P.edgeFollow = ui('edgeFollow').checked;
+  C.ATTACK_BOX_HEIGHT = P.atkBox; C.SEARCH_DUTY = P.searchDuty; C.APPROACH_DUTY = P.approachDuty; C.ATTACK_CHARGE_MS = P.charge; C.DIVE_BRAKE_MS = P.dive; C.SPOKE_INSERT_MS = P.spoke; C.SEARCH_DIRECTION_PERIOD_MS = P.period;
+}
+for (const k of Object.keys(sliders)) ui(k).addEventListener('input', readParams);
+for (const k of ['order','opening','pi','searchMode','openDir','yellowHazard','edgeFollow']) ui(k).addEventListener('change', readParams);
+// 프리셋: 무작위 배회 상대 12경기 비교로 고른 값 / 현재 펌웨어 값
+const PRESETS = {
+  best: { order:'rec', searchMode:'spin', openDir:'left', yellowHazard:false, opening:true, fovDeg:102, camOff:60,
+    atkBox:200, searchDuty:300, approachDuty:450, pushThrough:0, charge:220, dive:90, spoke:350, period:1200,
+    turnMs:250, driveMs:900, sweepMs:500, driveDuty:450, edgeFollow:false, edgeDuty:350, edgeHug:140, edgeMaxMs:3000 },
+  firmware: { order:'yechan', searchMode:'sweep', openDir:'right', yellowHazard:true, opening:true, fovDeg:102, camOff:60,
+    atkBox:420, searchDuty:300, approachDuty:450, pushThrough:0, charge:220, dive:90, spoke:350, period:1200,
+    turnMs:250, driveMs:900, sweepMs:500, driveDuty:450, edgeFollow:false, edgeDuty:350, edgeHug:140, edgeMaxMs:3000 },
+};
+PRESETS.edge = Object.assign({}, PRESETS.best, { edgeFollow:true, edgeDuty:450, edgeHug:200 });
+function applyPreset(name) {
+  const p = PRESETS[name]; if (!p) return;
+  for (const [k, v] of Object.entries(p)) { const e = ui(k); if (typeof v === 'boolean') e.checked = v; else e.value = String(v); }
+  readParams();
+}
+ui('preset').addEventListener('change', () => { applyingPreset = true; applyPreset(ui('preset').value); applyingPreset = false; });
+// 프리셋을 고른 뒤 값을 손대면 '직접 조정'으로 표시
+const markCustom = () => { if (!applyingPreset) ui('preset').value = 'custom'; };
+let applyingPreset = false;
+for (const k of Object.keys(PRESETS.best)) { const e = ui(k); e.addEventListener(e.type === 'checkbox' || e.tagName === 'SELECT' ? 'change' : 'input', markCustom); }
+readParams(); // 프리셋이 '직접 조정'이어도 현재 입력값으로 시작
+applyingPreset = true; applyPreset(ui('preset').value); applyingPreset = false;
+
+// ---- FSM: port of src/control/robot_fsm.cpp + opening maneuver ----
+const front = m => (m & 0x03) !== 0, rear = m => (m & 0x0C) !== 0;
+class Fsm {
+  constructor(name, onLog) { this.name = name; this.onLog = onLog; this.reset(0); }
+  reset(now) {
+    Object.assign(this, { state:'WaitStart', entered:now, lastTargetMs:0, lastTargetX:C.TARGET_CENTER_X, active:0,
+      confirmFrames:0, lastSeq:0, seqKnown:false, lastTargetKnown:false, lastFrameMs:0, lastOneEnd:0, escRev:false,
+      inGroove:false, grooveFwd:false, grooveSince:0, openingStart:-1, openingDone:false, searchLeft:true, pushThroughSince:-1, edgeSide:'R', edgeSince:0, edgeLastHaz:0 });
+  }
+  to(s, now) { if (this.state === s) return; this.state = s; this.entered = now; this.onLog && this.onLog(now, this.name, s); }
+  I(type, duty = 0, steer = 0) { return { type, duty, steer }; }
+  search(now) {
+    // 새 방식: 마지막으로 타워를 본 화면 쪽(없으면 왼쪽)으로 멈추지 않고 360° 회전
+    if (P.searchMode === 'spin') return this.I(this.searchLeft ? 'SearchLeft' : 'SearchRight', C.SEARCH_DUTY);
+    return this.I(Math.floor(now / C.SEARCH_DIRECTION_PERIOD_MS) % 2 === 0 ? 'SearchLeft' : 'SearchRight', C.SEARCH_DUTY);
+  }
+  zoneEscape(now) {
+    const e = now - this.entered, f = front(this.active), r = rear(this.active);
+    if (e < C.ZONE_ESCAPE_REVERSE_MS) return (f || !r) ? this.I('Reverse', C.ZONE_ESCAPE_DUTY) : this.I('Approach', C.ZONE_ESCAPE_DUTY);
+    const l = (this.active & 0x05) !== 0, rt = (this.active & 0x0A) !== 0;
+    if (l && !rt) return this.I('EscapeRight', C.ZONE_ESCAPE_DUTY);
+    if (rt && !l) return this.I('EscapeLeft', C.ZONE_ESCAPE_DUTY);
+    return this.search(now);
+  }
+  chooseGrooveFwd() { if (rear(this.lastOneEnd)) return true; if (front(this.lastOneEnd)) return false; return this.escRev; }
+  grooveExit(now) {
+    if (!this.inGroove) { this.inGroove = true; this.grooveSince = now; this.grooveFwd = this.chooseGrooveFwd(); }
+    const held = now - this.grooveSince;
+    if (held < C.BOTH_HAZARD_BRAKE_MS) return this.I('Brake');
+    const flipped = Math.floor((held - C.BOTH_HAZARD_BRAKE_MS) / C.GROOVE_EXIT_FLIP_MS) % 2 === 1;
+    return this.I(this.grooveFwd !== flipped ? 'Approach' : 'Reverse', C.ZONE_ESCAPE_DUTY);
+  }
+  steer(x, max) { const s = Math.trunc((x - C.TARGET_CENTER_X) * max / C.TARGET_CENTER_X); return Math.max(-max, Math.min(max, s)); }
+  fwd(type, duty, x, max) { return this.I(type, duty, this.steer(x, max)); }
+  observe(v) { if (!this.seqKnown || v.sequence !== this.lastSeq || v.frameMs !== this.lastFrameMs) { this.lastSeq = v.sequence; this.seqKnown = true; this.lastFrameMs = v.frameMs; this.confirmFrames++; } }
+  opening(now) {
+    if (this.openingStart < 0) this.openingStart = now;
+    const e = now - this.openingStart;
+    const first = P.openDir === 'left' ? 'SearchLeft' : 'SearchRight', back = P.openDir === 'left' ? 'SearchRight' : 'SearchLeft';
+    if (e < P.turnMs) { this.to('OpeningTurn', now); return this.I(first, C.SEARCH_DUTY); }
+    if (e < P.turnMs + P.driveMs) { this.to('OpeningDrive', now); return this.I('Approach', P.driveDuty, 0); }
+    if (e < P.turnMs + P.driveMs + P.sweepMs) { this.to('OpeningSweep', now); return this.I(back, C.SEARCH_DUTY); }
+    this.openingDone = true; return null;
+  }
+  // 실험: 홈 가장자리를 끼고 돌며 추적. null을 돌려주면 일반 흐름으로 넘어간다.
+  edgeFollow(now, h, v, tv) {
+    if (rear(h)) return null;
+    if (now - this.edgeSince > P.edgeMaxMs) { this.to('Search', now); return null; }
+    if (h) this.edgeLastHaz = now;
+    const gs = this.edgeSide === 'L' ? 0x01 : 0x02, os = this.edgeSide === 'L' ? 0x02 : 0x01;
+    if (tv) {
+      this.lastTargetMs = v.frameMs; this.lastTargetX = v.targetX; this.lastTargetKnown = true; this.searchLeft = v.targetX < C.TARGET_CENTER_X;
+      const away = this.edgeSide === 'L' ? v.targetX > C.TARGET_CENTER_X + C.TARGET_CENTER_DEADBAND : v.targetX < C.TARGET_CENTER_X - C.TARGET_CENTER_DEADBAND;
+      if (away && !(h & gs)) { this.to('Search', now); return null; }
+    }
+    if (now - this.edgeLastHaz > 900) { this.to('Search', now); return null; }
+    if ((h & gs) && (h & os)) return this.I('Reverse', 400);
+    const awaySteer = this.edgeSide === 'L' ? P.edgeDuty : -P.edgeDuty, hugSteer = this.edgeSide === 'L' ? -P.edgeHug : P.edgeHug;
+    if (h & gs) return this.I('Approach', P.edgeDuty, awaySteer);
+    return this.I('Approach', P.edgeDuty, hugSteer);
+  }
+  update(now, h, v, allowed) {
+    if (!allowed) {
+      this.confirmFrames = 0; this.lastTargetKnown = false; this.seqKnown = false; this.lastOneEnd = 0; this.inGroove = false;
+      this.to('WaitStart', now); return this.I('Brake');
+    }
+    const tv = v.linkValid && v.frameFresh && v.targetValid;
+    const openingActive = P.opening && !this.openingDone;
+    // 예찬 표 순서: 출발 기동이 홈 판정보다 먼저 (타워가 보이면 중단)
+    if (P.order === 'yechan' && openingActive) {
+      if (tv) this.openingDone = true; else { const r = this.opening(now); if (r) return r; }
+    }
+    // Colored-floor escape always interrupts an attack, including blind push.
+    if (front(h) !== rear(h)) this.lastOneEnd = h;
+    // 실험 옵션: 밀고 있는 중 앞쪽 센서만 홈이면 잠깐 더 밀어 상대를 홈 안까지 넣는다 (펌웨어에는 없음)
+    const pushing = this.state === 'Push' || this.state === 'SpokeEngaged';
+    if (h === 0 || !pushing) this.pushThroughSince = -1;
+    if (P.pushThrough > 0 && pushing && h !== 0 && !rear(h) && tv && v.targetHeight >= C.ATTACK_BOX_HEIGHT / 2) {
+      if (this.pushThroughSince < 0) this.pushThroughSince = now;
+      if (now - this.pushThroughSince < P.pushThrough) h = 0;
+    }
+    if (this.state === 'EdgeFollow') { const r = this.edgeFollow(now, h, v, tv); if (r) return r; }
+    const CHASE = ['Search', 'LostTarget', 'TargetConfirm', 'TrackAlign', 'Approach', 'OpeningTurn', 'OpeningDrive', 'OpeningSweep'];
+    if (P.edgeFollow && h !== 0 && !rear(h) && CHASE.includes(this.state)) {
+      if ((h & 0x03) === 0x03) this.edgeSide = this.lastTargetKnown && this.lastTargetX < C.TARGET_CENTER_X ? 'R' : 'L';
+      else this.edgeSide = (h & 0x01) ? 'L' : 'R';
+      this.edgeSince = now; this.edgeLastHaz = now; this.openingDone = true; this.to('EdgeFollow', now);
+      const r = this.edgeFollow(now, h, v, tv); if (r) return r;
+    }
+    if (h !== 0 && this.state !== 'ZoneEscape') {
+      this.active = h; this.escRev = this.state === 'Backoff'; this.inGroove = false; this.confirmFrames = 0;
+      this.openingDone = true; this.to('ZoneEscape', now);
+    }
+    if (this.state === 'ZoneEscape') {
+      const f = front(h), r = rear(h), reversing = front(this.active), e = now - this.entered;
+      if (f && r) { this.active = h; this.entered = now; return this.grooveExit(now); }
+      if (this.inGroove) { this.inGroove = false; this.active = h !== 0 ? h : (this.grooveFwd ? 0x0C : 0x03); this.entered = now; return this.zoneEscape(now); }
+      if (e < C.ZONE_ESCAPE_REVERSE_MS && ((reversing && r) || (!reversing && f))) { this.active = h; this.entered = now; return this.I('Brake'); }
+      if (e >= C.ZONE_ESCAPE_REVERSE_MS && h !== 0) this.active = h;
+      if (now - this.entered < C.ZONE_ESCAPE_REVERSE_MS + C.ZONE_ESCAPE_TURN_MS) return this.zoneEscape(now);
+      if (h !== 0) { this.active = h; this.entered = now; return this.zoneEscape(now); }
+      this.active = 0; this.lastOneEnd = 0; this.to('Search', now); return this.search(now);
+    }
+    if (tv) { this.observe(v); this.lastTargetMs = v.frameMs; this.lastTargetX = v.targetX; this.lastTargetKnown = true; this.searchLeft = v.targetX < C.TARGET_CENTER_X; if (openingActive) this.openingDone = true; }
+    const tx = tv ? v.targetX : this.lastTargetX;
+    if (this.state === 'DiveReady') {
+      if (now - this.entered < C.ATTACK_CHARGE_MS) return this.fwd('AttackCharge', C.ATTACK_CHARGE_DUTY, tx, C.PUSH_STEERING_MAX);
+      this.to('DiveBrake', now); return this.I('DiveBrake');
+    }
+    if (this.state === 'DiveBrake') {
+      if (now - this.entered < C.DIVE_BRAKE_MS) return this.I('DiveBrake');
+      this.to('SpokeEngaged', now); return this.fwd('SpokeInsert', C.SPOKE_INSERT_DUTY, tx, C.PUSH_STEERING_MAX);
+    }
+    if (this.state === 'SpokeEngaged') {
+      if (now - this.entered < C.SPOKE_INSERT_MS) return this.fwd('SpokeInsert', C.SPOKE_INSERT_DUTY, tx, C.PUSH_STEERING_MAX);
+      this.to('Push', now);
+    }
+    if (this.state === 'Push') {
+      if (tv) {
+        if (v.targetHeight < C.ATTACK_BOX_HEIGHT / 2 || Math.abs(v.targetX - C.TARGET_CENTER_X) > 600) { this.confirmFrames = 0; this.to('TargetConfirm', now); return this.I('Brake'); }
+        return this.fwd('Push', C.PUSH_DUTY, v.targetX, C.PUSH_STEERING_MAX);
+      }
+      if (this.lastTargetKnown && now - this.lastTargetMs < C.BLIND_PUSH_HOLD_MS) return this.I('Push', C.PUSH_DUTY);
+      this.to('Backoff', now); return this.I('Reverse', C.BACKOFF_DUTY);
+    }
+    if (this.state === 'Backoff') {
+      if (now - this.entered < C.BACKOFF_MS) return this.I('Reverse', C.BACKOFF_DUTY);
+      this.confirmFrames = 0; this.to('Search', now); return this.search(now);
+    }
+    if (!tv) {
+      this.confirmFrames = 0;
+      if (this.lastTargetKnown && now - this.lastTargetMs < C.LOST_TARGET_HOLD_MS) {
+        this.to('LostTarget', now); return this.I(this.lastTargetX < C.TARGET_CENTER_X ? 'SearchLeft' : 'SearchRight', C.SEARCH_DUTY);
+      }
+      if (P.order === 'rec' && P.opening && !this.openingDone) { const r = this.opening(now); if (r) return r; }
+      this.to('Search', now); return this.search(now);
+    }
+    const err = v.targetX - C.TARGET_CENTER_X;
+    if (this.confirmFrames < C.TARGET_CONFIRM_FRAMES) {
+      this.to('TargetConfirm', now);
+      if (err < -C.TARGET_CENTER_DEADBAND) return this.I('AlignLeft', C.TARGET_CONFIRM_DUTY);
+      if (err > C.TARGET_CENTER_DEADBAND) return this.I('AlignRight', C.TARGET_CONFIRM_DUTY);
+      return this.fwd('Approach', C.TARGET_CONFIRM_DUTY, v.targetX, C.APPROACH_STEERING_MAX);
+    }
+    if (err < -C.TARGET_CENTER_DEADBAND) { this.to('TrackAlign', now); return this.I('AlignLeft', C.ALIGN_DUTY); }
+    if (err > C.TARGET_CENTER_DEADBAND) { this.to('TrackAlign', now); return this.I('AlignRight', C.ALIGN_DUTY); }
+    if (Math.abs(err) <= C.ATTACK_CENTER_DEADBAND && v.targetHeight >= C.ATTACK_BOX_HEIGHT) {
+      this.to('DiveReady', now); return this.fwd('AttackCharge', C.ATTACK_CHARGE_DUTY, v.targetX, C.PUSH_STEERING_MAX);
+    }
+    this.to('Approach', now); return this.fwd('Approach', C.APPROACH_DUTY, v.targetX, C.APPROACH_STEERING_MAX);
+  }
+}
+
+// ---- drive_logic.cpp port ----
+function makeCommand(it) {
+  const d = Math.min(it.duty, 1000);
+  const arc = (thr, st) => [thr + st, thr - st];
+  let lr;
+  switch (it.type) {
+    case 'SearchLeft': case 'AlignLeft': case 'EscapeLeft': lr = [-d, d]; break;
+    case 'SearchRight': case 'AlignRight': case 'EscapeRight': lr = [d, -d]; break;
+    case 'Approach': case 'AttackCharge': case 'SpokeInsert': case 'Push': lr = arc(d, it.steer); break;
+    case 'Reverse': lr = arc(-d, it.steer); break;
+    default: lr = [0, 0];
+  }
+  return lr.map(x => Math.max(-OUTPUT_LIMIT, Math.min(OUTPUT_LIMIT, x)));
+}
+
+
+// ---- 새 FSM (v2): 예찬 표의 의도를 따라 처음부터 다시 짠 것 ----
+// 우선순위: 안전 > 우리가 점수를 주지 않기(홈·벽·끼임) > 공격 진행 > 추적 > 놓친 직후 > 출발 기동 > 탐색
+// 빨간 원: 들어가지 않고 가장자리를 끼고 돌며 추적. 밀기 중이면 상대를 넣기 위해 짧게 더 민다(3점).
+// 파란 사분원: 추적 중이면 뒤로 빠져 경기장 중앙 쪽으로 돈다(벽과 사분원 사이에 갇히지 않게). 밀기 중이면 끝까지 넣는다.
+const V2 = { SEARCH:330, PIVOT:380, APPROACH:560, MIN_THROTTLE:0.3, KP:0.45, STEER_MAX:380, LEAD_MS:150,
+  ATTACK_ERR:130, CHARGE:650, CHARGE_MS:220, BRAKE_MS:90, SPOKE:480, SPOKE_MS:350, PUSH:650, PUSH_STEER:120,
+  LOST_MS:700, FULL_TURN_MS:2300, PATROL_MS:600, PUSH_LOST_MS:400, BACKOFF_MS:220,
+  RED_PUSH_MS:200, BLUE_PUSH_MS:250, SKIRT:420, SKIRT_HUG:170, SKIRT_MAX_MS:3500,
+  BLUE_BACK_MS:280, BLUE_TURN_MS:320, ESC:550, ESC_REV_MS:360, ESC_TURN_MS:300, GROOVE_BRAKE_MS:150, GROOVE_FLIP_MS:1500,
+  STALL_MS:600, WALL_BACK_MS:400, WALL_TURN_MS:350, REPOS_STALL_MS:1500, REPOS_BACK_MS:260, REPOS_ARC_MS:320,
+  OPEN_TURN_MS:250, OPEN_DRIVE_MS:700, MIN_BACK_MS:180 };
+class FsmV2 {
+  constructor(name, onLog) { this.name = name; this.onLog = onLog; this.reset(0); }
+  reset(now) {
+    Object.assign(this, { state:'WaitStart', entered:now, seq:-1, frames:0, lastSeen:-1e9, lastX:960, lastH:0, xVel:0,
+      searchLeft:true, spinStart:-1, openStart:-1, openDone:false, sub:{}, lastOneEnd:0 });
+  }
+  to(s, now, sub) { if (this.state !== s) { this.state = s; this.entered = now; this.onLog && this.onLog(now, this.name, s); } if (sub) this.sub = sub; }
+  I(type, duty = 0, steer = 0) { return { type, duty, steer }; }
+  age(now) { return now - this.entered; }
+  update(now, o, v, allowed) {
+    if (!allowed) { this.frames = 0; this.to('WaitStart', now); return this.I('Brake'); }
+    const h = o.h;
+    // --- 영상: 새 프레임 2개 연속이어야 확정 ---
+    const tv = v.linkValid && v.frameFresh && v.targetValid;
+    if (tv) {
+      if (v.sequence !== this.seq) {
+        this.seq = v.sequence; this.frames++;
+        if (this.lastSeen > 0 && now - this.lastSeen < 100) { const vel = (v.targetX - this.lastX) / Math.max(1, now - this.lastSeen); this.xVel = this.xVel * 0.6 + vel * 0.4; }
+        this.lastSeen = now; this.lastX = v.targetX; this.lastH = v.targetHeight; this.searchLeft = v.targetX < 960;
+      }
+    } else this.frames = 0;
+    const seen = tv && this.frames >= 2;
+    const red = o.colors.reduce((m, c, i) => m | (c === 'R' ? 1 << i : 0), 0), blue = o.colors.reduce((m, c, i) => m | (c === 'B' ? 1 << i : 0), 0);
+    if (front(h) !== rear(h)) this.lastOneEnd = h;
+    const pushing = ['Charge', 'DiveBrake', 'Spoke', 'Push'].includes(this.state);
+    const big = seen && v.targetHeight >= C.ATTACK_BOX_HEIGHT * 0.6 && Math.abs(v.targetX - 960) < 450;
+
+    // === 1. 우리가 점수를 주지 않기 ===
+    if (this.state === 'GrooveExit') { const r = this.grooveExit(now, h); if (r) return r; }
+    if (front(h) && rear(h) && this.state !== 'GrooveExit') { this.to('GrooveExit', now, { since: now, fwd: rear(this.lastOneEnd) ? true : front(this.lastOneEnd) ? false : false }); return this.I('Brake'); }
+    if (rear(h) && !['Escape', 'GrooveExit'].includes(this.state)) { this.to('Escape', now, { mask: h }); }
+    if (front(h) && !rear(h)) {
+      if (pushing && big) {
+        // 밀기 중: 상대를 홈 안까지 넣는다. 빨강은 짧게, 파랑은 길게
+        const limit = (red & 0x03) ? V2.RED_PUSH_MS : V2.BLUE_PUSH_MS;
+        if (this.sub.pushHazSince === undefined) this.sub.pushHazSince = now;
+        if (now - this.sub.pushHazSince >= limit) this.to('Escape', now, { mask: h });
+      } else if (!['Escape', 'RedSkirt', 'BlueRetreat', 'GrooveExit'].includes(this.state)) {
+        if (red & 0x03) { const side = (red & 0x03) === 0x03 ? (this.lastX < 960 ? 'R' : 'L') : (red & 0x01) ? 'L' : 'R'; this.to('RedSkirt', now, { side, lastHaz: now }); this.openDone = true; }
+        else { this.to('BlueRetreat', now, { mask: blue & 0x03 }); this.openDone = true; }
+      }
+    } else if (pushing) this.sub.pushHazSince = undefined;
+    if (this.state === 'Escape') { const r = this.escape(now, h, seen); if (r) return r; }
+    if (this.state === 'BlueRetreat') {
+      const e = this.age(now);
+      // 센서가 홈에서 벗어났고 상대가 보이면 돌지 않고 바로 다시 공격
+      if (e >= V2.MIN_BACK_MS && !front(h) && seen) { this.to('Track', now); }
+      else if (e < V2.BLUE_BACK_MS) return this.I('Reverse', V2.ESC);
+      else if (e < V2.BLUE_BACK_MS + V2.BLUE_TURN_MS) return this.I((this.sub.mask & 0x01) ? 'EscapeRight' : 'EscapeLeft', V2.ESC);
+      else this.to('Search', now);
+    }
+    if (this.state === 'RedSkirt') { const r = this.skirt(now, h, red, v, seen); if (r) return r; }
+    // 벽·끼임: 앞으로 밀라고 했는데 안 움직이고, 상대가 앞에 크게 안 보이면 벽이다 (V2: IMU·전류로 판단)
+    if (o.stalled && !big && !['WallEscape', 'Escape', 'GrooveExit'].includes(this.state)) this.to('WallEscape', now);
+    if (this.state === 'WallEscape') {
+      const e = this.age(now);
+      if (e < V2.WALL_BACK_MS) return this.I('Reverse', V2.ESC);
+      if (e >= V2.WALL_BACK_MS && seen) this.to('Track', now);
+      else if (e < V2.WALL_BACK_MS + V2.WALL_TURN_MS) return this.I(this.searchLeft ? 'SearchLeft' : 'SearchRight', V2.PIVOT);
+      else this.to('Search', now);
+    }
+    // === 2. 공격 진행 (짧은 가림에는 끊지 않음) ===
+    const steerTo = (x, max) => Math.max(-max, Math.min(max, Math.round((x - 960) * V2.KP)));
+    if (this.state === 'Charge') { if (this.age(now) < V2.CHARGE_MS) return this.I('AttackCharge', V2.CHARGE, steerTo(tv ? v.targetX : this.lastX, 80)); this.to('DiveBrake', now); }
+    if (this.state === 'DiveBrake') { if (this.age(now) < V2.BRAKE_MS) return this.I('DiveBrake'); this.to('Spoke', now); }
+    if (this.state === 'Spoke') { if (this.age(now) < V2.SPOKE_MS) return this.I('SpokeInsert', V2.SPOKE, steerTo(tv ? v.targetX : this.lastX, 80)); this.to('Push', now, { stallSince: -1 }); }
+    if (this.state === 'Push') {
+      if (now - this.lastSeen > V2.PUSH_LOST_MS) { this.to('Backoff', now); }
+      else {
+        // 힘겨루기로 멈추면 짧게 빠졌다가 각도를 바꿔 다시 들어간다
+        if (o.stalled) { if (this.sub.stallSince < 0) this.sub.stallSince = now; if (now - this.sub.stallSince > V2.REPOS_STALL_MS) this.to('Reposition', now, { dir: this.lastX < 960 ? 1 : -1 }); }
+        else this.sub.stallSince = -1;
+        if (this.state === 'Push') return this.I('Push', V2.PUSH, steerTo(this.lastX, V2.PUSH_STEER));
+      }
+    }
+    if (this.state === 'Reposition') {
+      const e = this.age(now);
+      if (e < V2.REPOS_BACK_MS) return this.I('Reverse', V2.ESC);
+      if (e < V2.REPOS_BACK_MS + V2.REPOS_ARC_MS) return this.I('Approach', 450, this.sub.dir * 300);
+      this.to('Track', now);
+    }
+    if (this.state === 'Backoff') { if (this.age(now) < V2.BACKOFF_MS && !seen) return this.I('Reverse', 450); this.to(seen ? 'Track' : 'Search', now); }
+    // === 3. 추적: 멈춰서 정렬하지 않고 움직이면서 조향, 상대 이동 방향으로 앞질러 겨눔 ===
+    if (seen) {
+      this.openDone = true; this.spinStart = -1;
+      const aim = v.targetX + this.xVel * V2.LEAD_MS, err = aim - 960;
+      if (v.targetHeight >= C.ATTACK_BOX_HEIGHT && Math.abs(v.targetX - 960) < V2.ATTACK_ERR) { this.to('Charge', now); return this.I('AttackCharge', V2.CHARGE, steerTo(v.targetX, 80)); }
+      this.to('Track', now);
+      if (Math.abs(err) > 520) return this.I(err < 0 ? 'SearchLeft' : 'SearchRight', V2.PIVOT);
+      const thr = Math.round(V2.APPROACH * Math.max(V2.MIN_THROTTLE, 1 - Math.abs(err) / 700));
+      return this.I('Approach', thr, steerTo(aim, V2.STEER_MAX));
+    }
+    // === 4. 놓친 직후: 마지막으로 본 화면 쪽으로 ===
+    if (now - this.lastSeen < V2.LOST_MS) { this.to('Lost', now); return this.I(this.lastX < 960 ? 'SearchLeft' : 'SearchRight', V2.PIVOT); }
+    // === 5. 출발 기동: 중앙 쪽으로 틀어 사선으로 나간다 (상대 정면 돌진을 피하고 옆을 노림) ===
+    if (!this.openDone) {
+      if (this.openStart < 0) this.openStart = now;
+      const e = now - this.openStart;
+      if (e < V2.OPEN_TURN_MS) { this.to('Opening', now); return this.I('SearchLeft', V2.SEARCH); }
+      if (e < V2.OPEN_TURN_MS + V2.OPEN_DRIVE_MS) { this.to('Opening', now); return this.I('Approach', 480, 0); }
+      this.openDone = true;
+    }
+    // === 6. 탐색: 한 방향 360°. 한 바퀴 돌아도 없으면 잠깐 전진해 자리를 바꾼다 ===
+    if (this.spinStart < 0) this.spinStart = now;
+    const se = now - this.spinStart;
+    if (se < V2.FULL_TURN_MS) { this.to('Search', now); return this.I(this.searchLeft ? 'SearchLeft' : 'SearchRight', V2.SEARCH); }
+    if (se < V2.FULL_TURN_MS + V2.PATROL_MS) { this.to('Patrol', now); return this.I('Approach', 420, 0); }
+    this.spinStart = now; this.to('Search', now); return this.I(this.searchLeft ? 'SearchLeft' : 'SearchRight', V2.SEARCH);
+  }
+  escape(now, h, seen) {
+    const e = this.age(now), m = this.sub.mask;
+    // 홈에서 벗어났고 상대가 보이면 회전 단계를 건너뛰고 바로 다시 공격. 회전은 상대가 안 보일 때만
+    if (e >= V2.MIN_BACK_MS && h === 0 && seen) { this.to('Track', now); return null; }
+    if (h && e > V2.ESC_REV_MS) { this.sub.mask = h; this.entered = now; }
+    if (e < V2.ESC_REV_MS) return this.I(front(m) ? 'Reverse' : 'Approach', V2.ESC);
+    if (e < V2.ESC_REV_MS + V2.ESC_TURN_MS) return this.I((m & 0x05) ? 'EscapeRight' : 'EscapeLeft', V2.ESC);
+    this.to('Search', now); return null;
+  }
+  grooveExit(now, h) {
+    const held = now - this.sub.since;
+    if (!(front(h) && rear(h))) { this.to('Escape', now, { mask: h || (this.sub.fwd ? 0x0C : 0x03) }); return null; }
+    if (held < V2.GROOVE_BRAKE_MS) return this.I('Brake');
+    const flip = Math.floor((held - V2.GROOVE_BRAKE_MS) / V2.GROOVE_FLIP_MS) % 2 === 1;
+    return this.I(this.sub.fwd !== flip ? 'Approach' : 'Reverse', V2.ESC);
+  }
+  skirt(now, h, red, v, seen) {
+    if (rear(h) || this.age(now) > V2.SKIRT_MAX_MS) { this.to('Search', now); return null; }
+    if (red & 0x03) this.sub.lastHaz = now;
+    const gs = this.sub.side === 'L' ? 0x01 : 0x02, os = gs === 0x01 ? 0x02 : 0x01;
+    if (seen) {
+      const away = this.sub.side === 'L' ? v.targetX > 960 + 140 : v.targetX < 960 - 140;
+      if (away && !(red & gs)) { this.to('Track', now); return null; }
+    }
+    if (now - this.sub.lastHaz > 900) { this.to('Search', now); return null; }
+    if ((red & gs) && (red & os)) return this.I('Reverse', 400);
+    if (red & gs) return this.I('Approach', V2.SKIRT, gs === 0x01 ? V2.SKIRT : -V2.SKIRT);
+    return this.I('Approach', V2.SKIRT, gs === 0x01 ? -V2.SKIRT_HUG : V2.SKIRT_HUG);
+  }
+}
+
+// ---- robots ----
+const R_COL = 160, TRACK = 250; // collision radius, wheel track (mm)
+const SENSORS = [[-115, 125], [115, 125], [-115, -125], [115, -125]]; // FL, FR, RL, RR in robot frame (x right, y forward)
+const WHEELS = [[-140, 100], [140, 100], [-140, -100], [140, -100]];
+function makeRobot(name, x, y, a) {
+  return { name, x, y, a, vl:0, vr:0, cmd:[0,0], intent:{type:'Brake',duty:0,steer:0}, fsm:null,
+    sens: SENSORS.map(() => ({ raw:'K', count:0, conf:'K', reliable:false })), lastSample:0,
+    vis: { linkValid:false, frameFresh:false, targetValid:false, targetX:0, targetHeight:0, sequence:0, frameMs:0 },
+    zone:null, zoneSince:0, zoneScores:0, wallSince:-1, wander:{until:0, mode:'go', dir:1}, slowSince:-1, stalled:false, gain:1, fsm1:null, fsm2:null };
+}
+// robot frame: x = right, y = forward
+const toWorld = (r, px, py) => [r.x + px * Math.sin(r.a) + py * Math.cos(r.a), r.y - px * Math.cos(r.a) + py * Math.sin(r.a)];
+
+let ours, opp, t = 0, running = false, started = false, paused = false, score = [0, 0], logLines = [];
+const MATCH_MS = 90000;
+function log(now, who, s) { logLines.unshift(`${(now/1000).toFixed(2).padStart(6)}s  ${who}  → ${s}`); if (logLines.length > 120) logLines.pop(); }
+
+// 규정 그림 3·4: 왼쪽 ㄷ자(벽에서 130mm, 300mm 선이 바닥에서 1350mm)는 아래쪽 벽을, 오른쪽 ㄷ자(점대칭)는 위쪽 벽을 본다.
+// 로봇 뒷면이 300mm 선에 걸치므로 중심은 선에서 150mm 안쪽.
+const START_L = [130 + 150, 1350 - 150, -Math.PI/2], START_R = [A - 130 - 150, A - 1350 + 150, Math.PI/2];
+function startPositions() { return ui('startPos').value === 'left' ? [START_L, START_R] : [START_R, START_L]; }
+function placeRobots(keepFsmState) {
+  const [s0, s1] = startPositions();
+  for (const [r, s] of [[ours, s0], [opp, s1]]) { r.x = s[0]; r.y = s[1]; r.a = s[2]; r.vl = r.vr = 0; r.zone = null; r.zoneScores = 0; r.wallSince = -1;
+    r.sens.forEach(q => { q.raw = 'K'; q.count = 0; q.conf = 'K'; q.reliable = false; }); }
+}
+function resetAll() {
+  ours = makeRobot('우리', 0, 0, 0); opp = makeRobot('상대', 0, 0, 0);
+  for (const r of [ours, opp]) { r.fsm1 = new Fsm(r.name, log); r.fsm2 = new FsmV2(r.name, log); r.gain = 0.95 + Math.random() * 0.1; }
+  ours.fsm = ui('ourFsm').value === 'v2' ? ours.fsm2 : ours.fsm1; opp.fsm = ui('opp').value === 'v2' ? opp.fsm2 : opp.fsm1;
+  placeRobots(); t = 0; started = false; running = false; paused = false; score = [0, 0]; logLines = [];
+  ui('btnPause').textContent = '일시정지';
+}
+function resetFsms() { for (const r of [ours, opp]) { r.fsm1.reset(t); r.fsm2.reset(t); r.slowSince = -1; r.stalled = false; } }
+function restartFromStart(reason) {
+  // 규정: 홈 10초·벽 10초 등은 양 팀 처음 위치에서 재개. FSM은 새로 구동(출발 기동 다시)
+  log(t, '심판', reason + ' → 처음 위치');
+  placeRobots(); resetFsms();
+}
+
+// ---- sensing ----
+function sampleSensors(r) {
+  if (t - r.lastSample < P.sample) return;
+  r.lastSample = t;
+  SENSORS.forEach(([px, py], i) => {
+    const [wx, wy] = toWorld(r, px, py), c = floorColor(wx, wy), q = r.sens[i];
+    if (c === q.raw) q.count++; else { q.raw = c; q.count = 1; }
+    if (q.count >= 3) { q.conf = c; q.reliable = true; }
+  });
+}
+// 규정 1.7⑩: 노란 홈은 점수와 무관한 높이 차일 뿐이라 기본은 빨강·파랑만 위험
+const hazardMask = r => r.sens.reduce((m, q, i) => m | ((q.reliable && (P.yellowHazard ? 'RYB' : 'RB').includes(q.conf)) ? 1 << i : 0), 0);
+function updateVision(self, other) {
+  if (!P.pi) { self.vis.linkValid = false; self.vis.frameFresh = false; self.vis.targetValid = false; return; }
+  if (t - self.vis.frameMs < 20 && self.vis.frameMs !== 0) return;
+  const [cx, cy] = toWorld(self, 0, P.camOff);
+  const dx = other.x - cx, dy = other.y - cy, dist = Math.hypot(dx, dy);
+  let ang = Math.atan2(dy, dx) - self.a; ang = Math.atan2(Math.sin(ang), Math.cos(ang)); // + = left
+  const half = P.fovDeg * Math.PI / 360;
+  const v = self.vis; v.linkValid = true; v.frameFresh = true; v.frameMs = t || 1; v.sequence = (v.sequence + 1) & 255;
+  if (Math.abs(ang) <= half && dist > 50 && dist <= P.camRange) {
+    v.targetValid = true;
+    // 핀홀 투영, 1920×1080, 정사각 화소. 색깔 통 높이 80mm (규정 그림 2)
+    const f = C.TARGET_CENTER_X / Math.tan(half);
+    v.targetX = Math.round(C.TARGET_CENTER_X - f * Math.tan(ang));
+    v.targetHeight = Math.min(1080, Math.round(f * TOWER_H / dist));
+  } else { v.targetValid = false; v.targetX = 0; v.targetHeight = 0; }
+}
+
+// ---- opponent simple behaviours ----
+function oppIntent(r) {
+  const mode = ui('opp').value;
+  if (mode === 'idle') return { type:'Brake', duty:0, steer:0 };
+  if (mode === 'charge') {
+    let ang = Math.atan2(ours.y - r.y, ours.x - r.x) - r.a; ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+    if (Math.abs(ang) > 0.5) return { type: ang > 0 ? 'SearchLeft' : 'SearchRight', duty: 350, steer: 0 };
+    return { type:'Push', duty: 600, steer: Math.round(-ang * 300) };
+  }
+  if (mode === 'wander') {
+    const w = r.wander;
+    if (t >= w.until) { w.mode = w.mode === 'go' ? 'turn' : 'go'; w.dir = Math.random() < 0.5 ? 1 : -1; w.until = t + (w.mode === 'go' ? 900 + Math.random()*1200 : 300 + Math.random()*600); }
+    return w.mode === 'go' ? { type:'Approach', duty: 400, steer: 0 } : { type: w.dir > 0 ? 'SearchLeft' : 'SearchRight', duty: 350, steer: 0 };
+  }
+  return null;
+}
+
+// ---- physics ----
+function drive(r, dt, scale) {
+  const [l, rr] = r.cmd, vmax = P.vmax * scale; // m/s at 1000‰
+  const tl = l / 1000 * vmax * 1000, tr = rr / 1000 * vmax * 1000; // mm/s
+  const braking = r.intent.type === 'Brake' || r.intent.type === 'DiveBrake';
+  const k = 1 - Math.exp(-dt / (braking ? 40 : 110));
+  r.vl += (tl - r.vl) * k; r.vr += (tr - r.vr) * k;
+  const v = (r.vl + r.vr) / 2, w = (r.vr - r.vl) / TRACK; // rad/s, + = left
+  r.a += w * dt / 1000; r.x += Math.cos(r.a) * v * dt / 1000; r.y += Math.sin(r.a) * v * dt / 1000;
+}
+function collide() {
+  const dx = opp.x - ours.x, dy = opp.y - ours.y, d = Math.hypot(dx, dy), min = 2 * R_COL;
+  if (d >= min || d === 0) return false;
+  const nx = dx / d, ny = dy / d, over = min - d;
+  const vA = Math.cos(ours.a) * (ours.vl + ours.vr) / 2 * nx + Math.sin(ours.a) * (ours.vl + ours.vr) / 2 * ny;
+  const vB = -(Math.cos(opp.a) * (opp.vl + opp.vr) / 2 * nx + Math.sin(opp.a) * (opp.vl + opp.vr) / 2 * ny);
+  // 정면으로 맞서면 버티는 힘이 크고, 옆·뒤를 밀리면 약하다. 스포크로 파고든 쪽은 1.5배
+  const fA = Math.max(0, Math.cos(ours.a) * nx + Math.sin(ours.a) * ny), fB = Math.max(0, -(Math.cos(opp.a) * nx + Math.sin(opp.a) * ny));
+  const wedge = r => ['SpokeInsert', 'Push', 'AttackCharge'].includes(r.intent.type) ? 1.5 : 1;
+  const pA = Math.max(20, vA + 80 + 160 * fA * wedge(ours)), pB = Math.max(20, vB + 80 + 160 * fB * wedge(opp));
+  const sA = pB / (pA + pB), sB = pA / (pA + pB);
+  ours.x -= nx * over * sA; ours.y -= ny * over * sA; opp.x += nx * over * sB; opp.y += ny * over * sB;
+  ours.touch = opp.touch = true;
+  return true;
+}
+function walls(r) {
+  let touch = false;
+  if (r.x < R_COL) { r.x = R_COL; touch = true; } if (r.x > A - R_COL) { r.x = A - R_COL; touch = true; }
+  if (r.y < R_COL) { r.y = R_COL; touch = true; } if (r.y > A - R_COL) { r.y = A - R_COL; touch = true; }
+  return touch;
+}
+function zoneOf(r) {
+  const cs = WHEELS.map(([px, py]) => floorColor(...toWorld(r, px, py)));
+  if (cs.every(c => c === 'R')) return 'R';
+  if (cs.every(c => c === 'B')) return 'B';
+  return null;
+}
+const TEAM = ['우리', '상대'];
+function rules(r, idx) {
+  const other = 1 - idx;
+  const z = zoneOf(r);
+  if (z !== r.zone) { r.zone = z; r.zoneSince = t; r.zoneScores = 0;
+    if (z) { score[other] += z === 'R' ? 3 : 2; r.zoneScores = 1; log(t, '득점', `${r.name} 로봇이 ${z === 'R' ? '빨강' : '파랑'} 영역 진입 → ${TEAM[other]} ${z === 'R' ? 3 : 2}점`); } }
+  if (r.zone) {
+    if (r.zoneScores === 1 && t - r.zoneSince >= 5000) { score[other] += 2; r.zoneScores = 2; log(t, '득점', `${r.name} 로봇 5초 유지 → ${TEAM[other]} 2점`); }
+    if (t - r.zoneSince >= 10000) { restartFromStart(`${r.name} 로봇 홈 10초`); return; }
+  }
+  if (r.wallTouch) { if (r.wallSince < 0) r.wallSince = t; else if (t - r.wallSince >= 10000) { score[other] += 1; log(t, '득점', `${r.name} 로봇 벽 10초 → ${TEAM[other]} 1점`); restartFromStart('벽 10초'); } }
+  else r.wallSince = -1;
+}
+
+// v2 입력: 센서별 확정 색과 끼임 판단 (실물 V2에서는 IMU·모터 전류로 판단)
+function obsOf(r) { return { h: hazardMask(r), colors: r.sens.map(q => q.reliable ? q.conf : null), stalled: r.stalled }; }
+function stallCheck(r, dt) {
+  const cmd = Math.abs(r.cmd[0] + r.cmd[1]) / 2;
+  const moved = Math.hypot(r.x - (r.px ?? r.x), r.y - (r.py ?? r.y)); r.px = r.x; r.py = r.y;
+  const slow = cmd > 250 && moved / dt * 1000 < 60; // 출력은 큰데 실제로 거의 안 움직임
+  if (slow) { if (r.slowSince < 0) r.slowSince = t; } else r.slowSince = -1;
+  r.stalled = r.slowSince >= 0 && t - r.slowSince > V2.STALL_MS;
+}
+function step(dt) {
+  t += dt;
+  const allowed = started;
+  for (const [self, other] of [[ours, opp], [opp, ours]]) { sampleSensors(self); updateVision(self, other); }
+  ours.fsm = ui('ourFsm').value === 'v2' ? ours.fsm2 : ours.fsm1;
+  opp.fsm = ui('opp').value === 'v2' ? opp.fsm2 : opp.fsm1;
+  const think = r => r.fsm === r.fsm2 ? r.fsm.update(t, obsOf(r), r.vis, allowed) : r.fsm.update(t, hazardMask(r), r.vis, allowed);
+  ours.intent = think(ours);
+  const oi = allowed ? oppIntent(opp) : { type:'Brake', duty:0, steer:0 };
+  opp.intent = oi || think(opp);
+  ours.cmd = makeCommand(ours.intent); opp.cmd = makeCommand(opp.intent);
+  drive(ours, dt, ours.gain); drive(opp, dt, P.oppPow * opp.gain);
+  collide();
+  ours.wallTouch = walls(ours); opp.wallTouch = walls(opp);
+  for (const r of [ours, opp]) stallCheck(r, dt);
+  if (allowed) { rules(ours, 0); rules(opp, 1); }
+  if (allowed && t >= MATCH_MS) { started = false; running = false; log(t, '심판', '경기 종료'); }
+}
+
+// ---- drawing ----
+const cv = ui('cv'), g = cv.getContext('2d');
+const S = () => cv.width / A, X = x => x * S(), Y = y => (A - y) * S();
+function drawArena() {
+  const s = S();
+  g.fillStyle = '#101010'; g.fillRect(0, 0, cv.width, cv.height);
+  g.fillStyle = '#C73535'; g.beginPath(); g.arc(X(A/2), Y(A/2), RED_R * s, 0, 2 * Math.PI); g.fill();
+  g.fillStyle = '#2C66C9';
+  for (const [cx, cy] of [[0,0],[A,0],[0,A],[A,A]]) { g.beginPath(); g.moveTo(X(cx), Y(cy)); g.arc(X(cx), Y(cy), BLUE_R * s, 0, 2 * Math.PI); g.fill(); }
+  g.fillStyle = '#D9A62E';
+  for (const yl of yellows) { g.save(); g.translate(X(yl.cx), Y(yl.cy)); g.rotate(-yl.a); g.fillRect(-YEL_L/2 * s, -YEL_W/2 * s, YEL_L * s, YEL_W * s); g.restore(); }
+  g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = Math.max(2, 20 * s);
+  g.beginPath(); g.moveTo(X(130), Y(1300)); g.lineTo(X(130), Y(1350)); g.lineTo(X(430), Y(1350)); g.lineTo(X(430), Y(1300)); g.stroke();
+  g.beginPath(); g.moveTo(X(A - 430), Y(A - 1300)); g.lineTo(X(A - 430), Y(A - 1350)); g.lineTo(X(A - 130), Y(A - 1350)); g.lineTo(X(A - 130), Y(A - 1300)); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,.06)';
+  for (let i = 300; i < A; i += 300) { g.beginPath(); g.moveTo(X(i), 0); g.lineTo(X(i), cv.height); g.moveTo(0, Y(i)); g.lineTo(cv.width, Y(i)); g.stroke(); }
+  g.strokeStyle = '#555'; g.lineWidth = 6; g.strokeRect(3, 3, cv.width - 6, cv.height - 6);
+  g.fillStyle = 'rgba(255,255,255,.35)'; g.font = `${12 * cv.width / 900}px IBM Plex Mono, monospace`;
+  g.fillText('2400 × 2400 mm · 격자 300 mm', 12, cv.height - 12);
+}
+const COL = { K:'#333', R:'#E5534B', B:'#4C8EFF', Y:'#E3B341' };
+function drawFov(r, color) {
+  if (!ui('fov').checked || !P.pi) return;
+  const s = S(), [cx, cy] = toWorld(r, 0, P.camOff), half = P.fovDeg * Math.PI / 360, L = Math.min(P.camRange, 3400) * s;
+  g.fillStyle = color; g.beginPath(); g.moveTo(X(cx), Y(cy));
+  g.arc(X(cx), Y(cy), L, -(r.a + half), -(r.a - half)); g.closePath(); g.fill();
+}
+function drawOurs(r) {
+  const s = S();
+  g.save(); g.translate(X(r.x), Y(r.y)); g.rotate(Math.PI/2 - r.a + (ui('flip').checked ? Math.PI : 0));
+  const w = 300 * s, h = w * (ROBOT_IMG.naturalHeight / (ROBOT_IMG.naturalWidth || 1) || 1);
+  if (ROBOT_IMG.complete && ROBOT_IMG.naturalWidth) g.drawImage(ROBOT_IMG, -w/2, -h/2, w, h);
+  else { g.fillStyle = '#C9C2B4'; g.fillRect(-w/2, -w/2, w, w); }
+  g.restore();
+  drawHeading(r, '#58A6FF');
+  drawSensors(r);
+}
+function drawOpp(r) {
+  const s = S(), w = 290 * s;
+  g.save(); g.translate(X(r.x), Y(r.y)); g.rotate(Math.PI/2 - r.a);
+  g.fillStyle = '#3A3F47'; g.strokeStyle = '#8B949E'; g.lineWidth = 2;
+  g.beginPath(); g.roundRect(-w/2, -w/2, w, w, 18 * s); g.fill(); g.stroke();
+  g.fillStyle = '#6E7681'; g.beginPath(); g.moveTo(-w/2, -w/2); g.lineTo(w/2, -w/2); g.lineTo(w/2 - 30*s, -w/2 + 45*s); g.lineTo(-w/2 + 30*s, -w/2 + 45*s); g.closePath(); g.fill();
+  g.fillStyle = '#1F1F1F'; for (const [px, py] of [[-150, -100], [150, -100], [-150, 100], [150, 100]]) g.fillRect((px > 0 ? px - 22 : px) * s, (py - 35) * s, 22 * s, 70 * s);
+  g.fillStyle = '#2EA043'; g.strokeStyle = '#7EE787'; g.beginPath(); g.arc(0, 0, 55 * s, 0, 2 * Math.PI); g.fill(); g.stroke();
+  g.restore();
+  drawHeading(r, '#F0883E');
+  if (['fsm', 'v2'].includes(ui('opp').value)) drawSensors(r);
+}
+function drawHeading(r, color) {
+  const s = S(), [fx, fy] = toWorld(r, 0, 230);
+  g.strokeStyle = color; g.lineWidth = 3; g.beginPath(); g.moveTo(X(r.x), Y(r.y)); g.lineTo(X(fx), Y(fy)); g.stroke();
+}
+function drawSensors(r) {
+  const s = S();
+  SENSORS.forEach(([px, py], i) => {
+    const [wx, wy] = toWorld(r, px, py), q = r.sens[i];
+    g.fillStyle = COL[q.reliable ? q.conf : 'K']; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(X(wx), Y(wy), 16 * s, 0, 2 * Math.PI); g.fill(); g.stroke();
+  });
+}
+function draw() {
+  drawArena();
+  drawFov(opp, 'rgba(240,136,62,.10)'); drawFov(ours, 'rgba(88,166,255,.14)');
+  drawOpp(opp); drawOurs(ours);
+}
+
+// ---- panel ----
+const NAMES = { K:'검정', R:'빨강', B:'파랑', Y:'노랑' }, SN = ['전방 왼쪽', '전방 오른쪽', '후방 왼쪽', '후방 오른쪽'];
+function panel() {
+  const rem = Math.max(0, MATCH_MS - t), m = Math.floor(rem / 60000), sec = Math.floor(rem / 1000) % 60;
+  ui('clock').textContent = `${m}:${String(sec).padStart(2, '0')}`;
+  ui('phase').textContent = !started ? (t > 0 ? '정지' : '대기') : (paused ? '일시정지' : '경기 중');
+  ui('scA').textContent = score[0]; ui('scB').textContent = score[1];
+  ui('st').textContent = ours.fsm.state;
+  ui('intent').textContent = `${ours.intent.type}${ours.intent.duty ? ' ' + ours.intent.duty + '‰' : ''}${ours.intent.steer ? ' 조향 ' + ours.intent.steer : ''}`;
+  ui('motor').textContent = `${ours.cmd[0]} / ${ours.cmd[1]}`;
+  ui('vel').textContent = `${(((ours.vl + ours.vr) / 2) / 1000).toFixed(2)} m/s`;
+  const v = ours.vis; ui('vis').textContent = !P.pi ? '영상 없음' : v.targetValid ? `${v.targetX}, ${v.targetHeight}px` : '안 보임';
+  ui('sens').innerHTML = ours.sens.map((q, i) => `<div><span>${SN[i]}</span><span><i class="chip" style="background:${COL[q.reliable ? q.conf : 'K']}"></i>${q.reliable ? NAMES[q.conf] : '—'}</span></div>`).join('');
+  ui('log').textContent = logLines.join('\n');
+}
+
+// ---- loop ----
+let last = performance.now();
+function frame(now) {
+  const dtReal = Math.min(100, now - last); last = now;
+  if (running && !paused) { let sim = dtReal * +ui('speed').value; while (sim > 0) { const d = Math.min(2, sim); step(d); sim -= d; } }
+  draw(); panel(); requestAnimationFrame(frame);
+}
+
+// ---- controls ----
+ui('btnStart').addEventListener('click', () => {
+  if (!started) { if (t >= MATCH_MS) resetAll(); started = true; running = true; paused = false; resetFsms(); log(t, '심판', '시작 (SW2)'); }
+});
+ui('btnPause').addEventListener('click', () => { if (!started) return; paused = !paused; ui('btnPause').textContent = paused ? '계속' : '일시정지'; });
+ui('btnReset').addEventListener('click', resetAll);
+ui('btnStep').addEventListener('click', () => { if (!started) { started = true; running = true; paused = true; resetFsms(); ui('btnPause').textContent = '계속'; } for (let i = 0; i < 50; i++) step(2); });
+ui('startPos').addEventListener('change', () => { if (!started) placeRobots(); });
+
+// drag & rotate robots while stopped
+let dragging = null;
+function toMm(e) { const b = cv.getBoundingClientRect(); return [(e.clientX - b.left) / b.width * A, A - (e.clientY - b.top) / b.height * A]; }
+function pick(mx, my) { for (const r of [ours, opp]) if (Math.hypot(mx - r.x, my - r.y) < R_COL) return r; return null; }
+cv.addEventListener('pointerdown', e => { if (started && !paused) return; const [mx, my] = toMm(e); dragging = pick(mx, my); if (dragging) cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => { if (!dragging) return; const [mx, my] = toMm(e); dragging.x = Math.max(R_COL, Math.min(A - R_COL, mx)); dragging.y = Math.max(R_COL, Math.min(A - R_COL, my)); });
+cv.addEventListener('pointerup', () => { dragging = null; });
+cv.addEventListener('wheel', e => { if (started && !paused) return; const [mx, my] = toMm(e); const r = pick(mx, my); if (!r) return; e.preventDefault(); r.a += (e.deltaY > 0 ? -1 : 1) * Math.PI / 36; }, { passive: false });
+
+function fit() { const w = Math.min(1100, Math.round(cv.getBoundingClientRect().width * (window.devicePixelRatio || 1))); if (w > 0 && w !== cv.width) { cv.width = w; cv.height = w; } }
+window.addEventListener('resize', fit);
+window.__sim = () => ({ ours, opp, t, score, started, logLines });
+window.__V2 = V2;
+resetAll(); fit(); requestAnimationFrame(frame);
+})();
+</script>
