@@ -44,9 +44,11 @@ struct ResolvedLed {
 Adafruit_NeoPixel internalPixel(
     LED_COUNT, static_cast<uint16_t>(pins::RGB_LED_INTERNAL),
     NEO_GRB + NEO_KHZ800);
+#if PINS_HAS_EXTERNAL_RGB_LED
 Adafruit_NeoPixel externalPixel(
     LED_COUNT, static_cast<uint16_t>(pins::RGB_LED_EXTERNAL),
     NEO_GRB + NEO_KHZ800);
+#endif
 
 portMUX_TYPE ledMux = portMUX_INITIALIZER_UNLOCKED;
 LedRequest requests[TARGET_COUNT][OWNER_COUNT];
@@ -192,11 +194,13 @@ void writePixel(Adafruit_NeoPixel& pixel, uint32_t& previousColor,
 
 void StatusLed::begin() {
   internalPixel.begin();
-  externalPixel.begin();
   internalPixel.clear();
-  externalPixel.clear();
   internalPixel.show();
+#if PINS_HAS_EXTERNAL_RGB_LED
+  externalPixel.begin();
+  externalPixel.clear();
   externalPixel.show();
+#endif
 
   portENTER_CRITICAL(&ledMux);
   for (size_t target = 0; target < TARGET_COUNT; ++target) {
@@ -289,8 +293,13 @@ void StatusLed::update(uint32_t nowMs) {
   const RgbColor externalColor = displayedColor(external.state, nowMs);
   writePixel(internalPixel, lastInternalColor, internalColor,
              config::led::INTERNAL_BRIGHTNESS, internalStatus);
+#if PINS_HAS_EXTERNAL_RGB_LED
   writePixel(externalPixel, lastExternalColor, externalColor,
              config::led::EXTERNAL_BRIGHTNESS, externalStatus);
+#else
+  // V2 has no external LED (GPIO13 is an IR input). Keep the logical state.
+  (void)externalColor;
+#endif
 
   portENTER_CRITICAL(&ledMux);
   latestStatus.internal = internalStatus;

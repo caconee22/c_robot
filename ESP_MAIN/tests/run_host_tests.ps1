@@ -1,4 +1,5 @@
-param([switch]$Demo, [switch]$Bench)
+# -V2 builds against pins_v2.hpp (HW_VERSION=2) with the AS7341 model only.
+param([switch]$Demo, [switch]$Bench, [switch]$V2)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $compilerCommand = Get-Command g++ -ErrorAction SilentlyContinue
@@ -16,12 +17,14 @@ $sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src') -Filt
     ForEach-Object FullName)
 $sourceFiles += Join-Path $PSScriptRoot 'host\fake_hardware.cpp'
 $sourceFiles += Join-Path $PSScriptRoot $(if ($Bench) { 'host\test_bench.cpp' } else { 'host\test_firmware.cpp' })
-foreach ($model in @(1, 2)) {
+$hwVersion = if ($V2) { 2 } else { 1 }
+$models = if ($V2) { @(1) } else { @(1, 2) }
+foreach ($model in $models) {
     $testName = if ($Bench) { 'bench-tests' } else { 'firmware-tests' }
-    $executable = Join-Path $buildDirectory "$testName-$model.exe"
+    $executable = Join-Path $buildDirectory "$testName-hw$hwVersion-$model.exe"
     $arguments = @('-std=c++17', '-O1', '-Wall', '-Wextra', '-Werror',
         '-Wno-unused-variable',
-        "-DCOLOR_SENSOR_MODEL=$model", '-I', (Join-Path $PSScriptRoot 'host'),
+        "-DCOLOR_SENSOR_MODEL=$model", "-DHW_VERSION=$hwVersion", '-I', (Join-Path $PSScriptRoot 'host'),
         '-I', (Join-Path $projectRoot 'include')) + $sourceFiles + @('-o', $executable)
     & $compilerPath @arguments
     if ($LASTEXITCODE -ne 0) { throw "Compilation failed for sensor model $model." }

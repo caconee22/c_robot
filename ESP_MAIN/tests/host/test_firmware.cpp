@@ -104,6 +104,12 @@ void testButtonsAndEstop() {
   MotorController::forward(400,running());
   CHECK(ButtonInterrupts::emergencyLatched());
   CHECK(!Bts7960Driver::clearDriveInhibit());
+  // The SW1 ISR by itself must clear every configured EN pin. The register
+  // bank masks are built from pins.hpp, so this also covers the V2 pins.
+  const gpio_num_t enPins[]={pins::MOTOR1_LEN,pins::MOTOR1_REN,pins::MOTOR2_LEN,pins::MOTOR2_REN};
+  for(const auto en:enPins) fake::pins[en]=HIGH;
+  fake::level(pins::SAFETY_SWITCH,HIGH); fake::level(pins::SAFETY_SWITCH,LOW);
+  for(const auto en:enPins) CHECK(fake::pins[en]==LOW);
   fake::stopOnDelay=true;
   try { SystemManager::update(millis()); CHECK(false); } catch(const fake::StopLoop&) {}
   fake::stopOnDelay=false;

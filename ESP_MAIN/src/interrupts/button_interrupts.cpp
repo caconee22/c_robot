@@ -27,11 +27,27 @@ uint32_t startRawChangedMs = 0;
 uint32_t startLastStableChangeMs = 0;
 volatile uint32_t pendingStartEvents = 0;
 
+// EN pins can sit in either GPIO register bank (0..31 or 32..48), and the
+// bank differs between V1 and V2. Masks are built from pins.hpp at compile
+// time so the ISR always clears exactly the configured EN pins.
+constexpr uint32_t lowBankBit(gpio_num_t pin) {
+  return pin < 32 ? (1UL << pin) : 0UL;
+}
+constexpr uint32_t highBankBit(gpio_num_t pin) {
+  return pin >= 32 ? (1UL << (pin - 32)) : 0UL;
+}
+constexpr uint32_t EN_MASK_LOW_BANK =
+    lowBankBit(pins::MOTOR1_LEN) | lowBankBit(pins::MOTOR1_REN) |
+    lowBankBit(pins::MOTOR2_LEN) | lowBankBit(pins::MOTOR2_REN);
+constexpr uint32_t EN_MASK_HIGH_BANK =
+    highBankBit(pins::MOTOR1_LEN) | highBankBit(pins::MOTOR1_REN) |
+    highBankBit(pins::MOTOR2_LEN) | highBankBit(pins::MOTOR2_REN);
+static_assert(EN_MASK_LOW_BANK != 0 || EN_MASK_HIGH_BANK != 0,
+              "SW1 must cut at least one motor EN pin");
+
 void IRAM_ATTR disableMotorEnPins() {
-  // V1 EN pins span both register banks. Keep ISR masks tied to pins.hpp.
-  GPIO.out_w1tc = (1UL << pins::MOTOR2_REN) | (1UL << pins::MOTOR2_LEN);
-  GPIO.out1_w1tc.val = (1UL << (pins::MOTOR1_REN - 32)) |
-                      (1UL << (pins::MOTOR1_LEN - 32));
+  GPIO.out_w1tc = EN_MASK_LOW_BANK;
+  GPIO.out1_w1tc.val = EN_MASK_HIGH_BANK;
 }
 
 void IRAM_ATTR onEmergencyPressed() {

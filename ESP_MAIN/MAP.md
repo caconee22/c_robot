@@ -3,6 +3,8 @@
 코딩을 모르는 현장 팀원과 작업할 때는 [TEAM_GUIDE.md](TEAM_GUIDE.md)도 함께 읽고,
 그 문서의 용어와 설명 수준에 맞춰 답한다.
 
+**Wi-Fi, 외부 플래시·PSRAM, 네이티브 USB는 사용 금지다** (AGENTS.md "하드웨어 기능 사용 금지").
+
 이 문서는 펌웨어 구조를 한 장으로 요약한다. 규칙은 [AGENTS.md](AGENTS.md),
 설명과 사용법은 [README.md](README.md), 검증 이력은 [VERIFICATION.md](VERIFICATION.md)에 있다.
 각 모듈의 역할·호출 위치·안전 여부는 해당 헤더 맨 위 `// Contract` 주석에 있으니
@@ -27,6 +29,7 @@
 | 내용 | 원본 |
 |---|---|
 | GPIO 핀 (V1 확정, 변경 금지) | `include/pins.hpp` |
+| GPIO 핀 (V2, 실물 미검증) | `include/pins_v2.hpp` |
 | UART 속도·타임아웃, 버튼, LED, 로그 크기 | `include/config.hpp` |
 | 모터 PWM·출력 상한·명령 만료·브레이크 조합 | `include/motor/motor_config.hpp` |
 | FSM 출력·시간·중심 기준·위험색 | `include/control/control_config.hpp` |
@@ -100,6 +103,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | `robot_bench` | `src/bench_main.cpp` | 저출력 실물 시험 |
 | `sensor_serial_test` | `src/sensor_serial_test.cpp` | 센서 원시값 확인 (모터 미사용) |
 | `color_calibration` | `src/calibration_main.cpp` | 48단계 색 교정, NVS 저장 (모터 미사용) |
+| `*_v2` (위 네 가지 모두) | 같은 파일 | V2 기판용 (`HW_VERSION=2`, `pins_v2.hpp`) |
 
 ## 6. 빌드와 시험
 

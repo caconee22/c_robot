@@ -12,7 +12,8 @@ ESP32-S3 / Arduino / PlatformIO 기반 씨름 로봇 제어 코드다.
 
 ## 1. 하드웨어 범위
 
-현재 코드는 **V1**이다. PCBV2 핀을 적용하지 않는다.
+현재 코드는 **V1**이다. PCBV2 핀을 적용하지 않는다. V2는 브랜치 `v2/firmware-prep`에서 준비한다.
+**Wi-Fi, 외부 플래시·PSRAM, 네이티브 USB는 V1·V2 모두 사용 금지다.** 업로드와 로그는 UART0만 쓴다.
 네 모서리 컬러 센서만 사용하며 IR·IMU·전류·엔코더·배터리 ADC는 없다.
 한 차량에 AS7341 네 개 또는 TCS34725 네 개를 사용한다. 두 종류를 동시에 섞는 구성은 아니다.
 모터 1은 왼쪽, 2는 오른쪽이며 엔코더 속도/PID가 아닌 PWM 명령으로 구동한다.
@@ -56,6 +57,7 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 | `sensor_serial_test_tcs34725` | 같은 파일 | TCS34725 원시값만 확인 | 115200 |
 | `color_calibration` | `src/calibration_main.cpp` | 설정 파일의 센서로 48단계 교정, NVS 저장 | 57600 |
 | `color_calibration_tcs34725` | 같은 파일 | TCS34725 교정 | 57600 |
+| `yd_esp32_s3_v2`, `robot_bench_v2`, `sensor_serial_test_v2`, `color_calibration_v2` | 각 진입 파일 | V2 기판용 (`pins_v2.hpp`), 실물 미검증 | 위와 같음 |
 
 생산 환경은 벤치 컨트롤러를 빌드하지 않는다. 벤치는 생산 FSM 메인을 실행하지 않는다.
 센서 전용과 교정 펌웨어는 모터·버튼 ISR·시스템 안전관리도 실행하지 않는다.
@@ -486,7 +488,8 @@ cd D:\C_ROBOT\ESP_MAIN
 .\tests\run_host_tests.ps1
 .\tests\run_host_tests.ps1 -Bench
 .\tests\run_host_tests.ps1 -Demo
-pio run -e yd_esp32_s3 -e yd_esp32_s3_tcs34725 -e sensor_serial_test -e sensor_serial_test_tcs34725 -e robot_bench -e robot_bench_tcs34725 -e color_calibration -e color_calibration_tcs34725
+pio run -e yd_esp32_s3 -e yd_esp32_s3_tcs34725 -e sensor_serial_test -e sensor_serial_test_tcs34725 -e robot_bench -e robot_bench_tcs34725 -e color_calibration -e color_calibration_tcs34725 -e yd_esp32_s3_v2 -e robot_bench_v2 -e sensor_serial_test_v2 -e color_calibration_v2
+.\tests\run_host_tests.ps1 -V2
 cd D:\C_ROBOT
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
