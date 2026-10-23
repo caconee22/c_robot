@@ -25,7 +25,10 @@ SensorDevice sensors[4];
 bool tcaConnected = true;
 uint32_t busTransactions = 0;
 uint32_t transactionDelayMs = 0;
+uint32_t adcMillivolts[64] = {};
 void reset() {
+  // Default: a healthy 4S pack (15.2 V) behind the x11 divider.
+  std::fill(adcMillivolts,adcMillivolts+64,15200U/11U);
   now=0; std::fill(pins,pins+64,HIGH); std::fill(pwm,pwm+16,0);
   std::fill(interrupts,interrupts+64,nullptr); deferred.clear(); criticalDepth=0;
   Serial=FakeSerial{}; Serial1=FakeSerial{}; Wire=TwoWire{};
@@ -76,6 +79,8 @@ void detachInterrupt(int pin) { interrupts[pin]=nullptr; }
 double ledcSetup(uint8_t, double frequency, uint8_t) { return fake::pwmSetupOk ? frequency : 0; }
 void ledcAttachPin(int, uint8_t) {}
 void ledcWrite(uint8_t channel, uint32_t duty) { fake::pwm[channel]=duty; }
+void analogSetPinAttenuation(int, int) {}
+uint32_t analogReadMilliVolts(int pin) { return fake::adcMillivolts[pin]; }
 
 uint8_t TwoWire::endTransmission(bool) {
   fake::advance(fake::transactionDelayMs);

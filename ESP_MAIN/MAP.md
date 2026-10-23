@@ -19,6 +19,7 @@
 | 센서 판정 흐름 | `include/sensors/sensor_manager.hpp`, `src/sensors/sensor_manager.cpp` | `color_sensor_manager.cpp` |
 | 모터·브레이크 | `include/motor/motor_controller.hpp`, `include/motor/motor_config.hpp` | README §11 |
 | 안전·시작 절차 | `include/system/system_manager.hpp`, `include/interrupts/button_interrupts.hpp` | README §5, AGENTS "안전" |
+| 전원 투입 배터리 확인 (V2) | `include/system/battery_monitor.hpp`, `include/config.hpp`의 `battery` | |
 | 라즈 UART | `include/communication/vision_protocol.hpp`, `include/communication/raspberry_link.hpp` | README §10 |
 | 실물 벤치 시험 | [BENCH_TESTS.md](BENCH_TESTS.md) | README §14 |
 | 센서 교정 (별도 펌웨어) | `src/calibration_main.cpp`, `include/calibration/color_calibration.hpp` | README §9 |
@@ -30,7 +31,7 @@
 |---|---|
 | GPIO 핀 (V1 확정, 변경 금지) | `include/pins.hpp` |
 | GPIO 핀 (V2, 실물 미검증) | `include/pins_v2.hpp` |
-| UART 속도·타임아웃, 버튼, LED, 로그 크기 | `include/config.hpp` |
+| UART 속도·타임아웃, 버튼, LED, 로그 크기, 배터리 셀 수·전압 기준 | `include/config.hpp` |
 | 모터 PWM·출력 상한·명령 만료·브레이크 조합 | `include/motor/motor_config.hpp` |
 | FSM 출력·시간·중심 기준·위험색 | `include/control/control_config.hpp` |
 | 센서 종류·수광·게인·LED·임계값·확인 횟수 | `include/sensors/sensor_config.hpp` |
@@ -44,6 +45,7 @@
 SystemManager::update      안전 상태 갱신
 RaspberryLink::poll        UART1 최대 128바이트
 SensorManager::update      센서 짧은 I2C 단계
+BatteryMonitor::update     V2: 전원 투입 후 3초 안 배터리 판정 (ADC 1회, 판정 후 아무것도 안 함)
 SystemManager::update      안전 재확인 (의도된 반복)
 SensorManager::snapshot + RaspberryLink::latest
 RobotFsm::update           → DriveIntent
@@ -77,6 +79,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | 센서 I2C | `sensors/color_sensor_manager.hpp` | `update`, `sample` | SensorManager | |
 | 색 판별 | `sensors/floor_color_classifier.hpp` | `classify` | SensorManager | |
 | 교정값 저장소 | `sensors/calibration_store.hpp` | `load`, `data`, `valid` | SensorManager | |
+| 배터리 확인 (V2) | `system/battery_monitor.hpp` | `begin`, `update`, `status` | setup, loop | |
 | 로그 | `system/event_logger.hpp` | `log`, `faultChanged`, `process` | 모든 모듈 | |
 | LED | `system/status_led.hpp` | `setBoth`, `update` | 모든 모듈 | |
 

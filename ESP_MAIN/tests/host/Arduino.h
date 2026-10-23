@@ -44,6 +44,9 @@ void detachInterrupt(int pin);
 double ledcSetup(uint8_t channel, double frequency, uint8_t bits);
 void ledcAttachPin(int pin, uint8_t channel);
 void ledcWrite(uint8_t channel, uint32_t duty);
+#define ADC_11db 3
+void analogSetPinAttenuation(int pin, int attenuation);
+uint32_t analogReadMilliVolts(int pin);
 
 struct FakeSerial {
   std::deque<uint8_t> rx;
@@ -78,6 +81,7 @@ extern int criticalDepth;
 extern std::function<void()> writeHook;
 struct StopLoop {};
 extern bool stopOnDelay;
+extern uint32_t adcMillivolts[64];  // Pin voltage seen by analogReadMilliVolts.
 void reset();
 void advance(uint32_t ms);
 void level(int pin, int value, bool interrupt = true);

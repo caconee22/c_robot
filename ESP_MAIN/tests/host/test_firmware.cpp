@@ -16,6 +16,7 @@
 #include "sensors/floor_color_classifier.hpp"
 #include "sensors/sensor_config.hpp"
 #include "sensors/sensor_manager.hpp"
+#include "system/battery_monitor.hpp"
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
@@ -472,6 +473,48 @@ void testRealisticTimingAndBoot() {
   CHECK(!SystemManager::motorAllowed()); CHECK(Serial.tx.find("ESTOP")!=std::string::npos);
 }
 
+#if HW_VERSION == 2
+// Run the battery check until it decides or the window plus margin passes.
+BatteryCheckResult runBatteryCheck(uint32_t packMv, uint32_t riseAtMs = 0) {
+  fixture(); SystemManager::update(millis());
+  fake::adcMillivolts[pins::BATTERY_ADC] = riseAtMs ? 0 : packMv / 11;
+  BatteryMonitor::begin(millis());
+  for (uint32_t t = 0; t < config::battery::CHECK_WINDOW_MS + 200; t += 10) {
+    if (riseAtMs && t >= riseAtMs) fake::adcMillivolts[pins::BATTERY_ADC] = packMv / 11;
+    BatteryMonitor::update(millis()); SystemManager::update(millis()); fake::advance(10);
+  }
+  return BatteryMonitor::status().result;
+}
+#endif
+void testBattery() {
+#if HW_VERSION == 2
+  // Healthy 4S passes quickly and the robot can start.
+  CHECK(runBatteryCheck(15200) == BatteryCheckResult::Ok);
+  pressStart(); CHECK(SystemManager::motorAllowed());
+  // No battery (USB only), 3S full, and 5S are refused; start is blocked.
+  CHECK(runBatteryCheck(0) == BatteryCheckResult::Missing);
+  pressStart(); CHECK(!SystemManager::motorAllowed());
+  CHECK(SystemManager::state() == SystemState::SystemFault);
+  CHECK(runBatteryCheck(12600) == BatteryCheckResult::Low);
+  pressStart(); CHECK(!SystemManager::motorAllowed());
+  CHECK(runBatteryCheck(21000) == BatteryCheckResult::High);
+  pressStart(); CHECK(!SystemManager::motorAllowed());
+  // A pack connected 1 s after power-up still passes inside the window.
+  CHECK(runBatteryCheck(16000, 1000) == BatteryCheckResult::Ok);
+  pressStart(); CHECK(SystemManager::motorAllowed());
+  // Decided once: later voltage changes do not re-run the check.
+  fake::adcMillivolts[pins::BATTERY_ADC] = 0;
+  for (int i = 0; i < 50; ++i) { BatteryMonitor::update(millis()); fake::advance(20); }
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Ok);
+#else
+  // V1 has no battery input: the check is skipped and start is unaffected.
+  fixture(); BatteryMonitor::begin(millis());
+  for (int i = 0; i < 400; ++i) { BatteryMonitor::update(millis()); fake::advance(10); }
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::NotAvailable);
+  SystemManager::update(millis()); pressStart(); CHECK(SystemManager::motorAllowed());
+#endif
+}
+
 void testMainIntegration() {
   fake::reset(); setup();
   for(uint8_t i=0;i<4;++i) fake::floor(i,3);
@@ -517,6 +560,7 @@ int main(int argc,char** argv) {
       {"color sampling/errors/no recovery",testColorsAndErrors},{"three independent samples",testThreeSamples},
       {"continuous single-exposure floor mode",testContinuousFloorMode},
       {"48-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},
+      {"power-on battery check",testBattery},
       {"real main loop integration",testMainIntegration},
       {"I2C time/optional sensors/boot ESTOP",testRealisticTimingAndBoot}};
     for(const auto& test:tests) { test.run(); ++groups; std::cout<<"PASS "<<test.name<<"\n"; }

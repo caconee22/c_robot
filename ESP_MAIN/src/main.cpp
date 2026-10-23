@@ -6,6 +6,7 @@
 #include "control/robot_fsm.hpp"
 #include "motor/motor_controller.hpp"
 #include "sensors/sensor_manager.hpp"
+#include "system/battery_monitor.hpp"
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
@@ -65,6 +66,7 @@ void setup() {
   if (!boot.safeToRun) stayInBootFailure();
 
   RobotFsm::begin();
+  BatteryMonitor::begin(millis());
   EventLogger::logText(static_cast<uint16_t>(EventId::Custom),
                        LogSeverity::Info, LogSource::System,
                        "fsm_ready");
@@ -77,6 +79,7 @@ void loop() {
   SystemManager::update(nowMs);
   RaspberryLink::poll();
   SensorManager::update();
+  BatteryMonitor::update(millis());
   nowMs = millis();
   SystemManager::update(nowMs);
   const SystemStatus system = SystemManager::status();
