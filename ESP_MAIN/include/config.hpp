@@ -33,11 +33,13 @@ constexpr size_t TRACKER_SIZE = 32;
 }  // namespace event_log
 
 // Power-on battery check (V2 only, BatteryMonitor). Pack voltage must stay in
-// CELL_COUNT x [CELL_MIN_MV, CELL_MAX_MV] for OK_SAMPLES_REQUIRED samples in a
-// row within CHECK_WINDOW_MS, or the robot will not start. Default: 4S LiPo.
+// n x [CELL_MIN_MV, CELL_MAX_MV] for some n in CELL_COUNT_MIN..CELL_COUNT_MAX
+// (3S and 4S LiPo both used), OK_SAMPLES_REQUIRED samples in a row within
+// CHECK_WINDOW_MS, or the robot will not start.
 // Divider and thresholds are not yet verified on the V2 board.
 namespace battery {
-constexpr uint32_t CELL_COUNT = 4;
+constexpr uint32_t CELL_COUNT_MIN = 3;
+constexpr uint32_t CELL_COUNT_MAX = 4;
 constexpr uint32_t CELL_MIN_MV = 3300;   // Below: empty or fewer cells.
 constexpr uint32_t CELL_MAX_MV = 4250;   // Above: more cells than expected.
 constexpr uint32_t MISSING_BELOW_MV = 5000;  // Pack below this = no battery.

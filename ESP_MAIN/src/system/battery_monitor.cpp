@@ -12,12 +12,20 @@ BatteryStatus current;
 uint32_t checkStartedMs = 0;
 uint32_t lastSampleMs = 0;
 bool sampled = false;
+uint8_t lastCells = 0;
 
-constexpr uint32_t packMinMv() {
-  return config::battery::CELL_COUNT * config::battery::CELL_MIN_MV;
-}
 constexpr uint32_t packMaxMv() {
-  return config::battery::CELL_COUNT * config::battery::CELL_MAX_MV;
+  return config::battery::CELL_COUNT_MAX * config::battery::CELL_MAX_MV;
+}
+
+// Cell count whose per-cell range holds the pack voltage, or 0 if none does
+// (e.g. 12.8-13.1 V: too high for 3S, too low for 4S).
+uint8_t cellsFor(uint32_t packMv) {
+  for (uint32_t n = config::battery::CELL_COUNT_MIN; n <= config::battery::CELL_COUNT_MAX; ++n) {
+    if (packMv >= n * config::battery::CELL_MIN_MV && packMv <= n * config::battery::CELL_MAX_MV)
+      return static_cast<uint8_t>(n);
+  }
+  return 0;
 }
 
 void finish(BatteryCheckResult result) {
@@ -27,7 +35,7 @@ void finish(BatteryCheckResult result) {
                        result == BatteryCheckResult::Ok ? LogSeverity::Info
                                                         : LogSeverity::Error,
                        LogSource::System, BatteryMonitor::resultName(result), mv,
-                       config::battery::CELL_COUNT, 0);
+                       current.cells, 0);
   if (result == BatteryCheckResult::Ok) return;
   const FaultCode fault = result == BatteryCheckResult::Missing
                               ? FaultCode::Disconnected
@@ -47,6 +55,7 @@ void BatteryMonitor::begin(uint32_t nowMs) {
   current.result = BatteryCheckResult::Checking;
   checkStartedMs = nowMs;
   sampled = false;
+  lastCells = 0;
 #else
   (void)nowMs;  // V1 has no battery voltage input.
 #endif
@@ -61,11 +70,13 @@ void BatteryMonitor::update(uint32_t nowMs) {
 
   const uint32_t pinMv = analogReadMilliVolts(pins::BATTERY_ADC);
   current.packMillivolts = pinMv * config::battery::DIVIDER_RATIO;
-  const bool inRange = current.packMillivolts >= packMinMv() &&
-                       current.packMillivolts <= packMaxMv();
-  current.okSamples = inRange ? current.okSamples + 1 : 0;
+  // Consecutive samples must agree on the same cell count.
+  const uint8_t cells = cellsFor(current.packMillivolts);
+  current.okSamples = cells && cells == lastCells ? current.okSamples + 1 : (cells ? 1 : 0);
+  lastCells = cells;
 
   if (current.okSamples >= config::battery::OK_SAMPLES_REQUIRED) {
+    current.cells = cells;
     finish(BatteryCheckResult::Ok);
     return;
   }

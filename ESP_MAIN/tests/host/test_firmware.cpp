@@ -491,11 +491,20 @@ void testBattery() {
   // Healthy 4S passes quickly and the robot can start.
   CHECK(runBatteryCheck(15200) == BatteryCheckResult::Ok);
   pressStart(); CHECK(SystemManager::motorAllowed());
-  // No battery (USB only), 3S full, and 5S are refused; start is blocked.
+  CHECK(BatteryMonitor::status().cells == 4);
+  // Full and nearly empty 3S also pass.
+  CHECK(runBatteryCheck(12600) == BatteryCheckResult::Ok);
+  CHECK(BatteryMonitor::status().cells == 3);
+  pressStart(); CHECK(SystemManager::motorAllowed());
+  CHECK(runBatteryCheck(10000) == BatteryCheckResult::Ok);
+  // No battery (USB only), 2S, a gap voltage (too high for 3S, too low for
+  // 4S), and 5S are refused; start is blocked.
   CHECK(runBatteryCheck(0) == BatteryCheckResult::Missing);
   pressStart(); CHECK(!SystemManager::motorAllowed());
   CHECK(SystemManager::state() == SystemState::SystemFault);
-  CHECK(runBatteryCheck(12600) == BatteryCheckResult::Low);
+  CHECK(runBatteryCheck(8000) == BatteryCheckResult::Low);
+  pressStart(); CHECK(!SystemManager::motorAllowed());
+  CHECK(runBatteryCheck(13000) == BatteryCheckResult::Low);
   pressStart(); CHECK(!SystemManager::motorAllowed());
   CHECK(runBatteryCheck(21000) == BatteryCheckResult::High);
   pressStart(); CHECK(!SystemManager::motorAllowed());

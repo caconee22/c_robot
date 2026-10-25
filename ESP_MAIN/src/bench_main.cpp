@@ -9,6 +9,7 @@
 #include "motor/motor_controller.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/sensor_manager.hpp"
+#include "system/battery_monitor.hpp"
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
@@ -20,6 +21,7 @@ uint8_t inputLength = 0;
 bool discardLine = false, logging = false;
 uint32_t lastInputMs = 0, lastLogMs = 0;
 uint8_t logRow = 5;
+bool batteryReported = false;
 
 void stop() {
   SystemManager::requestStop();
@@ -98,6 +100,22 @@ void console() {
   }
 }
 
+// One line once the power-on battery check decides (V2 only), for comparing
+// with a multimeter. Skipped until UART has room; never waits.
+void reportBattery() {
+  const auto battery = BatteryMonitor::status();
+  if (batteryReported || battery.result == BatteryCheckResult::Checking ||
+      battery.result == BatteryCheckResult::NotAvailable) return;
+  char line[64];
+  const int length = snprintf(line, sizeof(line), "BAT %s %lumV %uS\r\n",
+      BatteryMonitor::resultName(battery.result),
+      static_cast<unsigned long>(battery.packMillivolts), battery.cells);
+  if (length > 0 && static_cast<size_t>(length) < sizeof(line) && Serial.availableForWrite() >= length) {
+    Serial.write(reinterpret_cast<const uint8_t*>(line), length);
+    batteryReported = true;
+  }
+}
+
 void telemetry(uint32_t now) {
   if (!logging) return;
   if (logRow >= 5) {
@@ -145,6 +163,8 @@ void setup() {
   }
   MotorController::setOutputLimit(OUTPUT_LIMIT);
   BenchController::begin();
+  BatteryMonitor::begin(millis());
+  batteryReported = false;
   inputLength = 0; discardLine = logging = false; logRow = 5;
   lastInputMs = lastLogMs = millis();
   help();
@@ -154,6 +174,7 @@ void loop() {
   SystemManager::update(millis());
   RaspberryLink::poll();
   SensorManager::update();
+  BatteryMonitor::update(millis());
   SystemManager::update(millis());
   console();
   const auto command = BenchController::update(millis(), SystemManager::motorAllowed(),
@@ -166,6 +187,7 @@ void loop() {
   if (BenchController::finished()) { stop(); Serial.println("DONE MOTOR"); }
   StatusLed::update(millis());
   EventLogger::process();
+  reportBattery();
   telemetry(millis());
   delay(1);
 }

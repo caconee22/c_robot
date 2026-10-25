@@ -103,7 +103,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | 환경 | 진입 파일 | 용도 |
 |---|---|---|
 | `yd_esp32_s3` | `src/main.cpp` | 경기용 생산 펌웨어 |
-| `robot_bench` | `src/bench_main.cpp` | 저출력 실물 시험 |
+| `robot_bench` | `src/bench_main.cpp` | 저출력 실물 시험 (PC 쪽 명령 전송: `tools/bench_console.py`) |
 | `sensor_serial_test` | `src/sensor_serial_test.cpp` | 센서 원시값 확인 (모터 미사용) |
 | `color_calibration` | `src/calibration_main.cpp` | 48단계 색 교정, NVS 저장 (모터 미사용) |
 | `*_v2` (위 네 가지 모두) | 같은 파일 | V2 기판용 (`HW_VERSION=2`, `pins_v2.hpp`) |

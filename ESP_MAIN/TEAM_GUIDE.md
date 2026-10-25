@@ -59,6 +59,14 @@ pio run -e yd_esp32_s3 -t upload        # 경기용 올리기
 pio device monitor -b 57600             # 로그 보기
 ```
 
+**명령을 보낼 때는 `tools/bench_console.py`를 쓴다.** 펌웨어는 글자 사이가 250ms 넘게 벌어지면 그 줄을 버리고,
+`DRIVE`는 250ms마다 다시 보내야 한다. 일반 시리얼 모니터는 한 글자씩 보내서 명령이 실패한다.
+이 도구는 한 줄을 통째로 보내고 `DRIVE`를 0.1초마다 반복하며, 받은 로그를 `bench_날짜_시간.log`로 저장한다.
+
+```powershell
+python tools/bench_console.py COM5      # 포트 번호는 pio device list 로 확인
+```
+
 `sensor_serial_test`와 `color_calibration`은 모터를 켜지 않지만 **모터 전원은 분리하고** 쓴다.
 교정을 마치면 반드시 `yd_esp32_s3`를 다시 올려야 주행한다.
 
