@@ -8,9 +8,11 @@
 #include <cstring>
 
 #include "app/boot_manager.hpp"
+#include "calibration/color_calibration.hpp"
 #include "bench/bench_config.hpp"
 #include "bench/bench_controller.hpp"
 #include "communication/raspberry_link.hpp"
+#include "sensors/imu_monitor.hpp"
 #include "motor/motor_controller.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/sensor_manager.hpp"
@@ -25,8 +27,11 @@ char input[48];
 uint8_t inputLength = 0;
 bool discardLine = false, logging = false;
 uint32_t lastInputMs = 0, lastLogMs = 0;
-uint8_t logRow = 5;
+// Frame rows: 0 = D, 1..4 = S per sensor, 5 = extra row. ROWS means idle.
+constexpr uint8_t ROWS = 6;
+uint8_t logRow = ROWS;
 bool batteryReported = false;
+uint32_t lastCalLineMs = 0;
 
 void stop() {
   SystemManager::requestStop();
@@ -42,14 +47,27 @@ void reply(const char* line) {
 void help() {
   reply("MODE STOP|MOTOR|MANUAL|DATA|ALIGN|FOLLOW|AVOID\r\n");
   reply("SW2 press/release to arm; DRIVE -200..200, repeat <250ms\r\n");
-  reply("STOP / LOG ON|OFF / STATUS / HELP; UART0 57600\r\n");
+  reply("STOP / LOG ON|OFF / STATUS / HELP / IMU RESET; UART0 57600\r\n");
+  reply("CAL START / CAL ERASE / CAL STATUS: floor color calibration\r\n");
 }
 
+bool startsWith(const char* line, const char* prefix) { return !strncmp(line, prefix, strlen(prefix)); }
+
 void execute(const char* line) {
+  // While calibrating every line belongs to the calibration; motors stay braked.
+  if (ColorCalibration::active()) { ColorCalibration::command(line, millis()); return; }
+  if (startsWith(line, "CAL ")) {
+    // CAL STATUS only reports; anything else may start calibration, so stop first.
+    if (strcmp(line, "CAL STATUS")) { stop(); logging = false; logRow = ROWS; }  // quiet console for prompts
+    ColorCalibration::command(line, millis());
+    return;
+  }
   if (!strcmp(line, "STOP")) { stop(); reply("OK STOP\r\n"); return; }
   if (!strcmp(line, "HELP")) { stop(); help(); return; }
   if (!strcmp(line, "LOG ON")) { logging = true; return; }
-  if (!strcmp(line, "LOG OFF")) { logging = false; logRow = 5; return; }
+  // IMU reset only touches the IMU, so motion is not stopped.
+  if (!strcmp(line, "IMU RESET")) { ImuMonitor::requestReset(millis()); reply("OK IMU RESET\r\n"); return; }
+  if (!strcmp(line, "LOG OFF")) { logging = false; logRow = ROWS; return; }
   if (!strcmp(line, "STATUS")) { logging = true; lastLogMs = millis() - LOG_PERIOD_MS; return; }
   if (!strncmp(line, "MODE ", 5)) {
     for (uint8_t i = 0; i <= static_cast<uint8_t>(BenchMode::Avoid); ++i) {
@@ -58,7 +76,9 @@ void execute(const char* line) {
       stop(); BenchController::select(mode);
       if (mode == BenchMode::Data) logging = true;
       EventLogger::modeChanged(i);
-      reply("OK MODE; SW2 required for motion\r\n");
+      char ok[48];
+      snprintf(ok, sizeof(ok), "OK MODE %s; SW2 required\r\n", BenchController::modeName(mode));
+      reply(ok);
       return;
     }
   }
@@ -124,14 +144,84 @@ void reportBattery() {
   }
 }
 
+// Each frame is D, S1..S4 and one extra row. UART0 has only its 128-byte
+// hardware FIFO (no TX ring buffer), so every line stays under 128 bytes and
+// the extra rows take turns: IMU every other frame, the rest every 8th.
+enum class Extra : uint8_t { Imu, System, Motor, Link, Power };
+constexpr Extra EXTRA_ORDER[] = {Extra::Imu, Extra::System, Extra::Imu, Extra::Motor,
+                                 Extra::Imu, Extra::Link, Extra::Imu, Extra::Power};
+uint8_t extraIndex = 0;
+
+int extraLine(char* line, size_t size, uint32_t now, Extra kind) {
+  const auto ms = static_cast<unsigned long>(now);
+  switch (kind) {
+    case Extra::Imu: {
+      const auto imu = ImuMonitor::status();
+      const auto v = ImuMonitor::latest();
+      return snprintf(line, size, "I,%lu,%s,%02X,%u,%lu,%lu,%d,%d,%d,%d,%d,%d\r\n", ms,
+          ImuMonitor::stateName(imu.state), imu.whoAmI, imu.dataFresh ? 1 : 0,
+          static_cast<unsigned long>(imu.samples), static_cast<unsigned long>(imu.busErrors),
+          v.accel[0], v.accel[1], v.accel[2], v.gyro[0], v.gyro[1], v.gyro[2]);
+    }
+    case Extra::System: {
+      const auto sys = SystemManager::status();
+      return snprintf(line, size, "SYSTEM,%lu,%u,%u,%u,%u,%u,%lu,%u,%lu\r\n", ms,
+          static_cast<unsigned>(sys.state), MotorController::status().emergencyStopLatched ? 1 : 0,
+          sys.runRequested ? 1 : 0, sys.motorAllowed ? 1 : 0, sys.rearmRequired ? 1 : 0,
+          static_cast<unsigned long>(sys.startEventCount),
+          static_cast<unsigned>(ResetManager::reason()), static_cast<unsigned long>(sys.faultFlags));
+    }
+    case Extra::Motor: {
+      const auto motor = MotorController::status();
+      return snprintf(line, size, "MOTOR,%lu,%d,%d,%u,%u,%u,%lu,%lu\r\n", ms,
+          motor.requestedLeftPermille, motor.requestedRightPermille,
+          motor.outputsActive ? 1 : 0, static_cast<unsigned>(motor.lastResult),
+          static_cast<unsigned>(motor.stopMode), static_cast<unsigned long>(motor.commandValidUntilMs),
+          static_cast<unsigned long>(motor.watchdogStopCount));
+    }
+    case Extra::Link: {
+      const auto link = RaspberryLink::status();
+      return snprintf(line, size, "LINK,%lu,%u,%lu,%lu,%lu,%lu,%lu\r\n", ms, link.lastSequence,
+          static_cast<unsigned long>(link.lastPacketMs), static_cast<unsigned long>(link.lastFrameMs),
+          static_cast<unsigned long>(link.validPackets), static_cast<unsigned long>(link.invalidPackets),
+          static_cast<unsigned long>(link.duplicatePackets));
+    }
+    case Extra::Power: {
+      const auto battery = BatteryMonitor::status();
+      const auto led = StatusLed::status().internal;
+      return snprintf(line, size, "POWER_LED,%lu,%u,%lu,%u,%u,%u,%u,%u,%u,%u\r\n", ms,
+          static_cast<unsigned>(battery.result), static_cast<unsigned long>(battery.packMillivolts),
+          battery.cells, battery.okSamples, static_cast<unsigned>(led.state),
+          led.outputOn ? 1 : 0, led.red, led.green, led.blue);
+    }
+  }
+  return 0;
+}
+
+// While calibrating: one short machine-readable line every 250 ms for the GUI.
+// CAL,ms,state,step(0-based),sensor(0-based),color,pose,samples,stored
+void calibrationLine(uint32_t now) {
+  if (!ColorCalibration::active() || now - lastCalLineMs < 250) return;
+  const auto cal = ColorCalibration::status();
+  char line[96];
+  const int length = snprintf(line, sizeof(line), "CAL,%lu,%u,%u,%u,%s,%s,%u,%u\r\n",
+      static_cast<unsigned long>(now), static_cast<unsigned>(cal.state), cal.step, cal.sensorIndex,
+      floorColorName(cal.color), calibrationPoseName(cal.pose), cal.sampleCount, cal.storedDataValid ? 1 : 0);
+  if (length > 0 && static_cast<size_t>(length) < sizeof(line) && Serial.availableForWrite() >= length) {
+    Serial.write(reinterpret_cast<const uint8_t*>(line), length);
+    lastCalLineMs = now;
+  }
+}
+
 void telemetry(uint32_t now) {
   if (!logging) return;
-  if (logRow >= 5) {
+  if (logRow >= ROWS) {
     if (now - lastLogMs < LOG_PERIOD_MS) return;
     lastLogMs = now; logRow = 0;
+    extraIndex = (extraIndex + 1) % (sizeof(EXTRA_ORDER) / sizeof(EXTRA_ORDER[0]));
   }
-  if (now - lastLogMs >= LOG_FRAME_TIMEOUT_MS) { logRow = 5; return; }
-  char line[256];
+  if (now - lastLogMs >= LOG_FRAME_TIMEOUT_MS) { logRow = ROWS; return; }
+  char line[128];
   int length = 0;
   const auto sensors = SensorManager::snapshot();
   if (logRow == 0) {
@@ -143,6 +233,8 @@ void telemetry(uint32_t now) {
         motor.appliedRightPermille, vision.linkValid ? 1 : 0, vision.frameFresh ? 1 : 0,
         vision.targetValid ? 1 : 0, vision.targetX, vision.targetHeight,
         BenchController::hazardMask(sensors));
+  } else if (logRow == ROWS - 1) {
+    length = extraLine(line, sizeof(line), now, EXTRA_ORDER[extraIndex]);
   } else {
     const uint8_t i = logRow - 1;
     const auto& raw = sensors.colorRaw[i];
@@ -156,45 +248,10 @@ void telemetry(uint32_t now) {
         raw.channel[as ? 5 : 8], raw.channel[as ? 6 : 8],
         static_cast<unsigned>(ColorSensorManager::status().error[i]));
   }
-  // Append fields only: legacy D/S columns retain their original positions.
-  if (length > 0 && static_cast<size_t>(length) < sizeof(line) - 2 && logRow < 4) {
-    length -= 2;  // Replace CRLF with the diagnostic suffix.
-    const auto sys = SystemManager::status();
-    const auto motor = MotorController::status();
-    const auto battery = BatteryMonitor::status();
-    const auto led = StatusLed::status().internal;
-    const auto link = RaspberryLink::status();
-    int added = 0;
-    if (logRow == 0)
-      added = snprintf(line + length, sizeof(line) - length, ",SYSTEM,%u,%u,%u,%u,%u,%lu,%u,%lu\r\n",
-          static_cast<unsigned>(sys.state),
-          motor.emergencyStopLatched ? 1 : 0, sys.runRequested ? 1 : 0,
-          sys.motorAllowed ? 1 : 0, sys.rearmRequired ? 1 : 0,
-          static_cast<unsigned long>(sys.startEventCount),
-          static_cast<unsigned>(ResetManager::reason()), static_cast<unsigned long>(sys.faultFlags));
-    else if (logRow == 1)
-      added = snprintf(line + length, sizeof(line) - length, ",MOTOR,%d,%d,%u,%u,%u,%lu,%lu\r\n",
-          motor.requestedLeftPermille, motor.requestedRightPermille,
-          motor.outputsActive ? 1 : 0, static_cast<unsigned>(motor.lastResult),
-          static_cast<unsigned>(motor.stopMode), static_cast<unsigned long>(motor.commandValidUntilMs),
-          static_cast<unsigned long>(motor.watchdogStopCount));
-    else if (logRow == 2)
-      added = snprintf(line + length, sizeof(line) - length, ",LINK,%u,%lu,%lu,%lu,%lu,%lu\r\n",
-          link.lastSequence,
-          static_cast<unsigned long>(link.lastPacketMs), static_cast<unsigned long>(link.lastFrameMs),
-          static_cast<unsigned long>(link.validPackets), static_cast<unsigned long>(link.invalidPackets),
-          static_cast<unsigned long>(link.duplicatePackets));
-    else
-      added = snprintf(line + length, sizeof(line) - length, ",POWER_LED,%u,%lu,%u,%u,%u,%u,%u,%u,%u\r\n",
-          static_cast<unsigned>(battery.result),
-          static_cast<unsigned long>(battery.packMillivolts), battery.cells, battery.okSamples,
-          static_cast<unsigned>(led.state), led.outputOn ? 1 : 0, led.red, led.green, led.blue);
-
-    if (added <= 0 || static_cast<size_t>(added) >= sizeof(line) - length) return;
-    length += added;
-  }
+  // A line that does not fit is skipped, not retried forever.
+  if (length <= 0 || static_cast<size_t>(length) >= sizeof(line)) { ++logRow; return; }
   // Telemetry is best-effort; never wait for UART space while driving.
-  if (length > 0 && static_cast<size_t>(length) < sizeof(line) && Serial.availableForWrite() >= length) {
+  if (Serial.availableForWrite() >= length) {
     Serial.write(reinterpret_cast<const uint8_t*>(line), length);
     ++logRow;
   }
@@ -209,8 +266,11 @@ void BenchV2App::begin() {
   MotorController::setOutputLimit(OUTPUT_LIMIT);
   BenchController::begin();
   BatteryMonitor::begin(millis());
+  ImuMonitor::begin(millis());
+  ColorCalibration::begin();  // CalibrationStore was loaded by SensorManager::begin
   batteryReported = false;
-  inputLength = 0; discardLine = false; logging = true; logRow = 5;
+  inputLength = 0; discardLine = false; logging = true; logRow = ROWS;
+  extraIndex = sizeof(EXTRA_ORDER) / sizeof(EXTRA_ORDER[0]) - 1;  // first frame shows the IMU
   lastInputMs = lastLogMs = millis();
   help();
 }
@@ -219,12 +279,14 @@ void BenchV2App::update() {
   SystemManager::update(millis());
   RaspberryLink::poll();
   SensorManager::update();
+  ColorCalibration::tick(millis());
+  ImuMonitor::update(millis());
   BatteryMonitor::update(millis());
   SystemManager::update(millis());
   console();
   const auto command = BenchController::update(millis(), SystemManager::motorAllowed(),
       SensorManager::snapshot(), RaspberryLink::latest());
-  if (SystemManager::motorAllowed()) {
+  if (SystemManager::motorAllowed() && !ColorCalibration::active()) {
     if (!MotorController::apply(command, SystemManager::safetyStatus()) &&
         MotorController::status().lastResult == MotorControlResult::DriverFailure)
       SystemManager::setMotorHealthy(false, FaultCode::Driver);
@@ -234,5 +296,6 @@ void BenchV2App::update() {
   EventLogger::process();
   reportBattery();
   telemetry(millis());
+  calibrationLine(millis());
   delay(1);
 }

@@ -1,5 +1,7 @@
 # V1 실물 시험 펌웨어
 
+> **2026-10-31 정리:** 지금 쓰는 펌웨어는 `yd_esp32_s3_v2`(경기용)와 `robot_bench_v2_manual`(벤치 + 색 교정) 두 개뿐이다. 아래에 나오는 V1·TCS34725·`robot_bench`·`robot_bench_v2`·`sensor_serial_test`·`color_calibration` 환경과 `bench_console.py`는 `archive/`로 보관했다 (`archive/README.md`). 색 교정은 `tools/bench_gui.py`의 "색 교정" 탭.
+
 생산 공격 FSM과 별도인 테스트 코드다. V1 핀·기존 센서 설정·SW1 영구 비상정지·모터 명령
 만료 감시는 그대로 사용한다. 돌진/급정거/스포크 기동은 실행하지 않는다.
 
@@ -115,18 +117,11 @@ UART 출력 공간 부족, SW1 영구 정지를 확인했다. 생산 펌웨어�
 V1 벤치 파일, 기존 환경 정의, 핀 상수 및 안전 모듈은 변경하지 않았다.
 
 ```powershell
-.\pio.cmd run -e robot_bench_v2_manual
-.\pio.cmd run -e robot_bench_v2
-.\pio.cmd run -e robot_bench
-powershell -File tests/run_host_tests.ps1 -V2 -Bench
+pio run -e robot_bench_v2_manual
+pio run -e robot_bench_v2
+pio run -e robot_bench
+powershell -File tests/run_host_tests.ps1 -V2 -Bench   # 기존·새 V2 벤치 둘 다 시험
 ```
-
-`pio.cmd`는 사용자 프로필의 기존 PlatformIO Python을 실행하는 PATH 독립 진입점이다.
-플랫폼·라이브러리 버전은 바꾸지 않는다. 공용 설치가 읽기 전용이고
-`.pio/local-core` 캐시가 있으면 그 캐시를 사용한다. Windows의 긴 경로 문제를
-피하려고 빈 드라이브를 실행 동안 매핑하고 종료 시 해제한다.
-캐시가 없으면 기본 설치를 사용한다. PC 시험도 PATH와 사용자 프로필 다음으로
-로컬 캐시의 g++를 찾는다.
 
 UART0 Serial 57600bps로 부팅부터 진단 출력을 켠다.
 LOG ON/OFF, STATUS, MODE, DRIVE, STOP, HELP는 위 V1 명령 체계를 따른다.
@@ -142,27 +137,73 @@ BatteryMonitor를 그대로 사용한다. 전원 투입 후 3초 판정 창 안�
 출력 전압은 연속 배터리 감시값이 아니라 마지막 부팅 판정값이다.
 분압비와 전압 판정은 멀티미터로 비교해야 한다.
 
-기존 D 행과 네 S 행의 열 순서를 유지하고 끝에 필드를 추가한다.
-D에는 SYSTEM, S1에는 MOTOR, S2에는 LINK, S3에는 POWER_LED가 붙는다.
-S4는 기존 형식이다. 숫자 enum은 해당 API 헤더 정의를 따른다.
+D 행과 네 S 행은 기존 형식 그대로다. 프레임마다 여섯 번째 행 하나가 붙고,
+그 행은 돌아가며 바뀐다: I(IMU)는 두 프레임마다, 나머지는 여덟 프레임(0.8초)마다.
+UART0에는 128바이트 하드웨어 FIFO만 있고 TX 링버퍼가 없어서(`availableForWrite()` ≤ 128)
+128바이트가 넘는 줄은 영영 나가지 못한다. 그래서 진단을 기존 줄 끝에 붙이지 않고
+따로 짧은 줄로 낸다(PC 시험이 모든 줄 < 128바이트를 확인). 숫자 enum은 해당 API 헤더 정의를 따른다.
 EV 프레임은 기존 이벤트만 출력하며 실시간 수치를 EventLogger로 보내지 않는다.
 
 ```text
-D,기존 필드들...,SYSTEM,SystemState,모터비상래치,runRequested,motorAllowed,rearmRequired,startEventCount,resetReason,faultFlags
-S,기존 S1 필드들...,MOTOR,요청좌,요청우,outputsActive,lastResult,stopMode,commandValidUntilMs,watchdogStopCount
-S,기존 S2 필드들...,LINK,lastSequence,lastPacketMs,lastFrameMs,validPackets,invalidPackets,duplicatePackets
-S,기존 S3 필드들...,POWER_LED,BatteryCheckResult,packMillivolts,cells,okSamples,LedState,outputOn,R,G,B
+I,ms,IMU상태,WHO_AM_I(hex),dataFresh,samples,busErrors,ax,ay,az,gx,gy,gz
+SYSTEM,ms,SystemState,모터비상래치,runRequested,motorAllowed,rearmRequired,startEventCount,resetReason,faultFlags
+MOTOR,ms,요청좌,요청우,outputsActive,lastResult,stopMode,commandValidUntilMs,watchdogStopCount
+LINK,ms,lastSequence,lastPacketMs,lastFrameMs,validPackets,invalidPackets,duplicatePackets
+POWER_LED,ms,BatteryCheckResult,packMillivolts,cells,okSamples,LedState,outputOn,R,G,B
 ```
 
 적용 좌우 출력과 라즈 연결·최신 여부는 기존 D 필드에서 확인한다.
-100ms마다 다섯 행을 순서대로 시도하며 각 행은 해당 루프 시점의 스냅샷이다.
+100ms마다 여섯 행을 순서대로 시도하며 각 행은 해당 루프 시점의 스냅샷이다.
+57600bps에서 80ms 동안 보낼 수 있는 양은 약 460바이트라 한 프레임은 그 안에 들어가게 했다.
 80ms 프레임 제한과 UART 여유 공간 확인을 유지한다.
 공간이 부족하면 기다리지 않고 진단을 생략하며 명령 응답도 생략될 수 있다.
 PC 시험은 실제 최대 호출 시간을 보장하지 않는다.
 실물에서는 로그 ON/OFF 각각 UART1 50Hz 수신 누락, 최악 loop 호출 시간,
 모터 명령 갱신·안전 확인 간격 및 독립 만료 지연을 계측한다.
 
-미구현 목록: IMU(MPU6050), IR, 모터 전류(IS), 엔코더.
+### PC 시험 GUI (`tools/bench_gui.py`)
+
+포트 선택·연결, 로그(저장: `ESP_MAIN/logs/`), 상태판(배터리·모드·모터·ESTOP·센서 1–4·IMU), 명령 버튼,
+수동 명령 입력, 누르는 동안만 구동하는 주행 버튼(방향키 가능, Esc·Space는 언제나 STOP)이 있다.
+주행은 "바퀴를 바닥에서 띄웠음" 체크 뒤에만 된다. 맨 위 띠가 지금 상태(연결·SW2 대기·움직임 허용·구동 중·ESTOP·배터리 실패)를 한 줄로 알려 주고, 오른쪽 "일요일 시험 순서"는 로그로 확인되는 항목(BAT 값, 응답한 센서 번호, IMU, ESTOP)을 자동으로 채운다. "시험 결과 복사"로 결과를 붙여 넣을 수 있다. 포트 목록의 DEMO를 고르면 보드 없이 화면을 미리 볼 수 있다. tkinter가 있는 일반 Python으로 실행한다
+(PlatformIO 내장 Python에는 tkinter가 없음): `python tools/bench_gui.py`.
+창 없이 쓰는 모드: `python tools/bench_gui.py --cmd COM5 "STATUS" "MODE DATA" --listen 3`
+(DRIVE는 `--allow-drive`가 있어야 하고 한 번에 최대 3초 뒤 STOP). 해석 자체 시험: `python tools/test_bench_gui.py`.
+
+### 색 교정 (벤치 펌웨어 안, GUI "색 교정" 탭)
+
+`CAL START` → 48단계(센서 4 × 빨강·노랑·파랑·검정 × 평평 10mm·들림 20mm·눌림 3mm) → `CAL SAVE`.
+교정 중에는 모든 콘솔 줄이 교정으로 가고(`MODE`·`DRIVE` 무시), 모터는 매 루프 브레이크, D/S 로그는 멈춘다.
+펌웨어는 250ms마다 `CAL,ms,state,step,sensor,color,pose,samples,stored`(0부터 셈)를 내고,
+GUI는 이 줄과 `[CAL][RESULT]`·`[CAL][PREVIEW]`로 화면을 그린다. 측정 결과마다 포화·어두움·흔들림·샘플 수를
+참고용으로 판정한다(임계값은 실물에서 확인 전). `CAL STATUS`는 저장 여부만 묻고 모터를 멈추지 않는다.
+저장하면 `SensorManager`가 새 값을 바로 쓰므로, GUI의 "색 확인하러 가기"(LOG ON + MODE DATA)로 곧장 확인한다.
+교정 중 GUI 연결을 끊으면 `ABORT`를 보내 보드를 일반 벤치 상태로 되돌린다.
+
+### 세션 로그 (문제 생기면 Claude·Codex에 이 파일을 보여 주기)
+
+GUI와 `--cmd` 모드는 `ESP_MAIN/logs/bench_날짜_시간.log`에 모든 줄을 시각과 함께 남긴다.
+`<` 보드에서 받은 줄, `>` 보낸 명령, `#` GUI 동작(버튼, 체크, 교정 단계 판정), `!` 경고·오류·Python 예외.
+연결 전 GUI 오류는 `logs/bench_gui_errors.log`. `logs/`는 git에 올라가지 않는다.
+
+### IMU(MPU6050) 확인
+
+`ImuMonitor`(`include/sensors/imu_monitor.hpp`)가 부팅 때 IMU를 리셋하고(DEVICE_RESET → 100ms →
+깨우기 → WHO_AM_I 확인 → 설정) 10ms마다 데이터 준비 플래그와 값 14바이트를 한 번에 읽는다.
+가속·자세 계산은 하지 않고 원시값만 낸다. 모터와 안전 상태에는 영향이 없다.
+
+| 확인 | 정상 |
+|---|---|
+| `I` 줄 상태 | `READY` |
+| WHO_AM_I | `68` (호환 칩은 `70`·`72`·`98`도 허용, 그 밖이면 `FAULT`) |
+| dataFresh | `1` = 최근 100ms 안에 새 샘플이 있고 0.5초 안에 값이 변함 |
+| samples | 계속 증가 (약 100/초) |
+| 기체를 손으로 기울이기 | ax·ay·az가 바뀜 (±8g 설정, 1g ≈ 4096) |
+
+`IMU RESET` 명령으로 다시 리셋한다(모터는 멈추지 않음). 버스 오류가 연속 5번이면 `FAULT`로 멈추고
+스스로 다시 시도하지 않는다. 레지스터 설정(±8g, ±1000dps, DLPF 44Hz, 100Hz)과 주소 0x68은 실물에서 확인 전이다.
+
+미구현 목록: IR, 모터 전류(IS), 엔코더.
 해당 센서는 읽거나 초기화하지 않으며 엔코더 핀도 초기화하지 않는다.
 
 V2 핀맵 검증·GPIO48 내장 LED 존재는 **사용자 진술 기준(실측하지 않음)**이다.

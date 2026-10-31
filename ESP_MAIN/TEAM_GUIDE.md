@@ -42,12 +42,10 @@ AI가 "거리 센서를 쓰면 됩니다", "IMU로 기울기를 확인하면 됩
 
 | 이름 (환경) | 언제 쓰나 | 모터 | UART0 속도 |
 |---|---|---|---:|
-| `yd_esp32_s3` | **경기용.** 평소에는 이것 | 움직임 | 57600 |
-| `robot_bench` | 바퀴 띄우고 모터·회피를 낮은 출력으로 시험 | 최대 20% | 57600 |
-| `sensor_serial_test` | 센서 4개 원시값만 확인 | 안 씀 | 115200 |
-| `color_calibration` | 바닥 색 교정 (48단계) 후 저장 | 안 씀 | 57600 |
+| `yd_esp32_s3_v2` | **경기용.** 평소에는 이것 | 움직임 | 57600 |
+| `robot_bench_v2_manual` | 바퀴 띄우고 모터·센서·IMU 시험, **바닥 색 교정**도 여기서 | 최대 20% (교정 중 0) | 57600 |
 
-TCS34725 센서를 쓰는 차량이면 이름 뒤에 `_tcs34725`가 붙은 환경을 쓴다.
+펌웨어는 이 두 개뿐이다. 예전 환경(V1, `robot_bench`, `sensor_serial_test` 등)은 `archive/`에 보관했다.
 **V2 기판**에는 이름 뒤에 `_v2`가 붙은 환경을 쓴다 (예: `yd_esp32_s3_v2`). V1 기판에 V2 펌웨어를 올리거나
 그 반대로 하면 모터 핀이 달라 위험하다. 기판 버전을 먼저 확인한다.
 
@@ -55,20 +53,20 @@ VS Code의 PlatformIO 터미널에서 실행한다.
 
 ```powershell
 cd D:\C_ROBOT\ESP_MAIN
-pio run -e yd_esp32_s3 -t upload        # 경기용 올리기
+pio run -e yd_esp32_s3_v2 -t upload     # 경기용 올리기
 pio device monitor -b 57600             # 로그 보기
 ```
 
-**명령을 보낼 때는 `tools/bench_console.py`를 쓴다.** 펌웨어는 글자 사이가 250ms 넘게 벌어지면 그 줄을 버리고,
+**명령을 보낼 때는 `tools/bench_gui.py`(창으로 된 시험 프로그램)를 쓴다.** (일반 Python으로 `python tools/bench_gui.py`) 펌웨어는 글자 사이가 250ms 넘게 벌어지면 그 줄을 버리고,
 `DRIVE`는 250ms마다 다시 보내야 한다. 일반 시리얼 모니터는 한 글자씩 보내서 명령이 실패한다.
-이 도구는 한 줄을 통째로 보내고 `DRIVE`를 0.1초마다 반복하며, 받은 로그를 `bench_날짜_시간.log`로 저장한다.
+이 도구는 한 줄을 통째로 보내고 `DRIVE`를 0.1초마다 반복하며, 받은 로그를 `logs/bench_날짜_시간.log`로 저장한다.
 
 ```powershell
-python tools/bench_console.py COM5      # 포트 번호는 pio device list 로 확인
+python tools/bench_gui.py               # 창에서 포트를 골라 연결 (DEMO = 보드 없이 미리보기)
 ```
 
-`sensor_serial_test`와 `color_calibration`은 모터를 켜지 않지만 **모터 전원은 분리하고** 쓴다.
-교정을 마치면 반드시 `yd_esp32_s3`를 다시 올려야 주행한다.
+**바닥 색 교정**은 GUI의 "색 교정" 탭에서 안내대로 한다 (48단계, 15–20분). 교정 중에는 모터가 브레이크로 묶이지만
+**모터 전원은 분리하고** 하는 것을 권한다. 교정값은 보드에 남으므로, 끝나면 `yd_esp32_s3_v2`를 다시 올리면 된다.
 
 ---
 

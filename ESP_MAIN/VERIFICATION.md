@@ -327,3 +327,30 @@ COM/SiK의 TX 두 개가 ESP32 RX를 동시에 구동하지 않도록 한다.
 세 문서 모두에서 '사용자 진술'을 검색했다. git diff --check도 통과했다.
 `.\pio.cmd run -e robot_bench_v2_manual`을 재실행해 종료 코드 0과 SUCCESS를 확인했다.
 이번 라운드는 문서만 수정했으며 펌웨어 코드는 변경하지 않았다.
+
+## 2026-10-31 V2 벤치 정리 + IMU 확인 API (브랜치 v2/bench-imu, 미커밋)
+
+- `pio.cmd` 제거 (개인 PC 빌드 우회용이라 저장소에서 뺌). 위 기록의 `.\pio.cmd` 결과는 당시 기록으로 남김.
+- `run_host_tests.ps1 -Bench -V2`가 기존 `robot_bench_v2`(bench_main.cpp)와 새 `robot_bench_v2_manual`을 둘 다 시험하도록 복구.
+- UART0는 128바이트 FIFO만 있어(`availableForWrite()` ≤ 128) 128바이트가 넘는 줄은 나가지 못함 → 진단 접미사를 따로 짧은 줄로 바꾸고 돌아가며 출력. PC 시험이 모든 줄 < 128바이트를 확인.
+- `ImuMonitor`(MPU6050 리셋, WHO_AM_I, 데이터 수신 확인) 추가, 새 벤치에 `I` 줄과 `IMU RESET` 명령 연결.
+- PC 시험: 기본 V1 4581/모델2, `-V2` 5037, `-Bench` 67×2, `-Bench -V2` 기존 67+4, 새 298+4 통과.
+- 빌드: robot_bench_v2_manual, robot_bench_v2, yd_esp32_s3_v2, robot_bench SUCCESS.
+- 실물 미검증: IMU 주소 0x68·레지스터 설정, I2C 버스 공유 시 센서 주기 영향, UART 실제 출력량.
+
+## 2026-10-31 환경 3개로 정리 (사용자 결정, 미커밋)
+
+- 남김: `yd_esp32_s3_v2`, `robot_bench_v2_manual`, `color_calibration_v2`. `platformio.ini`는 세 환경만 직접 정의(V2 플래그·qio_qspi는 `[env]` 공통).
+- 보관(`archive/`): `bench_main.cpp`, `sensor_serial_test.cpp`, `tools/bench_console.py`, 이전 `platformio.ini` 전체.
+- `run_host_tests.ps1 -Bench`는 새 벤치만 시험(V2 자동).
+- 빌드 SUCCESS: yd_esp32_s3_v2(Flash 345801, 정리 전과 동일), robot_bench_v2_manual, color_calibration_v2.
+- PC 시험: 기본 5020/4581, `-V2` 5037, `-Bench` 298+4 통과. 실물 미검증.
+
+## 2026-10-31 색 교정을 벤치 펌웨어에 통합 (사용자 결정, 미커밋)
+
+- `ColorCalibration`에 `command()`·`tick()` 추가, `begin()`의 안내 출력은 단독 교정 진입점(보관됨)으로 옮김. NVS 형식·측정 절차·판정값 변경 없음.
+- `robot_bench_v2_manual`: `CAL START`~`CAL SAVE`/`ABORT` 동안 콘솔 줄 전부 교정으로, 모터 매 루프 브레이크, 텔레메트리 정지, 250ms마다 `CAL,…` 줄.
+- 단독 `color_calibration(_v2)` 환경과 `calibration_main.cpp`는 `archive/`로.
+- PC 시험: `-Bench` 310+4 (교정 시작·주행 차단·카운트다운·측정 결과·ACCEPT·ABORT 후 정상 주행 복귀), 기본 5020/4581, `-V2` 5037 통과. `tools/test_bench_gui.py` 통과.
+- 빌드: robot_bench_v2_manual SUCCESS, yd_esp32_s3_v2 SUCCESS (Flash 345801, 변경 없음).
+- 실물 미검증: 교정 중 Serial.printf 대기 시간, 실제 센서로 48단계, 교정 품질 판정 임계값.

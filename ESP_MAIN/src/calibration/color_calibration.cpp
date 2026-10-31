@@ -177,7 +177,7 @@ void startCalibration() {
   latestStatus.state = CalibrationState::WaitingForReady;
   latestStatus.step = 0;
   resetAccumulator();
-  Serial.println("\n[CAL] Calibration started. Motors must remain stopped.");
+  Serial.println("\n[CAL] Calibration started. Motors are braked until it ends.");
   Serial.println("[CAL] IMU is not used during calibration.");
   Serial.println("[CAL] Commands: READY ACCEPT RETRY BACK STATUS ABORT");
   Serial.println("[CAL] Margin: CAL MARGIN <ratio_percent> <brightness_percent>");
@@ -419,14 +419,23 @@ void ColorCalibration::begin() {
   setStepFields();
   inputLength = 0;
   discardInputLine = false;
-  Serial.printf("[CAL] Stored calibration: %s\n",
-                latestStatus.storedDataValid ? "VALID" : "NONE");
-  Serial.println("[CAL] Motors are not initialized in this firmware.");
-  Serial.println("[CAL] Type CAL START to begin, CAL ERASE to delete.");
 }
 
 void ColorCalibration::update(uint32_t nowMs) {
   pollSerial(nowMs);
+  tick(nowMs);
+}
+
+void ColorCalibration::command(const char* line, uint32_t nowMs) {
+  char upper[sizeof(inputLine)];
+  size_t length = 0;
+  for (; line[length] && length + 1 < sizeof(upper); ++length)
+    upper[length] = static_cast<char>(toupper(static_cast<unsigned char>(line[length])));
+  upper[length] = '\0';
+  handleCommand(upper, nowMs);
+}
+
+void ColorCalibration::tick(uint32_t nowMs) {
   if (latestStatus.active) updateActiveState(nowMs);
 }
 

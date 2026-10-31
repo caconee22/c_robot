@@ -1,5 +1,7 @@
 # ESP_MAIN — V1 펌웨어 구조와 사용법
 
+> **2026-10-31 정리:** 지금 쓰는 펌웨어는 `yd_esp32_s3_v2`(경기용)와 `robot_bench_v2_manual`(벤치 + 색 교정) 두 개뿐이다. 아래에 나오는 V1·TCS34725·`robot_bench`·`robot_bench_v2`·`sensor_serial_test`·`color_calibration` 환경과 `bench_console.py`는 `archive/`로 보관했다 (`archive/README.md`). 색 교정은 `tools/bench_gui.py`의 "색 교정" 탭.
+
 ESP32-S3 / Arduino / PlatformIO 기반 씨름 로봇 제어 코드다.
 이 문서는 작업 이력이 아니라 **모듈을 나눈 의도, 실행 순서, 설정 방법과 사용법**을 설명한다.
 최신 검토 기준은 2026-10-05다. 부팅·버튼·센서·교정·비전 수신·안전관리·FSM·모터가 연결돼 있다.

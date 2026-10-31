@@ -22,6 +22,7 @@ std::function<void()> writeHook;
 std::vector<uint8_t> nvs;
 bool nvsWriteOk = true, nvsReadOk = true;
 SensorDevice sensors[4];
+ImuDevice imu;
 bool tcaConnected = true;
 uint32_t busTransactions = 0;
 uint32_t transactionDelayMs = 0;
@@ -36,6 +37,7 @@ void reset() {
   nvs.clear(); nvsReadOk=nvsWriteOk=true; tcaConnected=true; busTransactions=0;
   transactionDelayMs=0;
   for (auto& sensor : sensors) sensor=SensorDevice{};
+  imu=ImuDevice{};
 }
 void advance(uint32_t ms) {
   for (uint32_t i=0;i<ms;++i) {
@@ -85,6 +87,18 @@ uint32_t analogReadMilliVolts(int pin) { return fake::adcMillivolts[pin]; }
 uint8_t TwoWire::endTransmission(bool) {
   fake::advance(fake::transactionDelayMs);
   ++fake::busTransactions;
+  if(address==0x68) {
+    auto& m=fake::imu;
+    if(!m.connected || outgoing.empty()) return 2;
+    imuPointer=outgoing[0]&0x7F;
+    for(size_t i=1;i<outgoing.size();++i) {
+      const uint8_t reg=(imuPointer+i-1)&0x7F, value=outgoing[i];
+      if(reg==0x6B && (value&0x80)) { std::fill(m.reg,m.reg+128,0); m.reg[0x6B]=0x40; m.awake=false; ++m.resets; continue; }
+      m.reg[reg]=value;
+      if(reg==0x6B) m.awake=!(value&0x40);
+    }
+    return 0;
+  }
   if(address>=0x70 && address<=0x77) {
     if(!fake::tcaConnected) return 2;
     if(outgoing.size()!=1) return 3;
@@ -118,9 +132,22 @@ uint8_t TwoWire::endTransmission(bool) {
   }
   return 0;
 }
-size_t TwoWire::requestFrom(uint8_t, uint8_t size) {
+size_t TwoWire::requestFrom(uint8_t device, uint8_t size) {
   fake::advance(fake::transactionDelayMs);
   ++fake::busTransactions; incoming.clear();
+  if(device==0x68) {
+    auto& m=fake::imu;
+    if(!m.connected) return 0;
+    m.reg[0x75]=m.whoAmI;
+    if(m.awake && imuPointer==0x3A && (m.reg[0x38]&1)) {
+      if(!m.frozen) ++m.counter;
+      m.reg[0x3A]=1;
+      for(uint8_t i=0;i<7;++i) { const int16_t v=static_cast<int16_t>(m.counter+i*100); m.reg[0x3B+i*2]=static_cast<uint8_t>(v>>8); m.reg[0x3C+i*2]=v&0xFF; }
+    }
+    for(uint8_t i=0;i<size;++i) incoming.push_back(m.reg[(imuPointer+i)&0x7F]);
+    if(imuPointer<=0x3A && imuPointer+size>0x3A) m.reg[0x3A]&=~1;  // read clears DATA_RDY
+    return size;
+  }
   if(selected>=4 || !fake::sensors[selected].connected) return 0;
   auto& s=fake::sensors[selected];
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
