@@ -54,6 +54,7 @@ V2 기판은 조립 중이며 V1 펌웨어와 핀이 다르다. V1 `pins.hpp`는
 - IR 아날로그 입력 6개가 있다. 용도는 확인 중이다.
 - 배터리 전압 분압 입력(×11)은 `BatteryMonitor`가 전원 투입 후 3초 동안만 쓴다. 3S·4S 중 어느 셀 수 범위에도
   들지 않으면 배터리 없음·잘못된 배터리로 보고 `SystemManager::setApplicationHealthy(false)`로 시작을 막는다.
+  판정이 `Ok`로 끝나기 전에는 `SystemManager::holdStart(true)`로 SW2 시작을 버리며, 판정 뒤 SW2를 새로 눌러야 한다.
   분압비와 기준 전압은 V2 실물에서 확인 전이다.
 - V2 전용 기능은 별도 모듈로 만들고 V1 빌드에는 포함하지 않는다.
 
