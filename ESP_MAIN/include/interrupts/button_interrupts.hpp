@@ -30,6 +30,14 @@ class ButtonInterrupts {
   static void cancelStartGesture();
   static ButtonStatus status();
 
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  // Bench-only input injection; physical LOW always remains effective.
+  // SW2 still passes through the existing debounce and SystemManager.
+  static void benchSetStartPressed(bool pressed);
+  // Same permanent drive inhibit/EN cut as physical SW1, normal context only.
+  static void benchEmergencyStop();
+#endif
+
   // Permanently stops normal execution. Recovery requires a hardware reset.
   [[noreturn]] static void enterEmergencyStopLoop();
 };

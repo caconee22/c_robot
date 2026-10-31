@@ -1,4 +1,5 @@
 #include "bench_v2/bench_v2_app.hpp"
+#include "bench_v2/software_switches.hpp"
 #include "hardware/reset_manager.hpp"
 #if HW_VERSION != 2
 #error V2 bench requires HW_VERSION=2
@@ -34,6 +35,9 @@ bool batteryReported = false;
 uint32_t lastCalLineMs = 0;
 
 void stop() {
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  BenchSoftwareSwitches::cancelStart();
+#endif
   SystemManager::requestStop();
   MotorController::brake();
   BenchController::select(BenchController::mode());
@@ -45,6 +49,9 @@ void reply(const char* line) {
     Serial.write(reinterpret_cast<const uint8_t*>(line), size);
 }
 void help() {
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  reply("SW1: permanent ESTOP; SW2: debounced start press/release (bench only)\r\n");
+#endif
   reply("MODE STOP|MOTOR|MANUAL|DATA|ALIGN|FOLLOW|AVOID\r\n");
   reply("SW2 press/release to arm; DRIVE -200..200, repeat <250ms\r\n");
   reply("STOP / LOG ON|OFF / STATUS / HELP / IMU RESET; UART0 57600\r\n");
@@ -54,6 +61,23 @@ void help() {
 bool startsWith(const char* line, const char* prefix) { return !strncmp(line, prefix, strlen(prefix)); }
 
 void execute(const char* line) {
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  // Emergency stop must work even while calibration owns the console.
+  if (!strcmp(line, "SW1")) {
+    BenchSoftwareSwitches::emergencyStop();
+    SystemManager::update(millis());  // enters the existing permanent ESTOP loop
+    return;
+  }
+  if (!strcmp(line, "SW2")) {
+    const auto mode = BenchController::mode();
+    const bool allowed = !ColorCalibration::active() &&
+        mode != BenchMode::Stop && mode != BenchMode::Data;
+    if (allowed && BenchSoftwareSwitches::pressStart(millis()))
+      reply("OK SW2 press/release queued\r\n");
+    else reply("ERR SW2 blocked: mode/battery/fault/calibration/button busy\r\n");
+    return;
+  }
+#endif
   // While calibrating every line belongs to the calibration; motors stay braked.
   if (ColorCalibration::active()) { ColorCalibration::command(line, millis()); return; }
   if (startsWith(line, "CAL ")) {
@@ -268,6 +292,9 @@ void BenchV2App::begin() {
   BatteryMonitor::begin(millis());
   ImuMonitor::begin(millis());
   ColorCalibration::begin();  // CalibrationStore was loaded by SensorManager::begin
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  BenchSoftwareSwitches::begin();
+#endif
   batteryReported = false;
   inputLength = 0; discardLine = false; logging = true; logRow = ROWS;
   extraIndex = sizeof(EXTRA_ORDER) / sizeof(EXTRA_ORDER[0]) - 1;  // first frame shows the IMU
@@ -276,6 +303,9 @@ void BenchV2App::begin() {
 }
 
 void BenchV2App::update() {
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  BenchSoftwareSwitches::update(millis());
+#endif
   SystemManager::update(millis());
   RaspberryLink::poll();
   SensorManager::update();

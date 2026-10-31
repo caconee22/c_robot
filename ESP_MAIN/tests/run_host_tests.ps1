@@ -33,6 +33,7 @@ foreach ($model in $models) {
         "-DCOLOR_SENSOR_MODEL=$model", "-DHW_VERSION=$hwVersion",
         '-DBENCH_V2_MANUAL=1', '-I', (Join-Path $PSScriptRoot 'host'),
         '-I', (Join-Path $projectRoot 'include')) + $sourceFiles + @('-o', $executable)
+    if ($Bench) { $arguments = @('-DBENCH_SOFTWARE_SWITCHES=1') + $arguments }
     & $compilerPath @arguments
     if ($LASTEXITCODE -ne 0) { throw "Compilation failed for sensor model $model." }
     if ($Demo) { & $executable --demo } else { & $executable }

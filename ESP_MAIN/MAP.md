@@ -146,3 +146,15 @@ pio run -e yd_esp32_s3_v2       # 경기용 펌웨어
 진입점은 환경별로 선택되므로 중복 링크되지 않는다.
 PC 시험 -V2 -Bench는 새 진입점, V1 -Bench는 기존 진입점을 사용한다.
 V2 핀맵 검증·GPIO48 내장 LED 존재는 사용자 진술 기준(실측하지 않음)이다.
+
+## 벤치 전용 임시 소프트웨어 스위치
+
+| 모듈 | 호출/API | 실패 경계 |
+|---|---|---|
+| `include/bench_v2/software_switches.hpp`, `src/bench_v2/software_switches.cpp` | BenchV2App의 begin/update/console/stop에서 호출 | SW2는 기존 버튼 디바운스와 SystemManager를 통과. SW1은 영구 구동 금지·EN 차단 후 기존 ESTOP 루프 |
+
+`robot_bench_v2_manual`만 `BENCH_SOFTWARE_SWITCHES=1`을 정의한다. 경기용에는 API와 구현이 없다.
+UART0 `SW1`은 재부팅 전 복구 불가, `SW2`는 유한 눌림·해제를 1회 만든다.
+STOP/모드 변경은 진행 중인 소프트웨어 SW2를 취소한다. 배터리 점검/고장/교정 중 SW2는 거부한다.
+실물 버튼은 계속 우선하며 GPIO 핀을 출력으로 바꾸거나 안전 스냅샷을 위조하지 않는다.
+소프트웨어 시험은 물리 스위치·배선 검증을 대신하지 않는다. 임시 기능을 끄려면 벤치 환경의 플래그를 제거한다.

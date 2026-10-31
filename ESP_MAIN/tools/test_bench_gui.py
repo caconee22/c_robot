@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bench_gui import BenchState, cal_quality, cal_step_info, drive_command, parse_line  # noqa: E402
+from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, parse_line, requires_drive_permission  # noqa: E402
 
 # Lines in the exact formats bench_main.cpp / bench_v2_app.cpp print.
 state = BenchState()
@@ -52,6 +52,27 @@ assert drive_command("fwd", 100) == "DRIVE 100 100"
 assert drive_command("back", 100) == "DRIVE -100 -100"
 assert drive_command("left", 50) == "DRIVE -50 50"
 assert drive_command("right", 999) == "DRIVE 200 -200"  # clamped to the bench limit
+assert requires_drive_permission("SW2") and requires_drive_permission(" sw2 ")
+assert requires_drive_permission("DRIVE 100 100")
+assert not requires_drive_permission("SW1") and not requires_drive_permission("STOP")
+
+class DemoLog:
+    def write(self, *args):
+        pass
+
+demo = DemoLink(DemoLog())
+try:
+    demo.send("MODE MOTOR")
+    assert not demo.allowed
+    demo.send("SW2")
+    assert demo.allowed
+    demo.send("STOP")
+    assert not demo.allowed
+    demo.send("SW1")
+    demo.send("SW2")
+    assert demo.estop and not demo.allowed and demo.out == (0, 0)
+finally:
+    demo.close()
 
 # Calibration lines (formats from color_calibration.cpp and bench_v2_app.cpp).
 cal = BenchState()

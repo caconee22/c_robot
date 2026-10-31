@@ -26,6 +26,9 @@ bool startHasSeenReleased = false;
 uint32_t startRawChangedMs = 0;
 uint32_t startLastStableChangeMs = 0;
 volatile uint32_t pendingStartEvents = 0;
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+bool benchStartPressed = false;
+#endif
 
 // EN pins can sit in either GPIO register bank (0..31 or 32..48), and the
 // bank differs between V1 and V2. Masks are built from pins.hpp at compile
@@ -66,11 +69,17 @@ void IRAM_ATTR onStartChanged() {
 }
 
 bool readStartPressed() {
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  if (benchStartPressed) return true;
+#endif
   return digitalRead(pins::START_SWITCH) == LOW;
 }
 }
 
 void ButtonInterrupts::begin() {
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+  benchStartPressed = false;
+#endif
   pinMode(pins::SAFETY_SWITCH, INPUT_PULLUP);
   pinMode(pins::START_SWITCH, INPUT_PULLUP);
 
@@ -221,6 +230,25 @@ ButtonStatus ButtonInterrupts::status() {
   portEXIT_CRITICAL(&buttonMux);
   return result;
 }
+
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+void ButtonInterrupts::benchSetStartPressed(bool pressed) {
+  if (benchStartPressed == pressed) return;
+  benchStartPressed = pressed;
+  portENTER_CRITICAL(&buttonMux);
+  startEdgePending = true;
+  portEXIT_CRITICAL(&buttonMux);
+}
+
+void ButtonInterrupts::benchEmergencyStop() {
+  Bts7960Driver::latchPermanentDriveInhibit();
+  disableMotorEnPins();
+  portENTER_CRITICAL(&buttonMux);
+  emergencyIsLatched = true;
+  emergencyEventPending = true;
+  portEXIT_CRITICAL(&buttonMux);
+}
+#endif
 
 [[noreturn]] void ButtonInterrupts::enterEmergencyStopLoop() {
   portENTER_CRITICAL(&buttonMux);

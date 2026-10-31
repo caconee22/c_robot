@@ -51,6 +51,11 @@ POSE_KO = {"LEVEL": ("평평", 10, "로봇을 평평하게 두고 센서-바닥 
 
 # ---------- parsing (pure, tested by test_bench_gui.py) ----------
 
+def requires_drive_permission(line):
+    """Software SW2 may start MOTOR mode, so it needs the same guard as DRIVE."""
+    command = line.strip().upper()
+    return command == "SW2" or command.startswith("DRIVE")
+
 def _int(text, default=0):
     try:
         return int(text)
@@ -346,13 +351,26 @@ class DemoLink:
         self.drive = None
         self.running = True
         self.mode, self.allowed, self.out = "STOP", False, (0, 0)
+        self.estop = False
         self.cal = None  # [state, step, until_ms]
         threading.Thread(target=self._loop, daemon=True).start()
 
     def send(self, line):
         self.log.write(">", line)
         line = line.strip().upper() or "STOP"
-        if line == "CAL STATUS":
+        if self.estop:
+            return
+        if line == "SW1":
+            self.estop, self.allowed, self.drive, self.out = True, False, None, (0, 0)
+            self.cal = None
+            self.lines.put("ESTOP")
+        elif line == "SW2":
+            if self.cal is None and self.mode not in ("STOP", "DATA"):
+                self.allowed = True
+                self.lines.put("OK SW2 press/release queued")
+            else:
+                self.lines.put("ERR SW2 blocked")
+        elif line == "CAL STATUS":
             self.lines.put(f"[CAL][STATUS] active={int(self.cal is not None)} stored=0 state=0 step=1/48")
         elif self.cal is not None:
             self._cal_command(line)
@@ -363,10 +381,10 @@ class DemoLink:
             parts = line.split()
             self.drive, self.out = line, (int(parts[1]), int(parts[2]))
         elif line.startswith("MODE "):
-            self.mode, self.allowed, self.drive, self.out = line[5:], line[5:] in ("MANUAL", "MOTOR"), None, (0, 0)
+            self.mode, self.allowed, self.drive, self.out = line[5:], False, None, (0, 0)
             self.lines.put(f"OK MODE {self.mode}; SW2 required")
         elif line == "STOP":
-            self.drive, self.out = None, (0, 0)
+            self.allowed, self.drive, self.out = False, None, (0, 0)
             self.lines.put("OK STOP")
 
     def _cal_command(self, line):
@@ -397,7 +415,10 @@ class DemoLink:
         colors = ["BLACK", "BLACK", "RED", "BLUE"]
         while self.running:
             t += 100
-            if self.cal is not None:
+            if self.estop:
+                if t % 3000 == 0:
+                    self.lines.put("ESTOP")
+            elif self.cal is not None:
                 self._cal_tick(t)
             else:
                 self.lines.put(f"D,{t},{self.mode},{int(self.allowed)},{self.out[0]},{self.out[1]},0,0,0,0,0,0")
@@ -439,9 +460,9 @@ def list_ports():
 # ---------- command-line mode ----------
 
 def run_cmd(args):
-    drives = [c for c in args.commands if c.strip().upper().startswith("DRIVE")]
+    drives = [c for c in args.commands if requires_drive_permission(c)]
     if drives and not args.allow_drive:
-        print("DRIVE는 --allow-drive 없이 보낼 수 없습니다 (바퀴를 띄웠는지 사람이 확인한 뒤에).", file=sys.stderr)
+        print("DRIVE/SW2는 --allow-drive 없이 보낼 수 없습니다 (바퀴를 띄웠는지 사람이 확인한 뒤에).", file=sys.stderr)
         return 2
     log = SessionLog(new_log_path(), f"cmd mode port={args.port} baud={args.baud}")
     try:
@@ -770,6 +791,13 @@ def run_gui():
                    activebackground=T["surface"], fg=T["ink"], font=font(10, "bold"),
                    highlightthickness=0, cursor="hand2",
                    command=lambda: note("#", f"wheels lifted = {wheels_up.get()}")).pack(anchor="w")
+    switch_row = tk.Frame(drive_card, bg=T["surface"])
+    switch_row.pack(fill="x", pady=(8, 4))
+    button(switch_row, "SW1 · 비상정지", lambda: send("SW1"), kind="stop").pack(side="left")
+    button(switch_row, "SW2 · 시작", lambda: send("SW2"), kind="accent").pack(side="left", padx=(6, 0))
+    tk.Label(drive_card, text="벤치 전용 · SW1 후 재부팅 필요 · SW2는 눌림/해제 1회",
+             bg=T["surface"], fg=T["muted"], font=font(9), wraplength=300,
+             justify="left").pack(anchor="w")
     prow = tk.Frame(drive_card, bg=T["surface"])
     prow.pack(fill="x", pady=(4, 6))
     tk.Label(prow, text="출력", bg=T["surface"], fg=T["muted"], font=font(9)).pack(side="left")
@@ -1107,6 +1135,12 @@ def run_gui():
         if not link["obj"]:
             set_hint("먼저 보드에 연결하세요")
             return
+        if requires_drive_permission(line) and not wheels_up.get():
+            set_hint("SW2/DRIVE는 바퀴를 띄우고 확인란을 체크한 뒤 보낼 수 있습니다")
+            return
+        if line.strip().upper() == "SW2" and calibrating():
+            set_hint("색 교정 중에는 SW2 시작을 사용할 수 없습니다")
+            return
         link["obj"].send(line)
         add_log("› " + line, "sent")
         up = line.strip().upper()
@@ -1115,6 +1149,10 @@ def run_gui():
         ui["driving"] = None
         if up in ("MODE MANUAL", "MODE MOTOR"):
             set_hint("이제 SW2를 눌렀다 떼면 움직일 수 있습니다")
+        elif up == "SW1":
+            set_hint("SW1 비상정지를 요청했습니다. 재부팅 전까지 구동할 수 없습니다")
+        elif up == "SW2":
+            set_hint("SW2 눌림·해제를 요청했습니다. 보드의 시작 허용 상태를 확인하세요")
         elif up == "STOP" or up == "":
             set_hint("정지했습니다. 다시 움직이려면 SW2를 눌렀다 떼세요")
 

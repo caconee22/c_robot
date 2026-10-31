@@ -11,6 +11,8 @@
 #include "system/status_led.hpp"
 #include "sensors/imu_monitor.hpp"
 #include "calibration/color_calibration.hpp"
+#include "interrupts/button_interrupts.hpp"
+#include "motor/bts7960_driver.hpp"
 
 // 1 when testing robot_bench_v2_manual (bench_v2/), 0 for the legacy bench.
 #ifndef BENCH_V2_MANUAL
@@ -100,6 +102,76 @@ void camera(uint16_t x, uint16_t height, uint8_t sequence = 1) {
   Serial1.inject(packet); ticks(8);
 }
 #if BENCH_V2_MANUAL
+void softwareSwitchTests() {
+  fake::reset();
+  for (unsigned i=0;i<4;++i) fake::floor(i,3);
+  fake::adcMillivolts[pins::BATTERY_ADC]=0;
+  setup();
+  send("MODE MANUAL"); send("SW2"); ticks(120);
+  CHECK(!SystemManager::motorAllowed());  // pending battery check cannot be bypassed
+  CHECK(Serial.tx.find("ERR SW2 blocked")!=std::string::npos);
+  fake::adcMillivolts[pins::BATTERY_ADC]=15200U/11U; ticks(150);
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Ok);
+  CHECK(!SystemManager::motorAllowed());  // old command was discarded
+  send("SW2"); ticks(25); CHECK(!SystemManager::motorAllowed());
+  fake::advance(80); loop();  // a delayed loop must still qualify the press before release
+  ticks(100); CHECK(SystemManager::motorAllowed());
+  CHECK(SystemManager::status().startEventCount==1);
+  send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
+  send("STOP"); CHECK(!SystemManager::motorAllowed());
+  send("SW2"); ticks(20); send("STOP"); ticks(150);
+  CHECK(!SystemManager::motorAllowed());
+  CHECK(SystemManager::status().startEventCount==1);
+  send("SW2"); ticks(20); send("MODE FOLLOW"); ticks(150);
+  CHECK(!SystemManager::motorAllowed());  // mode changes cancel the old gesture
+  send("MODE MANUAL");
+  fake::level(pins::START_SWITCH,LOW); ticks(50);
+  send("SW2"); CHECK(Serial.tx.find("ERR SW2 blocked")!=std::string::npos);
+  send("STOP"); fake::level(pins::START_SWITCH,HIGH); ticks(60);
+  CHECK(!SystemManager::motorAllowed());
+  send("SW2"); send("SW2"); ticks(150);
+  CHECK(SystemManager::motorAllowed());
+  CHECK(SystemManager::status().startEventCount==2);  // repeat does not queue another start
+  send("STOP");
+  send("CAL START"); CHECK(ColorCalibration::active());
+  send("SW2"); ticks(150); CHECK(!SystemManager::motorAllowed());
+  send("ABORT"); ticks(100); CHECK(!SystemManager::motorAllowed());
+  send("MODE MOTOR"); send("SW2"); ticks(130);
+  CHECK(SystemManager::motorAllowed() && MotorController::status().outputsActive);
+  send("STOP");
+  send("MODE MANUAL"); send("SW2");
+  fake::advance(300); loop(); ticks(130);
+  CHECK(!SystemManager::motorAllowed());  // a stale virtual press must not start later
+  SystemManager::setApplicationHealthy(false);
+  send("MODE MANUAL"); send("SW2"); ticks(130);
+  CHECK(!SystemManager::motorAllowed());
+  SystemManager::setApplicationHealthy(true); ticks(100);
+  CHECK(!SystemManager::motorAllowed());
+  send("SW2"); ticks(130); CHECK(SystemManager::motorAllowed());
+  send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
+  // SW1 command enters the same permanent loop as the physical switch.
+  fake::stopOnDelay=true;
+  Serial.inject("SW1\n");
+  try { loop(); CHECK(false); } catch (const fake::StopLoop&) {}
+  CHECK(ButtonInterrupts::emergencyLatched());
+  CHECK(!SystemManager::motorAllowed() && !MotorController::status().outputsActive);
+  CHECK(!Bts7960Driver::clearDriveInhibit());
+  CHECK(Serial.tx.find("ESTOP")!=std::string::npos);
+}
+
+void softwareEmergencyDuringCalibrationTest() {
+  fake::reset();
+  for (unsigned i=0;i<4;++i) fake::floor(i,3);
+  setup(); ticks(300); send("CAL START");
+  CHECK(ColorCalibration::active());
+  fake::stopOnDelay=true;
+  Serial.inject("SW1\n");
+  try { loop(); CHECK(false); } catch (const fake::StopLoop&) {}
+  CHECK(ButtonInterrupts::emergencyLatched());
+  CHECK(!Bts7960Driver::clearDriveInhibit());
+  CHECK(!SystemManager::motorAllowed());
+}
+
 void calibrationTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
@@ -250,6 +322,8 @@ int main(int argc, char** argv) {
 #endif
     { logicTests(); integrationTests();
 #if BENCH_V2_MANUAL
+      softwareSwitchTests();
+      softwareEmergencyDuringCalibrationTest();
       imuTests();
       calibrationTests();
 #endif
