@@ -7,6 +7,15 @@
 #include "bench/bench_config.hpp"
 #include "motor/motor_controller.hpp"
 #include "system/system_manager.hpp"
+#include "system/battery_monitor.hpp"
+#include "system/status_led.hpp"
+#include "sensors/imu_monitor.hpp"
+#include "calibration/color_calibration.hpp"
+
+// 1 when testing robot_bench_v2_manual (bench_v2/), 0 for the legacy bench.
+#ifndef BENCH_V2_MANUAL
+#define BENCH_V2_MANUAL 0
+#endif
 #include "sensors/sensor_config.hpp"
 
 void setup();
@@ -90,6 +99,76 @@ void camera(uint16_t x, uint16_t height, uint8_t sequence = 1) {
   }
   Serial1.inject(packet); ticks(8);
 }
+#if BENCH_V2_MANUAL
+void calibrationTests() {
+  fake::reset();
+  for (unsigned i=0;i<4;++i) fake::floor(i,3);
+  setup(); ticks(300);
+  send("CAL START");
+  CHECK(ColorCalibration::active());
+  CHECK(Serial.tx.find("[CAL] Calibration started")!=std::string::npos);
+  // While calibrating, motion commands go to the calibration and the motors stay braked.
+  send("MODE MANUAL"); startButton(); send("DRIVE 100 100");
+  CHECK(ColorCalibration::active() && !MotorController::status().outputsActive);
+  Serial.tx.clear(); ticks(300);
+  CHECK(Serial.tx.find("\nCAL,")!=std::string::npos || Serial.tx.rfind("CAL,",0)==0);
+  CHECK(Serial.tx.find("\nD,")==std::string::npos);  // telemetry is quiet during calibration
+  send("ready");  // lower case is accepted
+  ticks(config::sensors::CALIBRATION_COUNTDOWN_MS + config::sensors::CALIBRATION_MEASURE_MS + 300);
+  CHECK(Serial.tx.find("[CAL][RESULT]")!=std::string::npos);
+  CHECK(ColorCalibration::status().state==CalibrationState::WaitingForAccept);
+  CHECK(!MotorController::status().outputsActive);
+  send("ACCEPT"); CHECK(ColorCalibration::status().step==1);
+  send("ABORT"); CHECK(!ColorCalibration::active());
+  // Back to normal bench use: a new SW2 gesture is needed, then DRIVE works.
+  send("MODE MANUAL"); startButton(); send("DRIVE 100 100");
+  CHECK(MotorController::status().outputsActive);
+  send("STOP");
+}
+void imuTests() {
+  fake::reset();
+  setup(); ticks(350);  // IMU row every other frame; READY after ~110 ms
+  auto imu=ImuMonitor::status();
+  CHECK(imu.state==ImuState::Ready && imu.whoAmI==0x68);
+  CHECK(imu.samples>0 && imu.dataFresh && imu.resets==0);
+  CHECK(fake::imu.resets==1 && fake::imu.awake);
+  CHECK(Serial.tx.find("I,")!=std::string::npos && Serial.tx.find(",READY,68,1,")!=std::string::npos);
+  CHECK(ImuMonitor::latest().accel[0]!=0);
+  // Values stop changing: data-ready still arrives but the sensor is not fresh.
+  fake::imu.frozen=true; ticks(config::imu::FROZEN_MS+50);
+  CHECK(!ImuMonitor::status().dataFresh && ImuMonitor::status().state==ImuState::Ready);
+  fake::imu.frozen=false; ticks(30); CHECK(ImuMonitor::status().dataFresh);
+  // Bus loss: Fault after a few errors, no automatic retry.
+  fake::imu.connected=false; ticks(100);
+  imu=ImuMonitor::status();
+  CHECK(imu.state==ImuState::Fault && imu.lastError==ImuError::Bus && !imu.dataFresh);
+  const auto errors=imu.busErrors; ticks(200);
+  CHECK(ImuMonitor::status().busErrors==errors);
+  // Operator reset brings it back once the bus works again.
+  fake::imu.connected=true; send("IMU RESET");
+  CHECK(Serial.tx.find("OK IMU RESET")!=std::string::npos);
+  ticks(200); imu=ImuMonitor::status();
+  CHECK(imu.state==ImuState::Ready && imu.resets==1 && imu.dataFresh);
+  // A device that is not an MPU6050 is reported, not used.
+  fake::imu.whoAmI=0x12; send("IMU RESET"); ticks(200);
+  imu=ImuMonitor::status();
+  CHECK(imu.state==ImuState::Fault && imu.lastError==ImuError::WhoAmI && imu.whoAmI==0x12);
+  // The IMU never affects the motors or the safety state.
+  CHECK(!MotorController::status().outputsActive && SystemManager::status().applicationHealthy);
+}
+#endif
+#if HW_VERSION == 2
+void batteryFailureTest() {
+  fake::reset();
+  fake::adcMillivolts[pins::BATTERY_ADC] = 0;
+  setup(); ticks(3100);
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Missing);
+  CHECK(!SystemManager::status().applicationHealthy);
+  send("MODE MANUAL"); startButton(); send("DRIVE 200 200");
+  CHECK(!SystemManager::motorAllowed());
+  CHECK(!MotorController::status().outputsActive);
+}
+#endif
 void integrationTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
@@ -126,7 +205,33 @@ void integrationTests() {
   send("0 200"); CHECK(!MotorController::status().outputsActive);  // Discard remainder.
   send("MODE DATA"); ticks(150); CHECK(Serial.tx.find("D,")!=std::string::npos);
   CHECK(Serial.tx.find("S,")!=std::string::npos);
+#if BENCH_V2_MANUAL
+  ticks(900);  // extra rows take turns over 8 frames
+  CHECK(Serial.baud == 57600);
+  CHECK(Serial.tx.find("\nSYSTEM,") != std::string::npos);
+  CHECK(Serial.tx.find("\nMOTOR,") != std::string::npos);
+  CHECK(Serial.tx.find("\nLINK,") != std::string::npos);
+  CHECK(Serial.tx.find("\nPOWER_LED,") != std::string::npos);
+  CHECK(Serial.tx.find("\nI,") != std::string::npos);
+  // Every telemetry line fits the 128-byte UART0 hardware FIFO.
+  for (size_t a = 0, b; (b = Serial.tx.find('\n', a)) != std::string::npos; a = b + 1) CHECK(b - a + 1 < 128);
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Ok);
+  CHECK(StatusLed::status().initialized);
+  send("LOG OFF");
+  Serial.tx.clear(); ticks(150);
+  CHECK(Serial.tx.find("D,") == std::string::npos);
+  send("LOG ON"); ticks(150);
+  CHECK(Serial.tx.find("D,") != std::string::npos);
+#endif
   Serial.capacity=0; const auto before=millis(); loop(); CHECK(millis()-before<=5);
+#if BENCH_V2_MANUAL
+  Serial.tx.clear();
+  send("MODE MANUAL"); startButton(); send("DRIVE 100 -100");
+  CHECK(MotorController::status().outputsActive);
+  ticks(260);
+  CHECK(!MotorController::status().outputsActive);
+  CHECK(Serial.tx.empty());
+#endif
   Serial.capacity=4096;
   send("MODE MANUAL"); startButton(); send("DRIVE 100 100");
   fake::level(pins::SAFETY_SWITCH,LOW); CHECK(fake::pins[pins::MOTOR1_LEN]==LOW);
@@ -135,9 +240,20 @@ void integrationTests() {
   CHECK(MotorController::status().emergencyStopLatched);
 }
 }
-int main() {
+int main(int argc, char** argv) {
   try {
-    logicTests(); integrationTests();
+#if HW_VERSION == 2
+    if (argc > 1 && std::string(argv[1]) == "--battery-missing") batteryFailureTest();
+    else
+#else
+    (void)argc; (void)argv;
+#endif
+    { logicTests(); integrationTests();
+#if BENCH_V2_MANUAL
+      imuTests();
+      calibrationTests();
+#endif
+    }
     std::cout<<"BENCH MODEL "<<COLOR_SENSOR_MODEL<<": "<<checks<<" checks passed\n";
   } catch (const std::exception& e) { std::cerr<<"FAIL "<<e.what()<<"\n"; return 1; }
 }

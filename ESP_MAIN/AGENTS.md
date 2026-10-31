@@ -61,7 +61,8 @@ V2 기판은 조립 중이며 V1 펌웨어와 핀이 다르다. V1 `pins.hpp`는
 
 - 하드웨어 버전은 빌드 환경의 `-D HW_VERSION=2`로 고른다. 플래그가 없으면 V1이다.
   `include/pins.hpp`는 V1 핀을 그대로 두고 V2일 때만 `include/pins_v2.hpp`를 불러온다.
-- V2 환경: `yd_esp32_s3_v2`, `robot_bench_v2`, `sensor_serial_test_v2`, `color_calibration_v2`.
+- 사용하는 환경은 `yd_esp32_s3_v2`(경기용), `robot_bench_v2_manual`(벤치 + 색 교정) 두 개다.
+  나머지 환경과 진입 파일은 2026-10-31 사용자 결정으로 `archive/`에 보관했다. 사용자 요청 없이 되살리지 않는다.
   메모리 타입은 `qio_qspi`로 고정한다. PC 시험은 `tests/run_host_tests.ps1 -V2`.
 - `pins.hpp`는 `BOARD_HAS_PSRAM`, 옥탈 PSRAM 메모리 타입, `ARDUINO_USB_CDC_ON_BOOT=1`이면 빌드를 멈춘다.
   이 검사를 지우거나 우회하지 않는다.
@@ -181,9 +182,12 @@ V2 기판은 조립 중이며 V1 펌웨어와 핀이 다르다. V1 `pins.hpp`는
   센서-바닥 간격은 3/10/20mm로 변한다. 고정 높이로 가정하지 않는다.
   근접 포화, 20mm 유색 바닥의 검정 오인, 경계 혼합을 고려하고 다음 작업에서도
   이 조건을 고려하고 있음을 사용자에게 설명한다. 상세 설정과 미검증 사항은 README §7·§8을 읽는다.
-- 교정은 생산 펌웨어에 넣지 않는다. 별도 환경 `color_calibration`을 업로드해 진행하고,
-  `CAL SAVE` 후 생산 펌웨어를 다시 업로드한다. 생산 펌웨어는 `CalibrationStore::load()`로 NVS 값만 읽는다.
-- 교정 펌웨어는 모터를 초기화하지 않고 BTS7960 PWM/EN 핀을 LOW로만 고정한다. 그래도 모터 전원은 분리한다.
+- 교정은 경기용 펌웨어에 넣지 않는다. 2026-10-31 사용자 결정으로 벤치 펌웨어(`robot_bench_v2_manual`)가
+  `ColorCalibration`을 품는다: `CAL START`부터 교정이 끝날 때(`CAL SAVE`·`ABORT`)까지 모든 콘솔 줄은
+  교정으로 가고, 모터는 매 루프 브레이크, 시험 로그는 멈추며 250ms마다 `CAL,…` 상태 줄을 낸다.
+  저장하면 `SensorManager`가 새 교정값을 바로 쓰고, 경기용 펌웨어는 `CalibrationStore::load()`로 NVS 값만 읽는다.
+  PC 쪽 안내는 `tools/bench_gui.py`의 "색 교정" 탭. 그래도 모터 전원은 분리하는 것을 권한다.
+  예전 단독 교정 펌웨어(모터 미초기화)는 `archive/`에 있다.
 - 교정은 센서별로 빨강/노랑/파랑/검정과 평행10mm/들림20mm/눌림3mm를 각각 3초 측정한다(48단계).
   NVS 형식(magic, version, 설정 서명)은 두 펌웨어가 공유하므로 한쪽만 바꾸지 않는다. 명령 목록은 README §9.
 
@@ -228,8 +232,7 @@ V2 기판은 조립 중이며 V1 펌웨어와 핀이 다르다. V1 `pins.hpp`는
 
 ## 별도 펌웨어 환경
 
-- 보드에는 생산(`yd_esp32_s3`), 벤치(`robot_bench`), 센서 점검(`sensor_serial_test`),
-  교정(`color_calibration`) 중 하나만 업로드한다.
+- 보드에는 경기용(`yd_esp32_s3_v2`)과 벤치(`robot_bench_v2_manual`, 색 교정 포함) 중 하나만 업로드한다.
   환경 목록은 README §2.
 - 센서 점검 펌웨어는 모터 핀을 건드리지 않는다. 센서 시험 중에는 모터 전원을 분리한다.
 - 벤치 펌웨어는 생산 FSM을 실행하지 않는다. 모드 변경 시 정지 후 SW2로 재시작해야 하고,

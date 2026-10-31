@@ -14,13 +14,22 @@ struct SensorDevice {
   std::array<uint16_t, 4> rgbc{{1000,100,100,100}};
 };
 extern SensorDevice sensors[4];
+// MPU6050 on the main bus at 0x68, upstream of the TCA9548A.
+struct ImuDevice {
+  bool connected = true, frozen = false, awake = false;
+  uint8_t whoAmI = 0x68;
+  uint8_t reg[128] = {};
+  int16_t counter = 0;
+  uint32_t resets = 0;
+};
+extern ImuDevice imu;
 extern bool tcaConnected;
 extern uint32_t busTransactions;
 extern uint32_t transactionDelayMs;
 void floor(uint8_t sensor, uint8_t color);
 }
 struct TwoWire {
-  uint8_t address = 0, selected = 0, pointer = 0;
+  uint8_t address = 0, selected = 0, pointer = 0, imuPointer = 0;
   std::vector<uint8_t> outgoing;
   std::deque<uint8_t> incoming;
   void begin(int, int) {}

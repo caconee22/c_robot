@@ -283,3 +283,74 @@ AS7341의 ADC 래치, 포화, 초기화 대기, 수광 시간은 제조사
 32~33, 47, 49쪽을 대조했다. SMUX 연결 값은
 [Adafruit AS7341 라이브러리](https://github.com/adafruit/Adafruit_AS7341/blob/master/Adafruit_AS7341.cpp)의
 F1~F4/F5~F8 연결 정의와 대조했다. 자료 대조는 실제 센서 실험을 대신하지 않는다.
+
+## V2 전용 벤치 검증 (2026-10-31)
+
+새 `robot_bench_v2_manual` 환경은 `src/bench_v2_main.cpp`와
+`src/bench_v2/bench_v2_app.cpp`를 사용한다.
+기존 `robot_bench_v2`는 V1 벤치 진입점의 V2 빌드로 보존했다.
+두 환경은 핀맵이 같고 확장 진단 출력은 새 환경에만 있다.
+V1 벤치 파일, 기존 환경 정의, 핀맵 및 SystemManager/ButtonInterrupts/
+MotorController/Bts7960Driver는 변경하지 않았다.
+
+이전 구현 라운드의 하드웨어 없는 검증 결과:
+
+- .\pio.cmd: robot_bench_v2_manual, robot_bench_v2, robot_bench 빌드 성공.
+- powershell -File tests/run_host_tests.ps1 -V2 -Bench: 정상 경로 79 검사와
+  별도 프로세스의 배터리 없음 시작 차단 4 검사 통과.
+- V1 -Bench: AS7341/TCS34725 각각 67 검사 통과.
+- V2 생산 PC 회귀: 13그룹 / 5,037 검사 통과.
+- 새 환경 RAM 31,548 bytes, Flash 347,457 bytes.
+- git diff --check 통과. 플랫폼·라이브러리 버전 유지.
+
+작업 환경의 공용 PlatformIO 설치는 읽기 전용이므로 .pio/local-core에
+설치 자료를 복사하고 누락 도구를 설치해 검증했다.
+pio.cmd는 캐시가 있을 때 임시 드라이브 매핑으로 긴 툴체인 경로 문제를 피하고
+종료 시 해제한다. 캐시와 빌드 산출물은 Git에서 무시된다.
+PC 시험도 로컬 캐시의 g++를 찾을 수 있다.
+
+실물 시험은 수행하지 않았다. 빌드·PC 시험 통과는 실제 차량 동작,
+전기적 브레이크 효과 또는 제동거리의 보증이 아니다.
+V2 핀맵 검증·GPIO48 내장 LED 존재는 사용자 진술 기준(실측하지 않음)이다.
+GPIO35(EN_2) PSRAM 충돌 가능성과 UART0 COM/SiK 동시 연결 주의 사항은
+BENCH_TESTS.md V2 절에 기록했다. 첫 시험에서 모터 전원을 분리하고
+EN_2의 부팅·리셋 파형 및 SW1 차단을 확인해야 한다.
+COM/SiK의 TX 두 개가 ESP32 RX를 동시에 구동하지 않도록 한다.
+배터리 분압 실측, 모터 정지 지연 및 센서 네 모서리 × 네 색 × 3/10/20mm
+시험도 남아 있다.
+
+미구현 목록: IMU(MPU6050), IR, 모터 전류(IS), 엔코더.
+해당 센서 및 엔코더 핀을 초기화하지 않는다.
+
+문서 복구 라운드 재검증: 세 V2 절을 UTF-8로 다시 저장하고 실제 파일을 재독해 한글을 확인했다.
+저장소 Markdown(.pio 및 .git 제외)에서 연속 물음표 3개가 검색되지 않았고,
+세 문서 모두에서 '사용자 진술'을 검색했다. git diff --check도 통과했다.
+`.\pio.cmd run -e robot_bench_v2_manual`을 재실행해 종료 코드 0과 SUCCESS를 확인했다.
+이번 라운드는 문서만 수정했으며 펌웨어 코드는 변경하지 않았다.
+
+## 2026-10-31 V2 벤치 정리 + IMU 확인 API (브랜치 v2/bench-imu, 미커밋)
+
+- `pio.cmd` 제거 (개인 PC 빌드 우회용이라 저장소에서 뺌). 위 기록의 `.\pio.cmd` 결과는 당시 기록으로 남김.
+- `run_host_tests.ps1 -Bench -V2`가 기존 `robot_bench_v2`(bench_main.cpp)와 새 `robot_bench_v2_manual`을 둘 다 시험하도록 복구.
+- UART0는 128바이트 FIFO만 있어(`availableForWrite()` ≤ 128) 128바이트가 넘는 줄은 나가지 못함 → 진단 접미사를 따로 짧은 줄로 바꾸고 돌아가며 출력. PC 시험이 모든 줄 < 128바이트를 확인.
+- `ImuMonitor`(MPU6050 리셋, WHO_AM_I, 데이터 수신 확인) 추가, 새 벤치에 `I` 줄과 `IMU RESET` 명령 연결.
+- PC 시험: 기본 V1 4581/모델2, `-V2` 5037, `-Bench` 67×2, `-Bench -V2` 기존 67+4, 새 298+4 통과.
+- 빌드: robot_bench_v2_manual, robot_bench_v2, yd_esp32_s3_v2, robot_bench SUCCESS.
+- 실물 미검증: IMU 주소 0x68·레지스터 설정, I2C 버스 공유 시 센서 주기 영향, UART 실제 출력량.
+
+## 2026-10-31 환경 3개로 정리 (사용자 결정, 미커밋)
+
+- 남김: `yd_esp32_s3_v2`, `robot_bench_v2_manual`, `color_calibration_v2`. `platformio.ini`는 세 환경만 직접 정의(V2 플래그·qio_qspi는 `[env]` 공통).
+- 보관(`archive/`): `bench_main.cpp`, `sensor_serial_test.cpp`, `tools/bench_console.py`, 이전 `platformio.ini` 전체.
+- `run_host_tests.ps1 -Bench`는 새 벤치만 시험(V2 자동).
+- 빌드 SUCCESS: yd_esp32_s3_v2(Flash 345801, 정리 전과 동일), robot_bench_v2_manual, color_calibration_v2.
+- PC 시험: 기본 5020/4581, `-V2` 5037, `-Bench` 298+4 통과. 실물 미검증.
+
+## 2026-10-31 색 교정을 벤치 펌웨어에 통합 (사용자 결정, 미커밋)
+
+- `ColorCalibration`에 `command()`·`tick()` 추가, `begin()`의 안내 출력은 단독 교정 진입점(보관됨)으로 옮김. NVS 형식·측정 절차·판정값 변경 없음.
+- `robot_bench_v2_manual`: `CAL START`~`CAL SAVE`/`ABORT` 동안 콘솔 줄 전부 교정으로, 모터 매 루프 브레이크, 텔레메트리 정지, 250ms마다 `CAL,…` 줄.
+- 단독 `color_calibration(_v2)` 환경과 `calibration_main.cpp`는 `archive/`로.
+- PC 시험: `-Bench` 310+4 (교정 시작·주행 차단·카운트다운·측정 결과·ACCEPT·ABORT 후 정상 주행 복귀), 기본 5020/4581, `-V2` 5037 통과. `tools/test_bench_gui.py` 통과.
+- 빌드: robot_bench_v2_manual SUCCESS, yd_esp32_s3_v2 SUCCESS (Flash 345801, 변경 없음).
+- 실물 미검증: 교정 중 Serial.printf 대기 시간, 실제 센서로 48단계, 교정 품질 판정 임계값.

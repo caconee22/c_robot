@@ -22,7 +22,7 @@
 | 전원 투입 배터리 확인 (V2) | `include/system/battery_monitor.hpp`, `include/config.hpp`의 `battery` | |
 | 라즈 UART | `include/communication/vision_protocol.hpp`, `include/communication/raspberry_link.hpp` | README §10 |
 | 실물 벤치 시험 | [BENCH_TESTS.md](BENCH_TESTS.md) | README §14 |
-| 센서 교정 (별도 펌웨어) | `src/calibration_main.cpp`, `include/calibration/color_calibration.hpp` | README §9 |
+| 센서 교정 (벤치 펌웨어 안) | `include/calibration/color_calibration.hpp`, `src/bench_v2/bench_v2_app.cpp` | README §9, BENCH_TESTS 색 교정 |
 | 교정값 저장 형식 | `include/sensors/calibration_store.hpp` | |
 
 ## 2. 값의 원본 (문서에 숫자를 복사하지 않는다)
@@ -102,17 +102,47 @@ StatusLed::update, EventLogger::process, delay(1)
 
 | 환경 | 진입 파일 | 용도 |
 |---|---|---|
-| `yd_esp32_s3` | `src/main.cpp` | 경기용 생산 펌웨어 |
-| `robot_bench` | `src/bench_main.cpp` | 저출력 실물 시험 (PC 쪽 명령 전송: `tools/bench_console.py`) |
-| `sensor_serial_test` | `src/sensor_serial_test.cpp` | 센서 원시값 확인 (모터 미사용) |
-| `color_calibration` | `src/calibration_main.cpp` | 48단계 색 교정, NVS 저장 (모터 미사용) |
-| `*_v2` (위 네 가지 모두) | 같은 파일 | V2 기판용 (`HW_VERSION=2`, `pins_v2.hpp`) |
+| `yd_esp32_s3_v2` | `src/main.cpp` | 경기용 구동 FSM |
+| `robot_bench_v2_manual` | `src/bench_v2_main.cpp` → `src/bench_v2/` | 저출력 실물 시험·진단 (PC 쪽: `tools/bench_gui.py`) |
+
+
+색 교정(48단계, NVS 저장)은 벤치 펌웨어 안에서 `CAL START`로 한다 (`bench_v2_app.cpp`가 `ColorCalibration`을 호출,
+교정 중 모터 브레이크). 두 환경 모두 V2 기판용(`HW_VERSION=2`, `pins_v2.hpp`)이다. V1·TCS34725·기존 벤치(`bench_main.cpp`)·
+센서 점검(`sensor_serial_test.cpp`)·단독 교정(`calibration_main.cpp`) 환경은 2026-10-31에 `archive/`로 보관했다 (`archive/README.md`).
 
 ## 6. 빌드와 시험
 
 ```powershell
-pio run -e yd_esp32_s3          # 생산 펌웨어
+pio run -e yd_esp32_s3_v2       # 경기용 펌웨어
 .\tests\run_host_tests.ps1      # PC 회귀 시험 (실물 검증 아님)
 ```
 
 전체 환경 목록과 업로드 순서는 README §2·§14에 있다.
+
+## V2 벤치 시험 추가
+
+| 작업 (§1) | 먼저 읽을 파일 |
+|---|---|
+| V2 실물 진단·수동 구동 | BENCH_TESTS.md V2 절, `include/bench_v2/bench_v2_app.hpp` |
+
+| 값의 원본 (§2) | 위치 |
+|---|---|
+| V2 벤치 출력·시간 | 기존 `include/bench/bench_config.hpp` (변경 없음) |
+| IMU 주소·대기 시간·판정 시간 | `include/sensors/imu_monitor.hpp`의 `config::imu` |
+
+| 모듈 (§4) | 핵심 API | 호출 위치 | 안전 |
+|---|---|---|---|
+| `include/bench_v2/bench_v2_app.hpp` 및 `src/bench_v2/bench_v2_app.cpp` | begin, update | `src/bench_v2_main.cpp`의 setup/loop에서 각각 호출 한 줄 | 기존 안전 API 호출, 안전 모듈 변경 없음 |
+| `include/sensors/imu_monitor.hpp` 및 `src/sensors/imu_monitor.cpp` (V2) | begin, requestReset, update, status, latest | 지금은 `bench_v2_app.cpp`만 호출. 생산 main에는 연결 안 함 | 모터·SystemManager를 건드리지 않음. 오류 시 FAULT로 멈추고 자동 재시도 없음 |
+
+§5에 따라 새 기능을 `include/<module>/` 및 `src/<module>/`로 분리했다.
+헤더의 `// Contract`는 역할·호출 위치·실패 경계를 설명한다.
+새 진입점의 loop()는 `BenchV2App::update();` 한 줄이다.
+생산 main.cpp에는 연결하지 않는다.
+
+`robot_bench_v2_manual`은 명시적 build_src_filter로 새 진입점과 모듈을 선택한다.
+기존 `robot_bench`·`robot_bench_v2`는 2026-10-31에 `archive/`로 보관했다.
+기존 V2 환경과 핀맵은 같으며 확장 진단 출력만 새 환경에 있다.
+진입점은 환경별로 선택되므로 중복 링크되지 않는다.
+PC 시험 -V2 -Bench는 새 진입점, V1 -Bench는 기존 진입점을 사용한다.
+V2 핀맵 검증·GPIO48 내장 LED 존재는 사용자 진술 기준(실측하지 않음)이다.
