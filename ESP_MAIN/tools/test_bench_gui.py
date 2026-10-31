@@ -16,11 +16,36 @@ assert state.sensors[3]["color"] == "RED" and state.sensors[3]["error"] == 0
 assert state.feed("S,1240,9,77,1,RED,1,812,10,20,30,40,50,0") == "s" and 9 not in state.sensors
 assert state.feed("I,1300,READY,68,1,120,0,4096,-12,30,1,2,3") == "i"
 assert state.imu["fresh"] and state.imu["accel"] == [4096, -12, 30]
-assert state.feed("SYSTEM,1400,3,0,1,1,0,2,1,0") == "system" and not state.estop
+assert state.feed("SYSTEM,1400,2,0,1,1,0,2,1,0") == "system" and not state.estop
+
+# The motor latch starts set before SW2 and also applies to ordinary faults.
+# Neither is evidence that the physical SW1 emergency switch was pressed.
+for line in (
+    "SYSTEM,20846,1,1,0,0,0,0,1,0",  # actual field log: waiting, no faults
+    "SYSTEM,20847,1,1,0,0,1,0,1,1",  # reset rearm only
+    "SYSTEM,20848,5,1,0,0,0,0,1,4",  # motor fault
+    "SYSTEM,20849,6,1,0,0,0,0,1,8",  # application/battery fault
+):
+    waiting = BenchState()
+    assert waiting.feed(line) == "system" and not waiting.estop
+    assert waiting.system["motor_latched"] and not waiting.system["estop"]
+
+# A real emergency state or emergency fault bit is sufficient evidence.
+for line in (
+    "SYSTEM,21000,7,1,0,0,0,0,1,16",
+    "SYSTEM,21000,7,1,0,0,0,0,1,0",
+    "SYSTEM,21000,1,1,0,0,0,0,1,16",
+):
+    emergency = BenchState()
+    assert emergency.feed(line) == "system" and emergency.estop
+    emergency.feed("SYSTEM,21001,1,1,0,0,0,0,1,0")
+    assert emergency.estop  # only a new GUI connection clears observed ESTOP
 assert state.feed("MOTOR,1500,100,100,1,0,0,1750,0") is None  # shown in log only
 assert state.feed("ERR command rejected; stopped") is None
 assert state.feed("D,broken") is None and state.feed("") is None
 assert state.feed("ESTOP") == "estop" and state.estop
+state.feed("SYSTEM,22000,1,1,0,0,0,0,1,0")
+assert state.estop
 assert parse_line("BAT battery_missing 0mV 0S")[1]["result"] == "battery_missing"
 
 assert drive_command("fwd", 100) == "DRIVE 100 100"

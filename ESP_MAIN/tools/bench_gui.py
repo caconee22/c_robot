@@ -105,8 +105,13 @@ def parse_line(line):
                      "samples": _int(f[5]), "bus_errors": _int(f[6]),
                      "accel": [_int(v) for v in f[7:10]], "gyro": [_int(v) for v in f[10:13]]}
     if tag == "SYSTEM" and len(f) >= 10:
-        return "system", {"state": _int(f[2]), "estop": f[3] == "1", "run": f[4] == "1",
-                          "allowed": f[5] == "1", "rearm": f[6] == "1"}
+        system_state, fault_flags = _int(f[2]), _int(f[9])
+        # system_manager.hpp: EmergencyStop=7, SystemFaultEmergencyStop=1<<4.
+        # f[3] is the motor latch, also set during normal startup before SW2.
+        return "system", {"state": system_state, "motor_latched": f[3] == "1",
+                          "fault_flags": fault_flags,
+                          "estop": system_state == 7 or bool(fault_flags & (1 << 4)),
+                          "run": f[4] == "1", "allowed": f[5] == "1", "rearm": f[6] == "1"}
     if tag == "CAL" and len(f) >= 9:
         return "cal", {"ms": _int(f[1]), "state": CAL_STATES.get(_int(f[2]), "Idle"),
                        "step": _int(f[3]), "sensor": _int(f[4]) + 1, "color": f[5],
