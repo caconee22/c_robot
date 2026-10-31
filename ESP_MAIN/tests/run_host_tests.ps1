@@ -19,6 +19,8 @@ $hwVersion = if ($V2) { 2 } else { 1 }
 $models = if ($V2) { @(1) } else { @(1, 2) }
 $sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src') -Filter '*.cpp' -Recurse |
     Where-Object { $_.Name -ne 'sensor_serial_test.cpp' -and
+        $_.Name -ne 'i2c_scanner_main.cpp' -and
+        $_.Name -ne 'raw_motor_main.cpp' -and
         $_.Name -ne 'calibration_main.cpp' -and
         $(if ($Bench) { $_.Name -ne 'main.cpp' } else {
             $_.Name -ne 'bench_v2_main.cpp' -and $_.Directory.Name -ne 'bench_v2' }) } |
