@@ -104,3 +104,79 @@ UART 출력 공간 부족, SW1 영구 정지를 확인했다. 생산 펌웨어�
 모드 변경 직전에 누르기 시작한 SW2의 해제는 새 모드 출발에 사용하지 않는다.
 잘못된 공개 모드 값은 STOP으로 처리하고, 회피 회전 중에도 현재 위험 방향을 다시 반영한다.
 생산/센서 전용/벤치 × 두 센서 구성의 여섯 PlatformIO 환경 빌드 성공. 실물 시험은 별도다.
+
+## V2 전용 실물 시험 (2026-10-31)
+
+새 환경은 `robot_bench_v2_manual`이며 `src/bench_v2_main.cpp`에서
+`include/bench_v2/bench_v2_app.hpp`와 `src/bench_v2/bench_v2_app.cpp`를 호출한다.
+기존 `robot_bench_v2`는 V1 벤치 진입점을 HW_VERSION=2로 빌드하는 환경으로 보존했다.
+두 환경의 V2 핀맵과 공용 API는 같다. 확장 진단 출력은 새 환경에만 있다.
+서로 다른 진입점을 별도로 빌드하므로 중복 링크되지 않는다.
+V1 벤치 파일, 기존 환경 정의, 핀 상수 및 안전 모듈은 변경하지 않았다.
+
+```powershell
+.\pio.cmd run -e robot_bench_v2_manual
+.\pio.cmd run -e robot_bench_v2
+.\pio.cmd run -e robot_bench
+powershell -File tests/run_host_tests.ps1 -V2 -Bench
+```
+
+`pio.cmd`는 사용자 프로필의 기존 PlatformIO Python을 실행하는 PATH 독립 진입점이다.
+플랫폼·라이브러리 버전은 바꾸지 않는다. 공용 설치가 읽기 전용이고
+`.pio/local-core` 캐시가 있으면 그 캐시를 사용한다. Windows의 긴 경로 문제를
+피하려고 빈 드라이브를 실행 동안 매핑하고 종료 시 해제한다.
+캐시가 없으면 기본 설치를 사용한다. PC 시험도 PATH와 사용자 프로필 다음으로
+로컬 캐시의 g++를 찾는다.
+
+UART0 Serial 57600bps로 부팅부터 진단 출력을 켠다.
+LOG ON/OFF, STATUS, MODE, DRIVE, STOP, HELP는 위 V1 명령 체계를 따른다.
+MODE MANUAL → SW2 눌림·해제 → DRIVE 순서로 시험한다.
+출력 상한은 ±200 천분율(±20%)이며 마지막 DRIVE 후 250ms에 정지한다.
+모드 변경·STOP 이후에는 새 SW2 제스처가 필요하다.
+SW1 영구 비상정지 래치, 독립 모터 명령 만료 감시 및 안전 확인 순서는 기존대로다.
+SW1 이후에는 일반 진단을 중단하고 기존 ESTOP 전용 루프로 진입한다.
+
+BatteryMonitor를 그대로 사용한다. 전원 투입 후 3초 판정 창 안에서 3S/4S 범위의
+연속 정상 샘플을 확인하고 성공하면 측정을 끝낸다. 배터리 없음·범위 미달·초과는
+애플리케이션 고장으로 시작을 막는다. Checking 중 처리도 기존 모듈과 같다.
+출력 전압은 연속 배터리 감시값이 아니라 마지막 부팅 판정값이다.
+분압비와 전압 판정은 멀티미터로 비교해야 한다.
+
+기존 D 행과 네 S 행의 열 순서를 유지하고 끝에 필드를 추가한다.
+D에는 SYSTEM, S1에는 MOTOR, S2에는 LINK, S3에는 POWER_LED가 붙는다.
+S4는 기존 형식이다. 숫자 enum은 해당 API 헤더 정의를 따른다.
+EV 프레임은 기존 이벤트만 출력하며 실시간 수치를 EventLogger로 보내지 않는다.
+
+```text
+D,기존 필드들...,SYSTEM,SystemState,모터비상래치,runRequested,motorAllowed,rearmRequired,startEventCount,resetReason,faultFlags
+S,기존 S1 필드들...,MOTOR,요청좌,요청우,outputsActive,lastResult,stopMode,commandValidUntilMs,watchdogStopCount
+S,기존 S2 필드들...,LINK,lastSequence,lastPacketMs,lastFrameMs,validPackets,invalidPackets,duplicatePackets
+S,기존 S3 필드들...,POWER_LED,BatteryCheckResult,packMillivolts,cells,okSamples,LedState,outputOn,R,G,B
+```
+
+적용 좌우 출력과 라즈 연결·최신 여부는 기존 D 필드에서 확인한다.
+100ms마다 다섯 행을 순서대로 시도하며 각 행은 해당 루프 시점의 스냅샷이다.
+80ms 프레임 제한과 UART 여유 공간 확인을 유지한다.
+공간이 부족하면 기다리지 않고 진단을 생략하며 명령 응답도 생략될 수 있다.
+PC 시험은 실제 최대 호출 시간을 보장하지 않는다.
+실물에서는 로그 ON/OFF 각각 UART1 50Hz 수신 누락, 최악 loop 호출 시간,
+모터 명령 갱신·안전 확인 간격 및 독립 만료 지연을 계측한다.
+
+미구현 목록: IMU(MPU6050), IR, 모터 전류(IS), 엔코더.
+해당 센서는 읽거나 초기화하지 않으며 엔코더 핀도 초기화하지 않는다.
+
+V2 핀맵 검증·GPIO48 내장 LED 존재는 **사용자 진술 기준(실측하지 않음)**이다.
+이번 작업에서 실물 검증을 완료한 것으로 표현하지 않는다.
+
+**GPIO35(EN_2) PSRAM 충돌 가능성:** 모듈 내부 옥탈 PSRAM과 충돌할 수 있다.
+PSRAM 설정을 켜지 않는다. 첫 시험은 모터 전원을 분리하고 전원 투입·리셋 순간
+EN_2 파형, 부팅 로그, EN 명령 반영 및 SW1 시 양쪽 EN 차단을 확인한다.
+
+**UART0 COM/SiK 동시 연결 주의:** COM과 SiK의 TX 두 개가 ESP32 RX를
+동시에 구동하지 않도록 한다.
+
+바퀴를 띄워 SW2·DRIVE·입력 중단·STOP·SW1 순서를 확인한 뒤 바닥 시험을 한다.
+컬러 센서는 네 모서리 × 네 색 × 3/10/20mm에서 근접 포화,
+먼 유색의 검정 오인 및 경계 혼합을 확인한다.
+수광·게인·LED·판정 임계값은 변경하지 않았다.
+컴파일·PC 시험 통과는 전기적 브레이크 효과, 제동거리 및 실제 차량 동작의 보증이 아니다.

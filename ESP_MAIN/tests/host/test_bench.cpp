@@ -7,6 +7,8 @@
 #include "bench/bench_config.hpp"
 #include "motor/motor_controller.hpp"
 #include "system/system_manager.hpp"
+#include "system/battery_monitor.hpp"
+#include "system/status_led.hpp"
 #include "sensors/sensor_config.hpp"
 
 void setup();
@@ -90,6 +92,18 @@ void camera(uint16_t x, uint16_t height, uint8_t sequence = 1) {
   }
   Serial1.inject(packet); ticks(8);
 }
+#if HW_VERSION == 2
+void batteryFailureTest() {
+  fake::reset();
+  fake::adcMillivolts[pins::BATTERY_ADC] = 0;
+  setup(); ticks(3100);
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Missing);
+  CHECK(!SystemManager::status().applicationHealthy);
+  send("MODE MANUAL"); startButton(); send("DRIVE 200 200");
+  CHECK(!SystemManager::motorAllowed());
+  CHECK(!MotorController::status().outputsActive);
+}
+#endif
 void integrationTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
@@ -126,7 +140,30 @@ void integrationTests() {
   send("0 200"); CHECK(!MotorController::status().outputsActive);  // Discard remainder.
   send("MODE DATA"); ticks(150); CHECK(Serial.tx.find("D,")!=std::string::npos);
   CHECK(Serial.tx.find("S,")!=std::string::npos);
+#if HW_VERSION == 2
+  ticks(150);
+  CHECK(Serial.baud == 57600);
+  CHECK(Serial.tx.find(",SYSTEM,") != std::string::npos);
+  CHECK(Serial.tx.find(",MOTOR,") != std::string::npos);
+  CHECK(Serial.tx.find(",LINK,") != std::string::npos);
+  CHECK(Serial.tx.find(",POWER_LED,") != std::string::npos);
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Ok);
+  CHECK(StatusLed::status().initialized);
+  send("LOG OFF");
+  Serial.tx.clear(); ticks(150);
+  CHECK(Serial.tx.find("D,") == std::string::npos);
+  send("LOG ON"); ticks(150);
+  CHECK(Serial.tx.find(",POWER_LED,") != std::string::npos);
+#endif
   Serial.capacity=0; const auto before=millis(); loop(); CHECK(millis()-before<=5);
+#if HW_VERSION == 2
+  Serial.tx.clear();
+  send("MODE MANUAL"); startButton(); send("DRIVE 100 -100");
+  CHECK(MotorController::status().outputsActive);
+  ticks(260);
+  CHECK(!MotorController::status().outputsActive);
+  CHECK(Serial.tx.empty());
+#endif
   Serial.capacity=4096;
   send("MODE MANUAL"); startButton(); send("DRIVE 100 100");
   fake::level(pins::SAFETY_SWITCH,LOW); CHECK(fake::pins[pins::MOTOR1_LEN]==LOW);
@@ -135,9 +172,15 @@ void integrationTests() {
   CHECK(MotorController::status().emergencyStopLatched);
 }
 }
-int main() {
+int main(int argc, char**) {
   try {
-    logicTests(); integrationTests();
+#if HW_VERSION == 2
+    if (argc > 1) batteryFailureTest();
+    else
+#else
+    (void)argc;
+#endif
+    { logicTests(); integrationTests(); }
     std::cout<<"BENCH MODEL "<<COLOR_SENSOR_MODEL<<": "<<checks<<" checks passed\n";
   } catch (const std::exception& e) { std::cerr<<"FAIL "<<e.what()<<"\n"; return 1; }
 }

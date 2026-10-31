@@ -116,3 +116,30 @@ pio run -e yd_esp32_s3          # 생산 펌웨어
 ```
 
 전체 환경 목록과 업로드 순서는 README §2·§14에 있다.
+
+## V2 벤치 시험 추가
+
+| 작업 (§1) | 먼저 읽을 파일 |
+|---|---|
+| V2 실물 진단·수동 구동 | BENCH_TESTS.md V2 절, `include/bench_v2/bench_v2_app.hpp` |
+
+| 값의 원본 (§2) | 위치 |
+|---|---|
+| V2 벤치 출력·시간 | 기존 `include/bench/bench_config.hpp` (변경 없음) |
+
+| 모듈 (§4) | 핵심 API | 호출 위치 | 안전 |
+|---|---|---|---|
+| `include/bench_v2/bench_v2_app.hpp` 및 `src/bench_v2/bench_v2_app.cpp` | begin, update | `src/bench_v2_main.cpp`의 setup/loop에서 각각 호출 한 줄 | 기존 안전 API 호출, 안전 모듈 변경 없음 |
+
+§5에 따라 새 기능을 `include/<module>/` 및 `src/<module>/`로 분리했다.
+헤더의 `// Contract`는 역할·호출 위치·실패 경계를 설명한다.
+새 진입점의 loop()는 `BenchV2App::update();` 한 줄이다.
+생산 main.cpp에는 연결하지 않는다.
+
+새 환경 `robot_bench_v2_manual`은 `yd_esp32_s3_v2`를 상속하고
+HW_VERSION=2 및 명시적 build_src_filter로 새 진입점과 모듈을 선택한다.
+기존 `robot_bench_v2`와 `robot_bench` 환경은 그대로 유지한다.
+기존 V2 환경과 핀맵은 같으며 확장 진단 출력만 새 환경에 있다.
+진입점은 환경별로 선택되므로 중복 링크되지 않는다.
+PC 시험 -V2 -Bench는 새 진입점, V1 -Bench는 기존 진입점을 사용한다.
+V2 핀맵 검증·GPIO48 내장 LED 존재는 사용자 진술 기준(실측하지 않음)이다.
