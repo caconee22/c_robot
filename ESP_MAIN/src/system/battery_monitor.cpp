@@ -30,6 +30,7 @@ uint8_t cellsFor(uint32_t packMv) {
 
 void finish(BatteryCheckResult result) {
   current.result = result;
+  if (result == BatteryCheckResult::Ok) SystemManager::holdStart(false);
   const int32_t mv = static_cast<int32_t>(current.packMillivolts);
   EventLogger::logText(static_cast<uint16_t>(EventId::Custom),
                        result == BatteryCheckResult::Ok ? LogSeverity::Info
@@ -53,6 +54,7 @@ void BatteryMonitor::begin(uint32_t nowMs) {
 #if HW_VERSION == 2
   analogSetPinAttenuation(pins::BATTERY_ADC, ADC_11db);
   current.result = BatteryCheckResult::Checking;
+  SystemManager::holdStart(true);  // No SW2 start before the pack is judged.
   checkStartedMs = nowMs;
   sampled = false;
   lastCells = 0;

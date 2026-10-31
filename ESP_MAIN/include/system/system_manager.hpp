@@ -34,6 +34,7 @@ struct SystemStatus {
   bool sensorsHealthy = true;
   bool motorsHealthy = true;
   bool applicationHealthy = true;
+  bool startHeld = false;  // SW2 ignored while a power-on check is pending.
   uint32_t faultFlags = SystemFaultNone;
   uint32_t stateEnteredMs = 0;
   uint32_t transitionCount = 0;
@@ -68,6 +69,10 @@ class SystemManager {
   static void setApplicationHealthy(bool healthy,
                                     FaultCode fault = FaultCode::Unknown,
                                     int32_t detail = 0);
+
+  // While held, SW2 presses are dropped like a fault would drop them; a new
+  // press is needed after release. Not a fault: state and LEDs are unchanged.
+  static void holdStart(bool held);
 
   static SystemStatus status();
   static SafetyStatus safetyStatus();

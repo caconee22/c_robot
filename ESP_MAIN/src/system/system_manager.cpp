@@ -177,7 +177,8 @@ void SystemManager::update(uint32_t nowMs) {
 
   if (ButtonInterrupts::consumeStartEvent()) {
     if (!latestStatus.motorsHealthy ||
-        !latestStatus.applicationHealthy || !latestStatus.sensorsHealthy) {
+        !latestStatus.applicationHealthy || !latestStatus.sensorsHealthy ||
+        latestStatus.startHeld) {
       latestStatus.runRequested = false;
       EventLogger::log(EventId::SafetyBlocked, 1, 0);
     } else {
@@ -239,6 +240,8 @@ void SystemManager::setApplicationHealthy(bool healthy, FaultCode fault,
   setHealth(healthy, latestStatus.applicationHealthy, fault, detail,
             applicationFault, applicationFaultDetail, LogSource::System);
 }
+
+void SystemManager::holdStart(bool held) { latestStatus.startHeld = held; }
 
 SystemStatus SystemManager::status() { return latestStatus; }
 
