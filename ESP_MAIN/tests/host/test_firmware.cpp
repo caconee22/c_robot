@@ -511,6 +511,19 @@ void testBattery() {
   // A pack connected 1 s after power-up still passes inside the window.
   CHECK(runBatteryCheck(16000, 1000) == BatteryCheckResult::Ok);
   pressStart(); CHECK(SystemManager::motorAllowed());
+  // SW2 pressed while the pack is still being judged is dropped, and does
+  // not start the robot later; a new press is needed after Ok.
+  fixture(); SystemManager::update(millis());
+  fake::adcMillivolts[pins::BATTERY_ADC] = 0;
+  BatteryMonitor::begin(millis());
+  pressStart(); CHECK(!SystemManager::motorAllowed());
+  fake::adcMillivolts[pins::BATTERY_ADC] = 15200 / 11;
+  for (int i = 0; i < 50; ++i) {
+    BatteryMonitor::update(millis()); SystemManager::update(millis()); fake::advance(10);
+  }
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Ok);
+  CHECK(!SystemManager::motorAllowed());
+  pressStart(); CHECK(SystemManager::motorAllowed());
   // Decided once: later voltage changes do not re-run the check.
   fake::adcMillivolts[pins::BATTERY_ADC] = 0;
   for (int i = 0; i < 50; ++i) { BatteryMonitor::update(millis()); fake::advance(20); }

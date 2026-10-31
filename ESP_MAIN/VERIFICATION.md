@@ -354,3 +354,9 @@ COM/SiK의 TX 두 개가 ESP32 RX를 동시에 구동하지 않도록 한다.
 - PC 시험: `-Bench` 310+4 (교정 시작·주행 차단·카운트다운·측정 결과·ACCEPT·ABORT 후 정상 주행 복귀), 기본 5020/4581, `-V2` 5037 통과. `tools/test_bench_gui.py` 통과.
 - 빌드: robot_bench_v2_manual SUCCESS, yd_esp32_s3_v2 SUCCESS (Flash 345801, 변경 없음).
 - 실물 미검증: 교정 중 Serial.printf 대기 시간, 실제 센서로 48단계, 교정 품질 판정 임계값.
+
+## 2026-10-31 코드 리뷰 반영 (Claude + Codex)
+
+- 배터리 판정 전 SW2 시작 차단: `v2/firmware-prep`의 `SystemManager::holdStart`(학현 커밋)를 병합. 판정 중 누른 SW2는 버려지고 `Ok` 뒤 새로 눌러야 출발. PC 시험에 해당 경우 추가.
+- `bench_gui.py` 포화 기준을 65535에서 AS7341 5ms 최대값 1798로(90% 이상 경고), 미리보기 `NOT_READY`에 포화 가능성 표시.
+- 리뷰에서 실물 확인으로 남긴 것: 3mm 포화 → Unknown → 위험색 미인식, GPIO35 EN_2 부팅 튐, `board_io` 출력 초기화 순서(가능성 낮음).

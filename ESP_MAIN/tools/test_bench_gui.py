@@ -48,8 +48,9 @@ assert cal.feed("CAL,1500,1,7,0,BLUE,LIFTED,0,1") == "cal" and cal.cal_result is
 assert cal.feed("[CAL] Calibration saved to NVS.") == "cal_saved" and cal.cal_finished == "saved"
 assert cal.feed("[CAL] Stored calibration erased.") == "cal_erased" and cal.cal_stored is False
 assert cal.feed("[CAL] Rejected: sensor ready mask is 0x07.") == "cal_rejected"
-levels = [lvl for lvl, _ in cal_quality({"samples": 4, "brightness": 20.0, "min": 1, "max": 65535, "noise": 9.0})]
+levels = [lvl for lvl, _ in cal_quality({"samples": 4, "brightness": 20.0, "min": 1, "max": 1700, "noise": 9.0})]
 assert levels == ["bad", "warn", "warn", "warn"]
+assert cal_quality({"samples": 28, "brightness": 1500.0, "min": 1490, "max": 1610, "noise": 2.0})[0][0] == "ok"
 assert cal_step_info(0) == {"sensor": 1, "color": "RED", "pose": "LEVEL"}
 assert cal_step_info(4) == {"sensor": 1, "color": "YELLOW", "pose": "LIFTED"}
 assert cal_step_info(47) == {"sensor": 4, "color": "BLACK", "pose": "PRESSED"}
