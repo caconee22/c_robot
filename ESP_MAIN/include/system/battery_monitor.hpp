@@ -23,6 +23,7 @@ struct BatteryStatus {
 //   begin(), the pack voltage must fit one allowed cell count (3S or 4S)
 //   for OK_SAMPLES_REQUIRED samples in a row. Otherwise the battery is
 //   reported as missing / wrong and the robot is not allowed to start.
+//   SW2 is held (SystemManager::holdStart) until the check passes.
 // Called from: setup() (begin) and loop() (update). One ADC read at most every
 //   SAMPLE_PERIOD_MS; never waits.
 // Failure: SystemManager::setApplicationHealthy(false, ...) once, with the pack

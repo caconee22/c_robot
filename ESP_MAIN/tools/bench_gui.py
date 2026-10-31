@@ -35,6 +35,10 @@ DRIVE_LIMIT = 200       # firmware bench output limit (permille)
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 CORNERS = {1: "앞 왼쪽", 2: "앞 오른쪽", 3: "뒤 왼쪽", 4: "뒤 오른쪽"}
 CAL_STEPS = 48          # 4 sensors x 4 colors x 3 poses (firmware order)
+# AS7341 ADC full scale = (ATIME+1)*(ASTEP+1) from sensor_config.hpp; 5 ms gives 1798.
+# shortcut: fixed to the 5 ms setting, update it if AS7341_EXPOSURE_US changes.
+AS7341_FULL_SCALE = 1798
+NEAR_SATURATION = int(AS7341_FULL_SCALE * 0.9)  # firmware drops samples at full scale
 CAL_STATES = {0: "Idle", 1: "WaitingForReady", 2: "Countdown", 3: "Measuring",
               4: "WaitingForAccept", 5: "Completed", 6: "Error"}
 COLOR_KO = {"RED": ("빨강", "가운데 빨간 홈"), "YELLOW": ("노랑", "노란 직사각형 홈"),
@@ -141,8 +145,8 @@ def _parse_cal_text(line):
 def cal_quality(result):
     """Plain-language checks on one [CAL][RESULT]. Thresholds are rough guides."""
     notes = []
-    if result["max"] >= 65000:
-        notes.append(("bad", "포화: 너무 밝거나 가깝습니다. 간격을 다시 확인하세요"))
+    if result["max"] >= NEAR_SATURATION:
+        notes.append(("bad", f"포화 직전(최대 {result['max']} / {AS7341_FULL_SCALE}): 너무 밝거나 가깝습니다. 학현에게 알리기 (게인 조정 필요)"))
     if result["brightness"] < 30:
         notes.append(("warn", "매우 어둡습니다. 센서 LED와 위치를 확인하세요"))
     if result["noise"] > max(3.0, 0.05 * result["brightness"]):
@@ -989,13 +993,14 @@ def run_gui():
         p = state.cal_preview
         if active and c["state"] == "WaitingForReady" and p and p["ready"]:
             width = preview_bar.winfo_width()
-            frac = min(1.0, (p["clear"] / 65535) ** 0.5)
+            frac = min(1.0, p["clear"] / AS7341_FULL_SCALE)
             preview_bar.coords(preview_fill, 0, 0, int(width * frac), 14)
-            preview_bar.itemconfig(preview_fill, fill=T["bad"] if p["clear"] >= 65000 else T["accent"])
+            preview_bar.itemconfig(preview_fill, fill=T["bad"] if p["clear"] >= NEAR_SATURATION else T["accent"])
             preview_value.config(text=str(p["clear"]))
         else:
             preview_bar.coords(preview_fill, 0, 0, 0, 14)
-            preview_value.config(text="—")
+            # Firmware reports NOT_READY for saturated (too close / too bright) samples too.
+            preview_value.config(text="측정 안 됨 (포화?)" if active and p and not p["ready"] else "—")
 
         if not connected:
             cal_step_label.config(text="교정 전")

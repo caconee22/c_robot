@@ -45,7 +45,7 @@
 SystemManager::update      안전 상태 갱신
 RaspberryLink::poll        UART1 최대 128바이트
 SensorManager::update      센서 짧은 I2C 단계
-BatteryMonitor::update     V2: 전원 투입 후 3초 안 배터리 판정 (ADC 1회, 판정 후 아무것도 안 함)
+BatteryMonitor::update     V2: 전원 투입 후 3초 안 배터리 판정 (ADC 1회, Ok 전에는 SW2 시작 보류, 판정 후 아무것도 안 함)
 SystemManager::update      안전 재확인 (의도된 반복)
 SensorManager::snapshot + RaspberryLink::latest
 RobotFsm::update           → DriveIntent
