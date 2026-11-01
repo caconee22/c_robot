@@ -40,7 +40,7 @@ void setup() {
     Serial.println("RAW_MOTOR ERROR: PWM setup failed; EN stays LOW");
     return;
   }
-  // Same electrical direction as a positive command in the bench firmware.
+  // RPWM drive = backward on the V2 robot (11/01); bench/match now invert both motors.
   ledcWrite(1, kDuty);
   ledcWrite(3, kDuty);
   digitalWrite(pins::MOTOR1_EN, HIGH);

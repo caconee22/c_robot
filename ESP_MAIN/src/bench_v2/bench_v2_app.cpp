@@ -170,12 +170,30 @@ void reportBattery() {
   }
 }
 
+// Every analog input on the V2 board, read one per loop so no loop waits on
+// eleven conversions. Order matches the ADC row. GPIO19/20 (motor 2 IS) are
+// the USB pins: the first analog read hands them to the ADC.
+constexpr gpio_num_t ANALOG_PINS[] = {
+    pins::MOTOR1_L_IS, pins::MOTOR1_R_IS, pins::MOTOR2_L_IS, pins::MOTOR2_R_IS,
+    pins::IR_INPUTS[0], pins::IR_INPUTS[1], pins::IR_INPUTS[2],
+    pins::IR_INPUTS[3], pins::IR_INPUTS[4], pins::IR_INPUTS[5], pins::BATTERY_ADC};
+constexpr uint8_t ANALOG_COUNT = sizeof(ANALOG_PINS) / sizeof(ANALOG_PINS[0]);
+uint16_t analogMv[ANALOG_COUNT] = {};
+uint8_t analogNext = 0;
+
+void sampleAnalog() {
+  analogMv[analogNext] = static_cast<uint16_t>(analogReadMilliVolts(ANALOG_PINS[analogNext]));
+  analogNext = (analogNext + 1) % ANALOG_COUNT;
+}
+
 // Each frame is D, S1..S4 and one extra row. UART0 has only its 128-byte
 // hardware FIFO (no TX ring buffer), so every line stays under 128 bytes and
-// the extra rows take turns: IMU every other frame, pins every 6th, the rest every 12th.
-enum class Extra : uint8_t { Imu, System, Motor, Link, Power, Pins };
+// the extra rows take turns: IMU every other frame, pins and ADC every 8th,
+// the rest every 16th.
+enum class Extra : uint8_t { Imu, System, Motor, Link, Power, Pins, Analog };
 constexpr Extra EXTRA_ORDER[] = {Extra::Imu, Extra::System, Extra::Imu, Extra::Pins,
-                                 Extra::Imu, Extra::Motor, Extra::Imu, Extra::Pins,
+                                 Extra::Imu, Extra::Analog, Extra::Imu, Extra::Motor,
+                                 Extra::Imu, Extra::Pins, Extra::Imu, Extra::Analog,
                                  Extra::Imu, Extra::Link, Extra::Imu, Extra::Power};
 uint8_t extraIndex = 0;
 
@@ -217,16 +235,22 @@ int extraLine(char* line, size_t size, uint32_t now, Extra kind) {
     case Extra::Pins: {
       // Actual pin levels, read back from the hardware (OUTPUT keeps the input
       // buffer on): SW1/SW2 1 = pressed, EN 1 = HIGH, PWM = LEDC duty 0..255.
-      // PIN,ms,sw1,sw2,en1,en2,lpwm1,rpwm1,lpwm2,rpwm2
-      return snprintf(line, size, "PIN,%lu,%d,%d,%d,%d,%lu,%lu,%lu,%lu\r\n", ms,
+      // PIN,ms,sw1,sw2,en1,en2,lpwm1,rpwm1,lpwm2,rpwm2,sda,scl
+      return snprintf(line, size, "PIN,%lu,%d,%d,%d,%d,%lu,%lu,%lu,%lu,%d,%d\r\n", ms,
           digitalRead(pins::SAFETY_SWITCH) == LOW ? 1 : 0,
           digitalRead(pins::START_SWITCH) == LOW ? 1 : 0,
           digitalRead(pins::MOTOR1_EN), digitalRead(pins::MOTOR2_EN),
           static_cast<unsigned long>(ledcRead(config::motor::MOTOR1_LPWM_CHANNEL)),
           static_cast<unsigned long>(ledcRead(config::motor::MOTOR1_RPWM_CHANNEL)),
           static_cast<unsigned long>(ledcRead(config::motor::MOTOR2_LPWM_CHANNEL)),
-          static_cast<unsigned long>(ledcRead(config::motor::MOTOR2_RPWM_CHANNEL)));
+          static_cast<unsigned long>(ledcRead(config::motor::MOTOR2_RPWM_CHANNEL)),
+          digitalRead(pins::I2C_SDA), digitalRead(pins::I2C_SCL));
     }
+    case Extra::Analog:
+      // ADC,ms,IS_L1,IS_R1,IS_L2,IS_R2,IR1..IR6,BAT pin, all in mV at the GPIO.
+      return snprintf(line, size, "ADC,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\r\n", ms,
+          analogMv[0], analogMv[1], analogMv[2], analogMv[3], analogMv[4], analogMv[5],
+          analogMv[6], analogMv[7], analogMv[8], analogMv[9], analogMv[10]);
     case Extra::Power: {
       const auto battery = BatteryMonitor::status();
       const auto led = StatusLed::status().internal;
@@ -342,6 +366,7 @@ void BenchV2App::update() {
   StatusLed::update(millis());
   EventLogger::process();
   reportBattery();
+  sampleAnalog();
   telemetry(millis());
   calibrationLine(millis());
   delay(1);

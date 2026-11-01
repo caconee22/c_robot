@@ -269,11 +269,18 @@ void integrationTests() {
   ticks(260); CHECK(!MotorController::status().outputsActive);
   send("DRIVE 150 150"); CHECK(MotorController::status().outputsActive);
 #if BENCH_V2_MANUAL
-  // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255.
+  // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255,
+  // on LPWM because both V2 motors are inverted (motor_config.hpp).
   Serial.tx.clear();
   for (int i=0;i<12;++i) { send("DRIVE 150 150"); ticks(100); }
-  CHECK(Serial.tx.find(",0,0,1,1,0,38,0,38\r\n")!=std::string::npos);
+  CHECK(Serial.tx.find(",0,0,1,1,38,0,38,0,")!=std::string::npos);
   CHECK(Serial.tx.find("PIN,")!=std::string::npos);
+  // ADC row: every analog pin in mV at the GPIO; IS motor 2 left is GPIO20.
+  fake::adcMillivolts[pins::MOTOR2_L_IS]=1234; fake::adcMillivolts[pins::IR_INPUTS[5]]=567;
+  Serial.tx.clear();
+  for (int i=0;i<20;++i) { send("DRIVE 150 150"); ticks(100); }
+  CHECK(Serial.tx.find("ADC,")!=std::string::npos);
+  CHECK(Serial.tx.find(",1234,")!=std::string::npos && Serial.tx.find(",567,")!=std::string::npos);
 #endif
   send("MODE ALIGN"); CHECK(!SystemManager::motorAllowed()); CHECK(!MotorController::status().outputsActive);
   startButton(); ticks(20); CHECK(!MotorController::status().outputsActive);  // No Pi target.

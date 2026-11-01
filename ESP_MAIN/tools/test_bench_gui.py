@@ -52,6 +52,10 @@ assert state.estop
 assert parse_line("BAT battery_missing 0mV 0S")[1]["result"] == "battery_missing"
 kind, pin = parse_line("PIN,1200,0,1,1,0,0,51,0,0")
 assert kind == "pin" and pin["sw2"] and not pin["sw1"] and pin["en"] == (True, False) and pin["pwm"] == (0, 51, 0, 0)
+assert pin["sda"] is None  # older PIN row without SDA/SCL
+assert parse_line("PIN,1200,0,0,1,1,0,0,0,0,1,0")[1]["scl"] is False
+kind, adc = parse_line("ADC,1300,10,20,3000,40,1,2,3,4,5,6,1380")
+assert kind == "adc" and adc["is_l2"] == 3000 and adc["ir6"] == 6 and adc["bat"] == 1380
 
 assert drive_command("fwd", 100) == "DRIVE 100 100"
 assert drive_command("back", 100) == "DRIVE -100 -100"

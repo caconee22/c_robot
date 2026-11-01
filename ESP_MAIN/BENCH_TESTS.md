@@ -138,7 +138,7 @@ BatteryMonitor를 그대로 사용한다. 전원 투입 후 3초 판정 창 안�
 분압비와 전압 판정은 멀티미터로 비교해야 한다.
 
 D 행과 네 S 행은 기존 형식 그대로다. 프레임마다 여섯 번째 행 하나가 붙고,
-그 행은 돌아가며 바뀐다: I(IMU)는 두 프레임마다, PIN은 여섯 프레임(0.6초)마다, 나머지는 열두 프레임(1.2초)마다.
+그 행은 돌아가며 바뀐다: I(IMU)는 두 프레임마다, PIN·ADC는 여덟 프레임(0.8초)마다, 나머지는 열여섯 프레임(1.6초)마다.
 UART0에는 128바이트 하드웨어 FIFO만 있고 TX 링버퍼가 없어서(`availableForWrite()` ≤ 128)
 128바이트가 넘는 줄은 영영 나가지 못한다. 그래서 진단을 기존 줄 끝에 붙이지 않고
 따로 짧은 줄로 낸다(PC 시험이 모든 줄 < 128바이트를 확인). 숫자 enum은 해당 API 헤더 정의를 따른다.
@@ -150,7 +150,8 @@ SYSTEM,ms,SystemState,모터비상래치,runRequested,motorAllowed,rearmRequired
 MOTOR,ms,요청좌,요청우,outputsActive,lastResult,stopMode,commandValidUntilMs,watchdogStopCount
 LINK,ms,lastSequence,lastPacketMs,lastFrameMs,validPackets,invalidPackets,duplicatePackets
 POWER_LED,ms,BatteryCheckResult,packMillivolts,cells,okSamples,LedState,outputOn,R,G,B
-PIN,ms,SW1눌림,SW2눌림,EN1,EN2,LPWM1,RPWM1,LPWM2,RPWM2
+PIN,ms,SW1눌림,SW2눌림,EN1,EN2,LPWM1,RPWM1,LPWM2,RPWM2,SDA,SCL
+ADC,ms,IS_L1,IS_R1,IS_L2,IS_R2,IR1,IR2,IR3,IR4,IR5,IR6,BAT핀 (모두 GPIO에서 잰 mV)
 ```
 
 PIN은 보드에서 실제로 읽은 값이다. SW는 1 = 눌림, EN은 핀 레벨(1 = HIGH), PWM은 LEDC 듀티(0..255,
@@ -159,7 +160,9 @@ I 행 끝 두 값은 IMU가 "멈춤"일 때 원인 진단용이다. 신선아님
 data-ready 없음), 3 값 고정(FROZEN_MS 동안 같은 값). PWR_MGMT_1은 0.5초마다 다시 읽은 값으로 01이면 정상,
 40이면 칩이 혼자 리셋되어 잠든 것(전원 흔들림 의심)이다. 이때 버스 오류는 늘지 않는다. 자동 재초기화는 없고 `IMU RESET`으로 되살린다.
 GUI IMU 줄에 "멈춤(샘플 끊김) · 칩 리셋됨(잠자기)"처럼 뜬다.
-GUI 시험 탭 가운데 위 **핀 상태** 판에 8칸(SW1·SW2·EN 왼/오·PWM 4개, GPIO 번호 포함)으로 색과 함께 뜬다. 2초 넘게 새 PIN 줄이 없으면 회색 —로 바뀐다.
+ADC는 아날로그 핀 11개를 한 루프에 하나씩 돌아가며 읽는다(한 루프가 11번 변환을 기다리지 않게). IS는 BTS7960 IS 출력이
+470Ω(GND)·1kΩ(직렬)을 거친 GPIO 전압이다. GPIO19/20(오른쪽 IS)은 USB 핀이라 첫 아날로그 읽기 때 ADC로 넘어간다.
+GUI 시험 탭 가운데 위 **핀 상태** 판에 21칸(SW1·SW2·SDA·SCL·EN 2·PWM 4·BAT 핀·IS 4·IR 6, GPIO 번호 포함)으로 뜬다. 2초 넘게 새 PIN 줄이 없으면 회색 —로 바뀐다.
 
 적용 좌우 출력과 라즈 연결·최신 여부는 기존 D 필드에서 확인한다.
 100ms마다 여섯 행을 순서대로 시도하며 각 행은 해당 루프 시점의 스냅샷이다.
