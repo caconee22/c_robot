@@ -49,13 +49,41 @@ POSE_KO = {"LEVEL": ("평평", 10, "로봇을 평평하게 두고 센서-바닥 
            "PRESSED": ("눌림", 3, "이 모서리를 눌러 간격 3mm (바닥에 거의 붙은 상태)")}
 
 
-# PIN row tiles: (key, label, GPIO). GPIO numbers copied from include/pins_v2.hpp.
-PIN_TILES = [("sw1", "SW1 정지", 15), ("sw2", "SW2 시작", 16),
-             ("en1", "EN 왼", 40), ("en2", "EN 오", 35),
-             ("lpwm1", "왼 LPWM", 42), ("rpwm1", "왼 RPWM", 41),
-             ("lpwm2", "오 LPWM", 47), ("rpwm2", "오 RPWM", 21)]
+# Pin panel rows: (key, label, GPIO). GPIO numbers copied from include/pins_v2.hpp.
+# Digital rows come from the PIN row, analog rows (mV at the GPIO) from the ADC row.
+PIN_ROWS = [
+    [("sw1", "SW1", 15), ("sw2", "SW2", 16), ("sda", "SDA", 11), ("scl", "SCL", 12),
+     ("en1", "EN 왼", 40), ("en2", "EN 오", 35)],
+    [("lpwm1", "왼 LPWM", 42), ("rpwm1", "왼 RPWM", 41), ("lpwm2", "오 LPWM", 47),
+     ("rpwm2", "오 RPWM", 21), ("bat", "BAT 핀", 14)],
+    [("is_l1", "왼 L_IS", 1), ("is_r1", "왼 R_IS", 2), ("is_l2", "오 L_IS", 20), ("is_r2", "오 R_IS", 19)],
+    [("ir1", "IR1", 4), ("ir2", "IR2", 5), ("ir3", "IR3", 6), ("ir4", "IR4", 7), ("ir5", "IR5", 8),
+     ("ir6", "IR6", 13)],
+]
+ADC_KEYS = ["is_l1", "is_r1", "is_l2", "is_r2", "ir1", "ir2", "ir3", "ir4", "ir5", "ir6", "bat"]
 
 IMU_STALE = {1: "준비 안 됨", 2: "샘플 끊김", 3: "값 고정"}
+I2C_NAMES = {"39": "AS7341", "29": "TCS34725", "68": "IMU", "69": "IMU", "70": "먹스"}
+
+
+def i2c_summary(scan):
+    """One line for the I2C SCAN result: mux present?, what sits on each floor-sensor channel."""
+    if not scan:
+        return "— (I2C 스캔 버튼)"
+    if not scan.get("finished"):
+        return "스캔 중…"
+    def names(addrs):
+        return ", ".join(f"{a}({I2C_NAMES[a]})" if a in I2C_NAMES else a for a in addrs) or "없음"
+    text = f"본선 {names(scan['main'])}"
+    if scan.get("mux"):
+        chans = [f"ch{c} {', '.join(scan['ch'].get(c, [])) or '—'}"
+                 for c in range(8) if c < 4 or scan["ch"].get(c)]
+        text = f"먹스 0x{scan['mux']} 있음 · " + " · ".join(chans) + " · " + text
+    else:
+        text = "먹스 없음 · " + text
+    if scan.get("err"):
+        text += f" · 버스 오류(0x{scan['err']}) → 배선·풀업·전원 확인"
+    return text
 
 
 def imu_freshness(m):
@@ -109,6 +137,19 @@ def parse_line(line):
             return "bat", {"result": parts[1], "mv": _int(parts[2].rstrip("mV")),
                            "cells": _int(parts[3].rstrip("S"))}
         return None, None
+    if line == "OK I2C SCAN":
+        return "i2c", {"part": "start"}
+    if line.startswith("I2C "):
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "MAIN":
+            return "i2c", {"part": "main", "addrs": parts[2:]}
+        if len(parts) >= 3 and parts[1] == "MUX":
+            return "i2c", {"part": "mux", "mux": None if parts[2] == "NONE" else parts[2]}
+        if len(parts) >= 3 and parts[1] == "CH":
+            return "i2c", {"part": "ch", "ch": _int(parts[2]), "addrs": parts[3:]}
+        if len(parts) >= 2 and parts[1] in ("DONE", "ERR"):
+            return "i2c", {"part": "end", "err": parts[-1] if parts[1] == "ERR" else None}
+        return None, None
     if line.startswith("[CAL]"):
         return _parse_cal_text(line)
     f = line.split(",")
@@ -141,7 +182,12 @@ def parse_line(line):
         # PIN,ms,sw1,sw2,en1,en2,lpwm1,rpwm1,lpwm2,rpwm2 (levels read back from the board)
         return "pin", {"ms": _int(f[1]), "sw1": f[2] == "1", "sw2": f[3] == "1",
                        "en": (f[4] == "1", f[5] == "1"),
-                       "pwm": (_int(f[6]), _int(f[7]), _int(f[8]), _int(f[9]))}
+                       "pwm": (_int(f[6]), _int(f[7]), _int(f[8]), _int(f[9])),
+                       "sda": f[10] == "1" if len(f) >= 12 else None,
+                       "scl": f[11].strip() == "1" if len(f) >= 12 else None}
+    if tag == "ADC" and len(f) >= 2 + len(ADC_KEYS):
+        # ADC,ms,IS_L1,IS_R1,IS_L2,IS_R2,IR1..IR6,BAT pin (mV at the GPIO)
+        return "adc", {"ms": _int(f[1]), **{k: _int(v) for k, v in zip(ADC_KEYS, f[2:])}}
     if tag == "CAL" and len(f) >= 9:
         return "cal", {"ms": _int(f[1]), "state": CAL_STATES.get(_int(f[2]), "Idle"),
                        "step": _int(f[3]), "sensor": _int(f[4]) + 1, "color": f[5],
@@ -209,6 +255,9 @@ class BenchState:
         self.system = None
         self.pins = None
         self.pins_at = 0.0
+        self.adc = None
+        self.i2c = None            # last I2C SCAN result, filled line by line
+        self.adc_at = 0.0
         self.estop = False
         self.cal = None            # last CAL status line (only while calibrating)
         self.cal_result = None     # last measurement result, until the next step
@@ -233,6 +282,20 @@ class BenchState:
             self.imu = v
         elif kind == "pin":
             self.pins, self.pins_at = v, time.monotonic()
+        elif kind == "i2c":
+            part = v["part"]
+            if part == "start" or self.i2c is None:
+                self.i2c = {"main": [], "mux": None, "ch": {}, "finished": False, "err": None}
+            if part == "main":
+                self.i2c["main"] = v["addrs"]
+            elif part == "mux":
+                self.i2c["mux"] = v["mux"]
+            elif part == "ch":
+                self.i2c["ch"][v["ch"]] = v["addrs"]
+            elif part == "end":
+                self.i2c["finished"], self.i2c["err"] = True, v["err"]
+        elif kind == "adc":
+            self.adc, self.adc_at = v, time.monotonic()
         elif kind == "system":
             self.system = v
             self.estop = self.estop or v["estop"]
@@ -404,6 +467,11 @@ class DemoLink:
                 self.lines.put("OK SW2 press/release queued")
             else:
                 self.lines.put("ERR SW2 blocked")
+        elif line == "I2C SCAN":
+            self.allowed, self.drive, self.out = False, None, (0, 0)
+            for reply in ("OK I2C SCAN", "I2C MAIN 68 70", "I2C MUX 70", "I2C CH 0 39", "I2C CH 1 39",
+                          "I2C CH 2", "I2C CH 3 39", "I2C CH 4", "I2C CH 5", "I2C CH 6", "I2C CH 7", "I2C DONE 160"):
+                self.lines.put(reply)
         elif line == "CAL STATUS":
             self.lines.put(f"[CAL][STATUS] active={int(self.cal is not None)} stored=0 state=0 step=1/48")
         elif self.cal is not None:
@@ -466,7 +534,10 @@ class DemoLink:
                     on = int(self.allowed)
                     self.lines.put(f"PIN,{t},0,0,{on},{on},{duty[0] if self.out[0] < 0 else 0},"
                                    f"{duty[0] if self.out[0] > 0 else 0},{duty[1] if self.out[1] < 0 else 0},"
-                                   f"{duty[1] if self.out[1] > 0 else 0}")
+                                   f"{duty[1] if self.out[1] > 0 else 0},1,1")
+                    is_mv = [abs(v) // 4 for v in self.out]
+                    self.lines.put(f"ADC,{t},{is_mv[0]},0,{is_mv[1]},0,{r.randint(0, 40)},{r.randint(0, 40)},"
+                                   f"{r.randint(0, 40)},{r.randint(0, 40)},{r.randint(0, 40)},{r.randint(0, 40)},1380")
                 if t % 200 == 0:
                     self.lines.put(f"I,{t},READY,68,1,{t // 10},0,{r.randint(-80, 80)},{r.randint(-80, 80)},"
                                    f"{4096 + r.randint(-60, 60)},{r.randint(-20, 20)},{r.randint(-20, 20)},{r.randint(-20, 20)},0,01")
@@ -800,23 +871,31 @@ def run_gui():
 
     # middle: log + manual command
     # pin panel: levels the board read back from its own pins (PIN row)
-    pin_box = card(mid, "핀 상태 · 보드가 읽은 실제 값 (0.6초마다)")
+    pin_box = card(mid, "핀 상태 · 보드가 읽은 실제 값 (0.8초마다) · 아날로그는 GPIO에서 잰 mV")
     pin_grid = tk.Frame(pin_box, bg=T["surface"])
     pin_grid.pack(fill="x")
     pin_tiles = {}
-    for i, (key, name, gpio) in enumerate(PIN_TILES):
-        tile = tk.Frame(pin_grid, bg=T["sunk"], padx=8, pady=6)
-        tile.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
-        pin_grid.columnconfigure(i % 4, weight=1, uniform="pin")
-        top_row = tk.Frame(tile, bg=T["sunk"])
-        top_row.pack(fill="x")
-        n = tk.Label(top_row, text=name, bg=T["sunk"], fg=T["ink"], font=font(10, "bold"), anchor="w")
-        n.pack(side="left")
-        g = tk.Label(top_row, text=f"GPIO{gpio}", bg=T["sunk"], fg=T["faint"], font=font(8, mono=True))
-        g.pack(side="right")
-        v = tk.Label(tile, text="—", bg=T["sunk"], fg=T["faint"], font=font(13, "bold", mono=True), anchor="w")
-        v.pack(fill="x")
-        pin_tiles[key] = (tile, top_row, n, g, v)
+    for c in range(6):
+        pin_grid.columnconfigure(c, weight=1, uniform="pin")
+    for r, row in enumerate(PIN_ROWS):
+        for c, (key, name, gpio) in enumerate(row):
+            tile = tk.Frame(pin_grid, bg=T["sunk"], padx=6, pady=3)
+            tile.grid(row=r, column=c, sticky="nsew", padx=2, pady=2)
+            top_row = tk.Frame(tile, bg=T["sunk"])
+            top_row.pack(fill="x")
+            n = tk.Label(top_row, text=name, bg=T["sunk"], fg=T["ink"], font=font(9, "bold"), anchor="w")
+            n.pack(side="left")
+            g = tk.Label(top_row, text=str(gpio), bg=T["sunk"], fg=T["faint"], font=font(8, mono=True))
+            g.pack(side="right")
+            v = tk.Label(tile, text="—", bg=T["sunk"], fg=T["faint"], font=font(11, "bold", mono=True), anchor="w")
+            v.pack(fill="x")
+            pin_tiles[key] = (tile, top_row, n, g, v)
+    scan_row = tk.Frame(pin_box, bg=T["surface"])
+    scan_row.pack(fill="x", pady=(6, 0))
+    button(scan_row, "I2C 스캔", lambda: send("I2C SCAN")).pack(side="left")
+    scan_label = tk.Label(scan_row, text="", bg=T["surface"], fg=T["ink"], font=font(9, "bold"), anchor="w",
+                          justify="left", wraplength=440)
+    scan_label.pack(side="left", fill="x", expand=True, padx=(8, 0))
     pin_note = tk.Label(pin_box, text="", bg=T["surface"], fg=T["faint"], font=font(9), anchor="w",
                         justify="left", wraplength=520)
     pin_note.pack(fill="x", pady=(4, 0))
@@ -1375,22 +1454,39 @@ def run_gui():
         v.config(text=text, fg=fg)
 
     def render_pins():
-        p = state.pins
-        age = time.monotonic() - state.pins_at
-        if not p or age > 2.0:
-            for key, _, _ in PIN_TILES:
+        scan = state.i2c
+        scan_label.config(text="I2C: " + i2c_summary(scan),
+                          fg=T["faint"] if not scan else T["bad"] if scan.get("err") or
+                          (scan.get("finished") and not scan.get("mux")) else T["ok"] if scan.get("finished") else T["warn"])
+        now = time.monotonic()
+        p = state.pins if state.pins and now - state.pins_at <= 2.0 else None
+        a = state.adc if state.adc and now - state.adc_at <= 2.0 else None
+        if p:
+            paint_tile("sw1", "눌림" if p["sw1"] else "안 눌림", "bad" if p["sw1"] else "off")
+            paint_tile("sw2", "눌림" if p["sw2"] else "안 눌림", "on" if p["sw2"] else "off")
+            for key in ("sda", "scl"):  # idle I2C lines sit HIGH; LOW = bus held down
+                on = p.get(key)
+                paint_tile(key, "—" if on is None else "HIGH" if on else "LOW",
+                           "stale" if on is None else "off" if on else "bad")
+            for key, on in zip(("en1", "en2"), p["en"]):
+                paint_tile(key, "HIGH" if on else "LOW", "on" if on else "off")
+            for key, duty in zip(("lpwm1", "rpwm1", "lpwm2", "rpwm2"), p["pwm"]):
+                paint_tile(key, f"{duty * 100 // 255}% ({duty})" if duty else "0", "drive" if duty else "off")
+        else:
+            for key in ("sw1", "sw2", "sda", "scl", "en1", "en2", "lpwm1", "rpwm1", "lpwm2", "rpwm2"):
                 paint_tile(key, "—", "stale")
-            pin_note.config(text="PIN 줄 없음 · 펌웨어가 최신 robot_bench_v2_manual인지, LOG ON인지 확인" if not p
-                            else f"{age:.0f}초째 새 값 없음 · 연결/LOG ON 확인")
-            return
-        paint_tile("sw1", "눌림" if p["sw1"] else "안 눌림", "bad" if p["sw1"] else "off")
-        paint_tile("sw2", "눌림" if p["sw2"] else "안 눌림", "on" if p["sw2"] else "off")
-        for key, on in zip(("en1", "en2"), p["en"]):
-            paint_tile(key, "HIGH" if on else "LOW", "on" if on else "off")
-        for key, duty in zip(("lpwm1", "rpwm1", "lpwm2", "rpwm2"), p["pwm"]):
-            paint_tile(key, f"{duty * 100 // 255}%  ({duty})" if duty else "0", "drive" if duty else "off")
-        pin_note.config(text="EN HIGH + PWM 한쪽만 % = 그 방향으로 구동 · 브레이크는 EN HIGH + PWM 0 · "
-                             "실제 파형 측정이 아니라 보드 레지스터 값")
+        for key in ADC_KEYS:
+            if not a:
+                paint_tile(key, "—", "stale")
+            elif key == "bat":
+                paint_tile(key, f"{a[key]}mV", "off")
+            else:
+                paint_tile(key, f"{a[key]}mV", "drive" if a[key] >= 100 else "off")
+        if not p and not a:
+            pin_note.config(text="PIN/ADC 줄 없음 · 최신 robot_bench_v2_manual인지, LOG ON인지 확인")
+        else:
+            pin_note.config(text="EN HIGH + PWM 한쪽만 % = 그 방향으로 구동 · 브레이크는 EN HIGH + PWM 0 · "
+                                 "IS는 1k/470Ω 분압 뒤 GPIO 전압 · BAT 핀 ×11 = 배터리 · 레지스터·ADC 값이며 파형 측정 아님")
 
     def render_checks():
         auto = {}

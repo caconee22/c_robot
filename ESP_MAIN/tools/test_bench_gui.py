@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, imu_freshness, parse_line, requires_drive_permission  # noqa: E402
+from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, i2c_summary, imu_freshness, parse_line, requires_drive_permission  # noqa: E402
 
 # Lines in the exact formats bench_main.cpp / bench_v2_app.cpp print.
 state = BenchState()
@@ -52,6 +52,10 @@ assert state.estop
 assert parse_line("BAT battery_missing 0mV 0S")[1]["result"] == "battery_missing"
 kind, pin = parse_line("PIN,1200,0,1,1,0,0,51,0,0")
 assert kind == "pin" and pin["sw2"] and not pin["sw1"] and pin["en"] == (True, False) and pin["pwm"] == (0, 51, 0, 0)
+assert pin["sda"] is None  # older PIN row without SDA/SCL
+assert parse_line("PIN,1200,0,0,1,1,0,0,0,0,1,0")[1]["scl"] is False
+kind, adc = parse_line("ADC,1300,10,20,3000,40,1,2,3,4,5,6,1380")
+assert kind == "adc" and adc["is_l2"] == 3000 and adc["ir6"] == 6 and adc["bat"] == 1380
 
 assert drive_command("fwd", 100) == "DRIVE 100 100"
 assert drive_command("back", 100) == "DRIVE -100 -100"
@@ -106,3 +110,17 @@ assert cal_step_info(0) == {"sensor": 1, "color": "RED", "pose": "LEVEL"}
 assert cal_step_info(4) == {"sensor": 1, "color": "YELLOW", "pose": "LIFTED"}
 assert cal_step_info(47) == {"sensor": 4, "color": "BLACK", "pose": "PRESSED"}
 print("bench_gui parse checks passed")
+
+# I2C SCAN result, fed line by line as the firmware prints it
+scan_state = BenchState()
+for scan_line in ("OK I2C SCAN", "I2C MAIN 68 70", "I2C MUX 70", "I2C CH 0 39", "I2C CH 1 39", "I2C CH 2",
+                  "I2C CH 3 39", "I2C CH 4", "I2C CH 5", "I2C CH 6", "I2C CH 7", "I2C DONE 160"):
+    scan_state.feed(scan_line)
+assert i2c_summary(scan_state.i2c).startswith("먹스 0x70 있음 · ch0 39 · ch1 39 · ch2 — · ch3 39 · 본선 68(IMU), 70(먹스)")
+scan_state = BenchState()
+for scan_line in ("OK I2C SCAN", "I2C MAIN 68", "I2C MUX NONE", "I2C DONE 20"):
+    scan_state.feed(scan_line)
+assert i2c_summary(scan_state.i2c) == "먹스 없음 · 본선 68(IMU)"
+scan_state.feed("OK I2C SCAN")
+assert i2c_summary(scan_state.i2c) == "스캔 중…"
+print("i2c scan parse checks passed")

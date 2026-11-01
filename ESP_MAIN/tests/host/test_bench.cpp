@@ -13,6 +13,7 @@
 #include "calibration/color_calibration.hpp"
 #include "interrupts/button_interrupts.hpp"
 #include "motor/bts7960_driver.hpp"
+#include "sensors/color_sensor_manager.hpp"
 
 // 1 when testing robot_bench_v2_manual (bench_v2/), 0 for the legacy bench.
 #ifndef BENCH_V2_MANUAL
@@ -102,6 +103,25 @@ void camera(uint16_t x, uint16_t height, uint8_t sequence = 1) {
   Serial1.inject(packet); ticks(8);
 }
 #if BENCH_V2_MANUAL
+void i2cScanTests() {
+  fake::reset();
+  for (unsigned i=0;i<4;++i) fake::floor(i,3);
+  setup(); ticks(200);
+  Serial.tx.clear(); send("I2C SCAN"); ticks(1500);
+  CHECK(Serial.tx.find("OK I2C SCAN")!=std::string::npos);
+  CHECK(Serial.tx.find("I2C MAIN 68 70" "\r\n")!=std::string::npos);
+  CHECK(Serial.tx.find("I2C MUX 70")!=std::string::npos);
+  CHECK(Serial.tx.find("I2C CH 0 39")!=std::string::npos && Serial.tx.find("I2C CH 3 39")!=std::string::npos);
+  CHECK(Serial.tx.find("I2C CH 4" "\r\n")!=std::string::npos);  // empty channel
+  CHECK(Serial.tx.find("I2C DONE")!=std::string::npos);
+  // The scan leaves the floor sensors working: they reselect their own channel.
+  ticks(500); CHECK(ColorSensorManager::status().readyMask==0x0F);
+  // Without the mux: reported as missing, no channel lines.
+  fake::tcaConnected=false; Serial.tx.clear(); send("I2C SCAN"); ticks(500);
+  CHECK(Serial.tx.find("I2C MUX NONE")!=std::string::npos && Serial.tx.find("I2C CH")==std::string::npos);
+  CHECK(Serial.tx.find("I2C DONE")!=std::string::npos);
+  fake::tcaConnected=true;
+}
 void softwareSwitchTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
@@ -269,11 +289,18 @@ void integrationTests() {
   ticks(260); CHECK(!MotorController::status().outputsActive);
   send("DRIVE 150 150"); CHECK(MotorController::status().outputsActive);
 #if BENCH_V2_MANUAL
-  // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255.
+  // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255,
+  // on LPWM because both V2 motors are inverted (motor_config.hpp).
   Serial.tx.clear();
   for (int i=0;i<12;++i) { send("DRIVE 150 150"); ticks(100); }
-  CHECK(Serial.tx.find(",0,0,1,1,0,38,0,38\r\n")!=std::string::npos);
+  CHECK(Serial.tx.find(",0,0,1,1,38,0,38,0,")!=std::string::npos);
   CHECK(Serial.tx.find("PIN,")!=std::string::npos);
+  // ADC row: every analog pin in mV at the GPIO; IS motor 2 left is GPIO20.
+  fake::adcMillivolts[pins::MOTOR2_L_IS]=1234; fake::adcMillivolts[pins::IR_INPUTS[5]]=567;
+  Serial.tx.clear();
+  for (int i=0;i<20;++i) { send("DRIVE 150 150"); ticks(100); }
+  CHECK(Serial.tx.find("ADC,")!=std::string::npos);
+  CHECK(Serial.tx.find(",1234,")!=std::string::npos && Serial.tx.find(",567,")!=std::string::npos);
 #endif
   send("MODE ALIGN"); CHECK(!SystemManager::motorAllowed()); CHECK(!MotorController::status().outputsActive);
   startButton(); ticks(20); CHECK(!MotorController::status().outputsActive);  // No Pi target.
@@ -341,6 +368,7 @@ int main(int argc, char** argv) {
     { logicTests(); integrationTests();
 #if BENCH_V2_MANUAL
       softwareSwitchTests();
+      i2cScanTests();
       softwareEmergencyDuringCalibrationTest();
       imuTests();
       calibrationTests();
