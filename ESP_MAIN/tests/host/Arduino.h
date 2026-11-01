@@ -44,6 +44,7 @@ void detachInterrupt(int pin);
 double ledcSetup(uint8_t channel, double frequency, uint8_t bits);
 void ledcAttachPin(int pin, uint8_t channel);
 void ledcWrite(uint8_t channel, uint32_t duty);
+uint32_t ledcRead(uint8_t channel);
 #define ADC_11db 3
 void analogSetPinAttenuation(int pin, int attenuation);
 uint32_t analogReadMilliVolts(int pin);

@@ -11,6 +11,8 @@
 #include "system/status_led.hpp"
 #include "sensors/imu_monitor.hpp"
 #include "calibration/color_calibration.hpp"
+#include "interrupts/button_interrupts.hpp"
+#include "motor/bts7960_driver.hpp"
 
 // 1 when testing robot_bench_v2_manual (bench_v2/), 0 for the legacy bench.
 #ifndef BENCH_V2_MANUAL
@@ -100,6 +102,76 @@ void camera(uint16_t x, uint16_t height, uint8_t sequence = 1) {
   Serial1.inject(packet); ticks(8);
 }
 #if BENCH_V2_MANUAL
+void softwareSwitchTests() {
+  fake::reset();
+  for (unsigned i=0;i<4;++i) fake::floor(i,3);
+  fake::adcMillivolts[pins::BATTERY_ADC]=0;
+  setup();
+  send("MODE MANUAL"); send("SW2"); ticks(120);
+  CHECK(!SystemManager::motorAllowed());  // pending battery check cannot be bypassed
+  CHECK(Serial.tx.find("ERR SW2 blocked")!=std::string::npos);
+  fake::adcMillivolts[pins::BATTERY_ADC]=15200U/11U; ticks(150);
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Ok);
+  CHECK(!SystemManager::motorAllowed());  // old command was discarded
+  send("SW2"); ticks(25); CHECK(!SystemManager::motorAllowed());
+  fake::advance(80); loop();  // a delayed loop must still qualify the press before release
+  ticks(100); CHECK(SystemManager::motorAllowed());
+  CHECK(SystemManager::status().startEventCount==1);
+  send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
+  send("STOP"); CHECK(!SystemManager::motorAllowed());
+  send("SW2"); ticks(20); send("STOP"); ticks(150);
+  CHECK(!SystemManager::motorAllowed());
+  CHECK(SystemManager::status().startEventCount==1);
+  send("SW2"); ticks(20); send("MODE FOLLOW"); ticks(150);
+  CHECK(!SystemManager::motorAllowed());  // mode changes cancel the old gesture
+  send("MODE MANUAL");
+  fake::level(pins::START_SWITCH,LOW); ticks(50);
+  send("SW2"); CHECK(Serial.tx.find("ERR SW2 blocked")!=std::string::npos);
+  send("STOP"); fake::level(pins::START_SWITCH,HIGH); ticks(60);
+  CHECK(!SystemManager::motorAllowed());
+  send("SW2"); send("SW2"); ticks(150);
+  CHECK(SystemManager::motorAllowed());
+  CHECK(SystemManager::status().startEventCount==2);  // repeat does not queue another start
+  send("STOP");
+  send("CAL START"); CHECK(ColorCalibration::active());
+  send("SW2"); ticks(150); CHECK(!SystemManager::motorAllowed());
+  send("ABORT"); ticks(100); CHECK(!SystemManager::motorAllowed());
+  send("MODE MOTOR"); send("SW2"); ticks(130);
+  CHECK(SystemManager::motorAllowed() && MotorController::status().outputsActive);
+  send("STOP");
+  send("MODE MANUAL"); send("SW2");
+  fake::advance(300); loop(); ticks(130);
+  CHECK(!SystemManager::motorAllowed());  // a stale virtual press must not start later
+  SystemManager::setApplicationHealthy(false);
+  send("MODE MANUAL"); send("SW2"); ticks(130);
+  CHECK(!SystemManager::motorAllowed());
+  SystemManager::setApplicationHealthy(true); ticks(100);
+  CHECK(!SystemManager::motorAllowed());
+  send("SW2"); ticks(130); CHECK(SystemManager::motorAllowed());
+  send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
+  // SW1 command enters the same permanent loop as the physical switch.
+  fake::stopOnDelay=true;
+  Serial.inject("SW1\n");
+  try { loop(); CHECK(false); } catch (const fake::StopLoop&) {}
+  CHECK(ButtonInterrupts::emergencyLatched());
+  CHECK(!SystemManager::motorAllowed() && !MotorController::status().outputsActive);
+  CHECK(!Bts7960Driver::clearDriveInhibit());
+  CHECK(Serial.tx.find("ESTOP")!=std::string::npos);
+}
+
+void softwareEmergencyDuringCalibrationTest() {
+  fake::reset();
+  for (unsigned i=0;i<4;++i) fake::floor(i,3);
+  setup(); ticks(300); send("CAL START");
+  CHECK(ColorCalibration::active());
+  fake::stopOnDelay=true;
+  Serial.inject("SW1\n");
+  try { loop(); CHECK(false); } catch (const fake::StopLoop&) {}
+  CHECK(ButtonInterrupts::emergencyLatched());
+  CHECK(!Bts7960Driver::clearDriveInhibit());
+  CHECK(!SystemManager::motorAllowed());
+}
+
 void calibrationTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
@@ -137,7 +209,18 @@ void imuTests() {
   // Values stop changing: data-ready still arrives but the sensor is not fresh.
   fake::imu.frozen=true; ticks(config::imu::FROZEN_MS+50);
   CHECK(!ImuMonitor::status().dataFresh && ImuMonitor::status().state==ImuState::Ready);
+  CHECK(ImuMonitor::status().stale==ImuStale::Frozen);
   fake::imu.frozen=false; ticks(30); CHECK(ImuMonitor::status().dataFresh);
+  CHECK(ImuMonitor::status().stale==ImuStale::Fresh);
+  ticks(600); CHECK(ImuMonitor::status().powerMgmt==0x01);  // running, read back
+  CHECK(Serial.tx.find(",0,01\r\n")!=std::string::npos);  // I row: fresh, PWR_MGMT_1 0x01
+  // The chip resets by itself (brown-out): it sleeps, no data-ready, no bus error.
+  { const auto errors=ImuMonitor::status().busErrors;
+    std::fill(fake::imu.reg,fake::imu.reg+128,0); fake::imu.reg[0x6B]=0x40; fake::imu.awake=false;
+    ticks(700); imu=ImuMonitor::status();
+    CHECK(imu.state==ImuState::Ready && imu.stale==ImuStale::NoData && imu.powerMgmt==0x40);
+    CHECK(imu.busErrors==errors);
+    send("IMU RESET"); ticks(200); CHECK(ImuMonitor::status().dataFresh); }
   // Bus loss: Fault after a few errors, no automatic retry.
   fake::imu.connected=false; ticks(100);
   imu=ImuMonitor::status();
@@ -148,7 +231,7 @@ void imuTests() {
   fake::imu.connected=true; send("IMU RESET");
   CHECK(Serial.tx.find("OK IMU RESET")!=std::string::npos);
   ticks(200); imu=ImuMonitor::status();
-  CHECK(imu.state==ImuState::Ready && imu.resets==1 && imu.dataFresh);
+  CHECK(imu.state==ImuState::Ready && imu.resets==2 && imu.dataFresh);  // 2nd operator reset
   // A device that is not an MPU6050 is reported, not used.
   fake::imu.whoAmI=0x12; send("IMU RESET"); ticks(200);
   imu=ImuMonitor::status();
@@ -185,6 +268,13 @@ void integrationTests() {
   send("DRIVE 100 -100"); CHECK(MotorController::status().appliedLeftPermille==100);
   ticks(260); CHECK(!MotorController::status().outputsActive);
   send("DRIVE 150 150"); CHECK(MotorController::status().outputsActive);
+#if BENCH_V2_MANUAL
+  // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255.
+  Serial.tx.clear();
+  for (int i=0;i<12;++i) { send("DRIVE 150 150"); ticks(100); }
+  CHECK(Serial.tx.find(",0,0,1,1,0,38,0,38\r\n")!=std::string::npos);
+  CHECK(Serial.tx.find("PIN,")!=std::string::npos);
+#endif
   send("MODE ALIGN"); CHECK(!SystemManager::motorAllowed()); CHECK(!MotorController::status().outputsActive);
   startButton(); ticks(20); CHECK(!MotorController::status().outputsActive);  // No Pi target.
   camera(1300,200); CHECK(MotorController::status().appliedLeftPermille>0);
@@ -250,6 +340,8 @@ int main(int argc, char** argv) {
 #endif
     { logicTests(); integrationTests();
 #if BENCH_V2_MANUAL
+      softwareSwitchTests();
+      softwareEmergencyDuringCalibrationTest();
       imuTests();
       calibrationTests();
 #endif

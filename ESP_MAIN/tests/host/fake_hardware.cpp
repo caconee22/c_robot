@@ -81,6 +81,7 @@ void detachInterrupt(int pin) { interrupts[pin]=nullptr; }
 double ledcSetup(uint8_t, double frequency, uint8_t) { return fake::pwmSetupOk ? frequency : 0; }
 void ledcAttachPin(int, uint8_t) {}
 void ledcWrite(uint8_t channel, uint32_t duty) { fake::pwm[channel]=duty; }
+uint32_t ledcRead(uint8_t channel) { return fake::pwm[channel]; }
 void analogSetPinAttenuation(int, int) {}
 uint32_t analogReadMilliVolts(int pin) { return fake::adcMillivolts[pin]; }
 
