@@ -63,6 +63,27 @@ PIN_ROWS = [
 ADC_KEYS = ["is_l1", "is_r1", "is_l2", "is_r2", "ir1", "ir2", "ir3", "ir4", "ir5", "ir6", "bat"]
 
 IMU_STALE = {1: "준비 안 됨", 2: "샘플 끊김", 3: "값 고정"}
+I2C_NAMES = {"39": "AS7341", "29": "TCS34725", "68": "IMU", "69": "IMU", "70": "먹스"}
+
+
+def i2c_summary(scan):
+    """One line for the I2C SCAN result: mux present?, what sits on each floor-sensor channel."""
+    if not scan:
+        return "— (I2C 스캔 버튼)"
+    if not scan.get("finished"):
+        return "스캔 중…"
+    def names(addrs):
+        return ", ".join(f"{a}({I2C_NAMES[a]})" if a in I2C_NAMES else a for a in addrs) or "없음"
+    text = f"본선 {names(scan['main'])}"
+    if scan.get("mux"):
+        chans = [f"ch{c} {', '.join(scan['ch'].get(c, [])) or '—'}"
+                 for c in range(8) if c < 4 or scan["ch"].get(c)]
+        text = f"먹스 0x{scan['mux']} 있음 · " + " · ".join(chans) + " · " + text
+    else:
+        text = "먹스 없음 · " + text
+    if scan.get("err"):
+        text += f" · 버스 오류(0x{scan['err']}) → 배선·풀업·전원 확인"
+    return text
 
 
 def imu_freshness(m):
@@ -115,6 +136,19 @@ def parse_line(line):
         if len(parts) >= 4:
             return "bat", {"result": parts[1], "mv": _int(parts[2].rstrip("mV")),
                            "cells": _int(parts[3].rstrip("S"))}
+        return None, None
+    if line == "OK I2C SCAN":
+        return "i2c", {"part": "start"}
+    if line.startswith("I2C "):
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "MAIN":
+            return "i2c", {"part": "main", "addrs": parts[2:]}
+        if len(parts) >= 3 and parts[1] == "MUX":
+            return "i2c", {"part": "mux", "mux": None if parts[2] == "NONE" else parts[2]}
+        if len(parts) >= 3 and parts[1] == "CH":
+            return "i2c", {"part": "ch", "ch": _int(parts[2]), "addrs": parts[3:]}
+        if len(parts) >= 2 and parts[1] in ("DONE", "ERR"):
+            return "i2c", {"part": "end", "err": parts[-1] if parts[1] == "ERR" else None}
         return None, None
     if line.startswith("[CAL]"):
         return _parse_cal_text(line)
@@ -222,6 +256,7 @@ class BenchState:
         self.pins = None
         self.pins_at = 0.0
         self.adc = None
+        self.i2c = None            # last I2C SCAN result, filled line by line
         self.adc_at = 0.0
         self.estop = False
         self.cal = None            # last CAL status line (only while calibrating)
@@ -247,6 +282,18 @@ class BenchState:
             self.imu = v
         elif kind == "pin":
             self.pins, self.pins_at = v, time.monotonic()
+        elif kind == "i2c":
+            part = v["part"]
+            if part == "start" or self.i2c is None:
+                self.i2c = {"main": [], "mux": None, "ch": {}, "finished": False, "err": None}
+            if part == "main":
+                self.i2c["main"] = v["addrs"]
+            elif part == "mux":
+                self.i2c["mux"] = v["mux"]
+            elif part == "ch":
+                self.i2c["ch"][v["ch"]] = v["addrs"]
+            elif part == "end":
+                self.i2c["finished"], self.i2c["err"] = True, v["err"]
         elif kind == "adc":
             self.adc, self.adc_at = v, time.monotonic()
         elif kind == "system":
@@ -420,6 +467,11 @@ class DemoLink:
                 self.lines.put("OK SW2 press/release queued")
             else:
                 self.lines.put("ERR SW2 blocked")
+        elif line == "I2C SCAN":
+            self.allowed, self.drive, self.out = False, None, (0, 0)
+            for reply in ("OK I2C SCAN", "I2C MAIN 68 70", "I2C MUX 70", "I2C CH 0 39", "I2C CH 1 39",
+                          "I2C CH 2", "I2C CH 3 39", "I2C CH 4", "I2C CH 5", "I2C CH 6", "I2C CH 7", "I2C DONE 160"):
+                self.lines.put(reply)
         elif line == "CAL STATUS":
             self.lines.put(f"[CAL][STATUS] active={int(self.cal is not None)} stored=0 state=0 step=1/48")
         elif self.cal is not None:
@@ -838,6 +890,12 @@ def run_gui():
             v = tk.Label(tile, text="—", bg=T["sunk"], fg=T["faint"], font=font(11, "bold", mono=True), anchor="w")
             v.pack(fill="x")
             pin_tiles[key] = (tile, top_row, n, g, v)
+    scan_row = tk.Frame(pin_box, bg=T["surface"])
+    scan_row.pack(fill="x", pady=(6, 0))
+    button(scan_row, "I2C 스캔", lambda: send("I2C SCAN")).pack(side="left")
+    scan_label = tk.Label(scan_row, text="", bg=T["surface"], fg=T["ink"], font=font(9, "bold"), anchor="w",
+                          justify="left", wraplength=440)
+    scan_label.pack(side="left", fill="x", expand=True, padx=(8, 0))
     pin_note = tk.Label(pin_box, text="", bg=T["surface"], fg=T["faint"], font=font(9), anchor="w",
                         justify="left", wraplength=520)
     pin_note.pack(fill="x", pady=(4, 0))
@@ -1396,6 +1454,10 @@ def run_gui():
         v.config(text=text, fg=fg)
 
     def render_pins():
+        scan = state.i2c
+        scan_label.config(text="I2C: " + i2c_summary(scan),
+                          fg=T["faint"] if not scan else T["bad"] if scan.get("err") or
+                          (scan.get("finished") and not scan.get("mux")) else T["ok"] if scan.get("finished") else T["warn"])
         now = time.monotonic()
         p = state.pins if state.pins and now - state.pins_at <= 2.0 else None
         a = state.adc if state.adc and now - state.adc_at <= 2.0 else None

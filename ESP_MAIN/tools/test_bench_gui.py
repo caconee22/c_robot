@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, imu_freshness, parse_line, requires_drive_permission  # noqa: E402
+from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, i2c_summary, imu_freshness, parse_line, requires_drive_permission  # noqa: E402
 
 # Lines in the exact formats bench_main.cpp / bench_v2_app.cpp print.
 state = BenchState()
@@ -110,3 +110,17 @@ assert cal_step_info(0) == {"sensor": 1, "color": "RED", "pose": "LEVEL"}
 assert cal_step_info(4) == {"sensor": 1, "color": "YELLOW", "pose": "LIFTED"}
 assert cal_step_info(47) == {"sensor": 4, "color": "BLACK", "pose": "PRESSED"}
 print("bench_gui parse checks passed")
+
+# I2C SCAN result, fed line by line as the firmware prints it
+scan_state = BenchState()
+for scan_line in ("OK I2C SCAN", "I2C MAIN 68 70", "I2C MUX 70", "I2C CH 0 39", "I2C CH 1 39", "I2C CH 2",
+                  "I2C CH 3 39", "I2C CH 4", "I2C CH 5", "I2C CH 6", "I2C CH 7", "I2C DONE 160"):
+    scan_state.feed(scan_line)
+assert i2c_summary(scan_state.i2c).startswith("먹스 0x70 있음 · ch0 39 · ch1 39 · ch2 — · ch3 39 · 본선 68(IMU), 70(먹스)")
+scan_state = BenchState()
+for scan_line in ("OK I2C SCAN", "I2C MAIN 68", "I2C MUX NONE", "I2C DONE 20"):
+    scan_state.feed(scan_line)
+assert i2c_summary(scan_state.i2c) == "먹스 없음 · 본선 68(IMU)"
+scan_state.feed("OK I2C SCAN")
+assert i2c_summary(scan_state.i2c) == "스캔 중…"
+print("i2c scan parse checks passed")

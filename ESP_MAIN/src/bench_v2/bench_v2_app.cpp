@@ -1,5 +1,6 @@
 #include "bench_v2/bench_v2_app.hpp"
 #include "bench_v2/software_switches.hpp"
+#include "bench_v2/i2c_scan.hpp"
 #include "hardware/reset_manager.hpp"
 #if HW_VERSION != 2
 #error V2 bench requires HW_VERSION=2
@@ -58,6 +59,7 @@ void help() {
   reply("SW2 press/release to arm; DRIVE -200..200, repeat <250ms\r\n");
   reply("STOP / LOG ON|OFF / STATUS / HELP / IMU RESET; UART0 57600\r\n");
   reply("CAL START / CAL ERASE / CAL STATUS: floor color calibration\r\n");
+  reply("I2C SCAN: main bus + TCA9548A channels\r\n");
 }
 
 bool startsWith(const char* line, const char* prefix) { return !strncmp(line, prefix, strlen(prefix)); }
@@ -82,6 +84,12 @@ void execute(const char* line) {
 #endif
   // While calibrating every line belongs to the calibration; motors stay braked.
   if (ColorCalibration::active()) { ColorCalibration::command(line, millis()); return; }
+  if (!strcmp(line, "I2C SCAN")) {
+    stop();  // motors stay braked; a new SW2 is needed after the scan
+    BenchI2cScan::start(millis());
+    reply("OK I2C SCAN\r\n");
+    return;
+  }
   if (startsWith(line, "CAL ")) {
     // CAL STATUS only reports; anything else may start calibration, so stop first.
     if (strcmp(line, "CAL STATUS")) { stop(); logging = false; logRow = ROWS; }  // quiet console for prompts
@@ -353,6 +361,7 @@ void BenchV2App::update() {
   ColorCalibration::tick(millis());
   ImuMonitor::update(millis());
   BatteryMonitor::update(millis());
+  BenchI2cScan::step(millis());
   SystemManager::update(millis());
   console();
   const auto command = BenchController::update(millis(), SystemManager::motorAllowed(),
@@ -367,6 +376,7 @@ void BenchV2App::update() {
   EventLogger::process();
   reportBattery();
   sampleAnalog();
+  BenchI2cScan::report();
   telemetry(millis());
   calibrationLine(millis());
   delay(1);

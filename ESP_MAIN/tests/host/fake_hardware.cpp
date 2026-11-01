@@ -90,7 +90,8 @@ uint8_t TwoWire::endTransmission(bool) {
   ++fake::busTransactions;
   if(address==0x68) {
     auto& m=fake::imu;
-    if(!m.connected || outgoing.empty()) return 2;
+    if(!m.connected) return 2;
+    if(outgoing.empty()) return 0;  // address-only probe
     imuPointer=outgoing[0]&0x7F;
     for(size_t i=1;i<outgoing.size();++i) {
       const uint8_t reg=(imuPointer+i-1)&0x7F, value=outgoing[i];
@@ -101,13 +102,20 @@ uint8_t TwoWire::endTransmission(bool) {
     return 0;
   }
   if(address>=0x70 && address<=0x77) {
-    if(!fake::tcaConnected) return 2;
+    if(!fake::tcaConnected || address!=0x70) return 2;
+    if(outgoing.empty()) return 0;
     if(outgoing.size()!=1) return 3;
     selected=0xFF;
     for(uint8_t i=0;i<4;++i) if(outgoing[0]==(1U<<i)) selected=i;
     return 0;
   }
-  if(selected>=4 || !fake::sensors[selected].connected || outgoing.empty()) return 2;
+#if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
+  if(address!=0x39) return 2;
+#else
+  if(address!=0x29) return 2;
+#endif
+  if(selected>=4 || !fake::sensors[selected].connected) return 2;
+  if(outgoing.empty()) return 0;
   auto& s=fake::sensors[selected];
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
   pointer=outgoing[0];
