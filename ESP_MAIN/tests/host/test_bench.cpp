@@ -209,7 +209,18 @@ void imuTests() {
   // Values stop changing: data-ready still arrives but the sensor is not fresh.
   fake::imu.frozen=true; ticks(config::imu::FROZEN_MS+50);
   CHECK(!ImuMonitor::status().dataFresh && ImuMonitor::status().state==ImuState::Ready);
+  CHECK(ImuMonitor::status().stale==ImuStale::Frozen);
   fake::imu.frozen=false; ticks(30); CHECK(ImuMonitor::status().dataFresh);
+  CHECK(ImuMonitor::status().stale==ImuStale::Fresh);
+  ticks(600); CHECK(ImuMonitor::status().powerMgmt==0x01);  // running, read back
+  CHECK(Serial.tx.find(",0,01\r\n")!=std::string::npos);  // I row: fresh, PWR_MGMT_1 0x01
+  // The chip resets by itself (brown-out): it sleeps, no data-ready, no bus error.
+  { const auto errors=ImuMonitor::status().busErrors;
+    std::fill(fake::imu.reg,fake::imu.reg+128,0); fake::imu.reg[0x6B]=0x40; fake::imu.awake=false;
+    ticks(700); imu=ImuMonitor::status();
+    CHECK(imu.state==ImuState::Ready && imu.stale==ImuStale::NoData && imu.powerMgmt==0x40);
+    CHECK(imu.busErrors==errors);
+    send("IMU RESET"); ticks(200); CHECK(ImuMonitor::status().dataFresh); }
   // Bus loss: Fault after a few errors, no automatic retry.
   fake::imu.connected=false; ticks(100);
   imu=ImuMonitor::status();
@@ -220,7 +231,7 @@ void imuTests() {
   fake::imu.connected=true; send("IMU RESET");
   CHECK(Serial.tx.find("OK IMU RESET")!=std::string::npos);
   ticks(200); imu=ImuMonitor::status();
-  CHECK(imu.state==ImuState::Ready && imu.resets==1 && imu.dataFresh);
+  CHECK(imu.state==ImuState::Ready && imu.resets==2 && imu.dataFresh);  // 2nd operator reset
   // A device that is not an MPU6050 is reported, not used.
   fake::imu.whoAmI=0x12; send("IMU RESET"); ticks(200);
   imu=ImuMonitor::status();
@@ -257,6 +268,13 @@ void integrationTests() {
   send("DRIVE 100 -100"); CHECK(MotorController::status().appliedLeftPermille==100);
   ticks(260); CHECK(!MotorController::status().outputsActive);
   send("DRIVE 150 150"); CHECK(MotorController::status().outputsActive);
+#if BENCH_V2_MANUAL
+  // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255.
+  Serial.tx.clear();
+  for (int i=0;i<12;++i) { send("DRIVE 150 150"); ticks(100); }
+  CHECK(Serial.tx.find(",0,0,1,1,0,38,0,38\r\n")!=std::string::npos);
+  CHECK(Serial.tx.find("PIN,")!=std::string::npos);
+#endif
   send("MODE ALIGN"); CHECK(!SystemManager::motorAllowed()); CHECK(!MotorController::status().outputsActive);
   startButton(); ticks(20); CHECK(!MotorController::status().outputsActive);  // No Pi target.
   camera(1300,200); CHECK(MotorController::status().appliedLeftPermille>0);

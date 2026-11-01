@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, parse_line, requires_drive_permission  # noqa: E402
+from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, imu_freshness, parse_line, requires_drive_permission  # noqa: E402
 
 # Lines in the exact formats bench_main.cpp / bench_v2_app.cpp print.
 state = BenchState()
@@ -15,6 +15,9 @@ assert state.feed("S,1240,3,77,1,RED,1,812,10,20,30,40,50,0") == "s"
 assert state.sensors[3]["color"] == "RED" and state.sensors[3]["error"] == 0
 assert state.feed("S,1240,9,77,1,RED,1,812,10,20,30,40,50,0") == "s" and 9 not in state.sensors
 assert state.feed("I,1300,READY,68,1,120,0,4096,-12,30,1,2,3") == "i"
+assert imu_freshness(state.imu) == "신선"  # older firmware without the diagnostic fields
+assert imu_freshness(parse_line("I,1400,READY,72,0,120,0,1,2,3,4,5,6,2,40")[1]) == "멈춤(샘플 끊김) · 칩 리셋됨(잠자기)"
+assert imu_freshness(parse_line("I,1400,READY,72,0,120,0,1,2,3,4,5,6,3,01")[1]) == "멈춤(값 고정)"
 assert state.imu["fresh"] and state.imu["accel"] == [4096, -12, 30]
 assert state.feed("SYSTEM,1400,2,0,1,1,0,2,1,0") == "system" and not state.estop
 
@@ -47,6 +50,8 @@ assert state.feed("ESTOP") == "estop" and state.estop
 state.feed("SYSTEM,22000,1,1,0,0,0,0,1,0")
 assert state.estop
 assert parse_line("BAT battery_missing 0mV 0S")[1]["result"] == "battery_missing"
+kind, pin = parse_line("PIN,1200,0,1,1,0,0,51,0,0")
+assert kind == "pin" and pin["sw2"] and not pin["sw1"] and pin["en"] == (True, False) and pin["pwm"] == (0, 51, 0, 0)
 
 assert drive_command("fwd", 100) == "DRIVE 100 100"
 assert drive_command("back", 100) == "DRIVE -100 -100"

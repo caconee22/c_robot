@@ -25,6 +25,9 @@ constexpr uint32_t POLL_PERIOD_MS = 10;          // 100 Hz, same as SMPLRT_DIV
 constexpr uint32_t STALE_MS = 100;               // no data-ready for this long
 constexpr uint32_t FROZEN_MS = 500;              // values identical this long
 constexpr uint8_t BUS_ERRORS_TO_FAULT = 5;
+// Every 50th poll (0.5 s) reads PWR_MGMT_1 instead of data, so a chip that
+// reset itself and went back to sleep shows up in the log.
+constexpr uint8_t POWER_CHECK_POLLS = 50;
 constexpr int16_t ACCEL_LSB_PER_G = 4096;        // ±8 g
 constexpr int16_t GYRO_LSB_PER_10DPS = 328;      // ±1000 dps: 32.8 LSB/dps
 }  // namespace imu
@@ -32,6 +35,9 @@ constexpr int16_t GYRO_LSB_PER_10DPS = 328;      // ±1000 dps: 32.8 LSB/dps
 
 enum class ImuState : uint8_t { Off, Resetting, Waking, Ready, Fault };
 enum class ImuError : uint8_t { None, Bus, WhoAmI };
+// Why dataFresh is false: NoData = no data-ready for STALE_MS,
+// Frozen = samples arrive but the bytes did not change for FROZEN_MS.
+enum class ImuStale : uint8_t { Fresh, NotReady, NoData, Frozen };
 
 struct ImuSample {
   int16_t accel[3] = {};   // x, y, z raw counts
@@ -45,6 +51,8 @@ struct ImuStatus {
   ImuError lastError = ImuError::None;
   uint8_t whoAmI = 0;
   bool dataFresh = false;      // Ready, data-ready seen recently, values moving
+  ImuStale stale = ImuStale::NotReady;  // reason when dataFresh is false
+  uint8_t powerMgmt = 0;       // PWR_MGMT_1 read back: 0x01 running, 0x40 asleep (chip reset)
   uint32_t samples = 0;        // data-ready samples read since the last reset
   uint32_t busErrors = 0;      // total failed transactions
   uint32_t resets = 0;

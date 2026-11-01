@@ -14,7 +14,9 @@
 #include "bench/bench_controller.hpp"
 #include "communication/raspberry_link.hpp"
 #include "sensors/imu_monitor.hpp"
+#include "motor/motor_config.hpp"
 #include "motor/motor_controller.hpp"
+#include "pins.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/sensor_manager.hpp"
 #include "system/battery_monitor.hpp"
@@ -170,9 +172,10 @@ void reportBattery() {
 
 // Each frame is D, S1..S4 and one extra row. UART0 has only its 128-byte
 // hardware FIFO (no TX ring buffer), so every line stays under 128 bytes and
-// the extra rows take turns: IMU every other frame, the rest every 8th.
-enum class Extra : uint8_t { Imu, System, Motor, Link, Power };
-constexpr Extra EXTRA_ORDER[] = {Extra::Imu, Extra::System, Extra::Imu, Extra::Motor,
+// the extra rows take turns: IMU every other frame, pins every 6th, the rest every 12th.
+enum class Extra : uint8_t { Imu, System, Motor, Link, Power, Pins };
+constexpr Extra EXTRA_ORDER[] = {Extra::Imu, Extra::System, Extra::Imu, Extra::Pins,
+                                 Extra::Imu, Extra::Motor, Extra::Imu, Extra::Pins,
                                  Extra::Imu, Extra::Link, Extra::Imu, Extra::Power};
 uint8_t extraIndex = 0;
 
@@ -182,10 +185,11 @@ int extraLine(char* line, size_t size, uint32_t now, Extra kind) {
     case Extra::Imu: {
       const auto imu = ImuMonitor::status();
       const auto v = ImuMonitor::latest();
-      return snprintf(line, size, "I,%lu,%s,%02X,%u,%lu,%lu,%d,%d,%d,%d,%d,%d\r\n", ms,
+      return snprintf(line, size, "I,%lu,%s,%02X,%u,%lu,%lu,%d,%d,%d,%d,%d,%d,%u,%02X\r\n", ms,
           ImuMonitor::stateName(imu.state), imu.whoAmI, imu.dataFresh ? 1 : 0,
           static_cast<unsigned long>(imu.samples), static_cast<unsigned long>(imu.busErrors),
-          v.accel[0], v.accel[1], v.accel[2], v.gyro[0], v.gyro[1], v.gyro[2]);
+          v.accel[0], v.accel[1], v.accel[2], v.gyro[0], v.gyro[1], v.gyro[2],
+          static_cast<unsigned>(imu.stale), imu.powerMgmt);
     }
     case Extra::System: {
       const auto sys = SystemManager::status();
@@ -209,6 +213,19 @@ int extraLine(char* line, size_t size, uint32_t now, Extra kind) {
           static_cast<unsigned long>(link.lastPacketMs), static_cast<unsigned long>(link.lastFrameMs),
           static_cast<unsigned long>(link.validPackets), static_cast<unsigned long>(link.invalidPackets),
           static_cast<unsigned long>(link.duplicatePackets));
+    }
+    case Extra::Pins: {
+      // Actual pin levels, read back from the hardware (OUTPUT keeps the input
+      // buffer on): SW1/SW2 1 = pressed, EN 1 = HIGH, PWM = LEDC duty 0..255.
+      // PIN,ms,sw1,sw2,en1,en2,lpwm1,rpwm1,lpwm2,rpwm2
+      return snprintf(line, size, "PIN,%lu,%d,%d,%d,%d,%lu,%lu,%lu,%lu\r\n", ms,
+          digitalRead(pins::SAFETY_SWITCH) == LOW ? 1 : 0,
+          digitalRead(pins::START_SWITCH) == LOW ? 1 : 0,
+          digitalRead(pins::MOTOR1_EN), digitalRead(pins::MOTOR2_EN),
+          static_cast<unsigned long>(ledcRead(config::motor::MOTOR1_LPWM_CHANNEL)),
+          static_cast<unsigned long>(ledcRead(config::motor::MOTOR1_RPWM_CHANNEL)),
+          static_cast<unsigned long>(ledcRead(config::motor::MOTOR2_LPWM_CHANNEL)),
+          static_cast<unsigned long>(ledcRead(config::motor::MOTOR2_RPWM_CHANNEL)));
     }
     case Extra::Power: {
       const auto battery = BatteryMonitor::status();

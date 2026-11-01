@@ -49,6 +49,23 @@ POSE_KO = {"LEVEL": ("평평", 10, "로봇을 평평하게 두고 센서-바닥 
            "PRESSED": ("눌림", 3, "이 모서리를 눌러 간격 3mm (바닥에 거의 붙은 상태)")}
 
 
+# PIN row tiles: (key, label, GPIO). GPIO numbers copied from include/pins_v2.hpp.
+PIN_TILES = [("sw1", "SW1 정지", 15), ("sw2", "SW2 시작", 16),
+             ("en1", "EN 왼", 40), ("en2", "EN 오", 35),
+             ("lpwm1", "왼 LPWM", 42), ("rpwm1", "왼 RPWM", 41),
+             ("lpwm2", "오 LPWM", 47), ("rpwm2", "오 RPWM", 21)]
+
+IMU_STALE = {1: "준비 안 됨", 2: "샘플 끊김", 3: "값 고정"}
+
+
+def imu_freshness(m):
+    """'신선', or why not, plus a warning when the chip reset itself and fell asleep."""
+    text = "신선" if m["fresh"] else "멈춤" + (f"({IMU_STALE[m['stale']]})" if m.get("stale") in IMU_STALE else "")
+    if m.get("pwr") and m["pwr"] != "00" and int(m["pwr"], 16) & 0x40:
+        text += " · 칩 리셋됨(잠자기)"
+    return text
+
+
 # ---------- parsing (pure, tested by test_bench_gui.py) ----------
 
 def requires_drive_permission(line):
@@ -108,7 +125,10 @@ def parse_line(line):
     if tag == "I" and len(f) >= 13:
         return "i", {"ms": _int(f[1]), "state": f[2], "who": f[3], "fresh": f[4] == "1",
                      "samples": _int(f[5]), "bus_errors": _int(f[6]),
-                     "accel": [_int(v) for v in f[7:10]], "gyro": [_int(v) for v in f[10:13]]}
+                     "accel": [_int(v) for v in f[7:10]], "gyro": [_int(v) for v in f[10:13]],
+                     # newer firmware: why not fresh (imu_monitor.hpp ImuStale) and PWR_MGMT_1 read back
+                     "stale": _int(f[13]) if len(f) >= 15 else None,
+                     "pwr": f[14].strip() if len(f) >= 15 else None}
     if tag == "SYSTEM" and len(f) >= 10:
         system_state, fault_flags = _int(f[2]), _int(f[9])
         # system_manager.hpp: EmergencyStop=7, SystemFaultEmergencyStop=1<<4.
@@ -117,6 +137,11 @@ def parse_line(line):
                           "fault_flags": fault_flags,
                           "estop": system_state == 7 or bool(fault_flags & (1 << 4)),
                           "run": f[4] == "1", "allowed": f[5] == "1", "rearm": f[6] == "1"}
+    if tag == "PIN" and len(f) >= 10:
+        # PIN,ms,sw1,sw2,en1,en2,lpwm1,rpwm1,lpwm2,rpwm2 (levels read back from the board)
+        return "pin", {"ms": _int(f[1]), "sw1": f[2] == "1", "sw2": f[3] == "1",
+                       "en": (f[4] == "1", f[5] == "1"),
+                       "pwm": (_int(f[6]), _int(f[7]), _int(f[8]), _int(f[9]))}
     if tag == "CAL" and len(f) >= 9:
         return "cal", {"ms": _int(f[1]), "state": CAL_STATES.get(_int(f[2]), "Idle"),
                        "step": _int(f[3]), "sensor": _int(f[4]) + 1, "color": f[5],
@@ -182,6 +207,8 @@ class BenchState:
         self.sensors = {}
         self.imu = None
         self.system = None
+        self.pins = None
+        self.pins_at = 0.0
         self.estop = False
         self.cal = None            # last CAL status line (only while calibrating)
         self.cal_result = None     # last measurement result, until the next step
@@ -204,6 +231,8 @@ class BenchState:
             self.sensors[v["index"]] = v
         elif kind == "i":
             self.imu = v
+        elif kind == "pin":
+            self.pins, self.pins_at = v, time.monotonic()
         elif kind == "system":
             self.system = v
             self.estop = self.estop or v["estop"]
@@ -308,6 +337,11 @@ class Link:
             self.port.write((line + "\n").encode("ascii", "replace"))
         self.log.write(">", line)
 
+    def release(self):
+        """Stop repeating DRIVE. The firmware stops within 250 ms and SW2 permission stays."""
+        with self.lock:
+            self.drive = None
+
     def _repeat_loop(self):
         while self.running:
             with self.lock:
@@ -387,6 +421,9 @@ class DemoLink:
             self.allowed, self.drive, self.out = False, None, (0, 0)
             self.lines.put("OK STOP")
 
+    def release(self):
+        self.drive, self.out = None, (0, 0)
+
     def _cal_command(self, line):
         state, step = self.cal[0], self.cal[1]
         if line == "READY" and state == 1:
@@ -424,9 +461,15 @@ class DemoLink:
                 self.lines.put(f"D,{t},{self.mode},{int(self.allowed)},{self.out[0]},{self.out[1]},0,0,0,0,0,0")
                 for i, color in enumerate(colors, 1):
                     self.lines.put(f"S,{t},{i},{t // 10},1,{color},1,{r.randint(300, 900)},1,2,3,4,5,0")
+                if t % 300 == 0:
+                    duty = [abs(v) * 255 // 1000 for v in self.out]
+                    on = int(self.allowed)
+                    self.lines.put(f"PIN,{t},0,0,{on},{on},{duty[0] if self.out[0] < 0 else 0},"
+                                   f"{duty[0] if self.out[0] > 0 else 0},{duty[1] if self.out[1] < 0 else 0},"
+                                   f"{duty[1] if self.out[1] > 0 else 0}")
                 if t % 200 == 0:
                     self.lines.put(f"I,{t},READY,68,1,{t // 10},0,{r.randint(-80, 80)},{r.randint(-80, 80)},"
-                                   f"{4096 + r.randint(-60, 60)},{r.randint(-20, 20)},{r.randint(-20, 20)},{r.randint(-20, 20)}")
+                                   f"{4096 + r.randint(-60, 60)},{r.randint(-20, 20)},{r.randint(-20, 20)},{r.randint(-20, 20)},0,01")
             time.sleep(0.1)
 
     def _cal_tick(self, t):
@@ -516,7 +559,7 @@ MONO_FONT = "Consolas"
 CHECKS = [
     ("bat", "배터리 전압", "보드 RST → BAT 줄이 멀티미터 값과 같은지"),
     ("boot", "부팅 때 오른쪽 바퀴", "바퀴 띄우고 전원 켤 때 움찔하지 않는지 (GPIO35)"),
-    ("motor", "모터 방향", "MANUAL → SW2 → ▲ 앞: 두 바퀴가 앞으로"),
+    ("motor", "모터 방향", "주행 준비 → ▲ 앞: 두 바퀴가 앞으로"),
     ("sensors", "센서 1–4 순서", "DATA → 하나씩 가려서 그 번호 칸이 바뀌는지"),
     ("imu", "IMU", "READY · 신선이면 자동 체크"),
     ("sw1", "SW1 비상정지", "마지막에: 누르면 ESTOP (재부팅 필요)"),
@@ -566,7 +609,7 @@ def run_gui():
     filters = {k: tk.BooleanVar(value=True) for k in ("D", "S", "I", "기타")}
     paused = tk.BooleanVar(value=False)
     wheels_up = tk.BooleanVar(value=False)
-    power = tk.DoubleVar(value=100)  # tk Scale writes floats
+    power = tk.DoubleVar(value=DRIVE_LIMIT)  # tk Scale writes floats
     history, hist_pos = [], [0]
 
     def note(marker, text):
@@ -756,6 +799,28 @@ def run_gui():
         stat_rows[key] = v
 
     # middle: log + manual command
+    # pin panel: levels the board read back from its own pins (PIN row)
+    pin_box = card(mid, "핀 상태 · 보드가 읽은 실제 값 (0.6초마다)")
+    pin_grid = tk.Frame(pin_box, bg=T["surface"])
+    pin_grid.pack(fill="x")
+    pin_tiles = {}
+    for i, (key, name, gpio) in enumerate(PIN_TILES):
+        tile = tk.Frame(pin_grid, bg=T["sunk"], padx=8, pady=6)
+        tile.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
+        pin_grid.columnconfigure(i % 4, weight=1, uniform="pin")
+        top_row = tk.Frame(tile, bg=T["sunk"])
+        top_row.pack(fill="x")
+        n = tk.Label(top_row, text=name, bg=T["sunk"], fg=T["ink"], font=font(10, "bold"), anchor="w")
+        n.pack(side="left")
+        g = tk.Label(top_row, text=f"GPIO{gpio}", bg=T["sunk"], fg=T["faint"], font=font(8, mono=True))
+        g.pack(side="right")
+        v = tk.Label(tile, text="—", bg=T["sunk"], fg=T["faint"], font=font(13, "bold", mono=True), anchor="w")
+        v.pack(fill="x")
+        pin_tiles[key] = (tile, top_row, n, g, v)
+    pin_note = tk.Label(pin_box, text="", bg=T["surface"], fg=T["faint"], font=font(9), anchor="w",
+                        justify="left", wraplength=520)
+    pin_note.pack(fill="x", pady=(4, 0))
+
     log_card = card(mid, None, fill="both", expand=True)
     head = tk.Frame(log_card, bg=T["surface"])
     head.pack(fill="x", pady=(0, 8))
@@ -791,17 +856,21 @@ def run_gui():
                    activebackground=T["surface"], fg=T["ink"], font=font(10, "bold"),
                    highlightthickness=0, cursor="hand2",
                    command=lambda: note("#", f"wheels lifted = {wheels_up.get()}")).pack(anchor="w")
+    ready_btn = button(drive_card, "▶  주행 준비  (MANUAL + SW2)", lambda: arm(), kind="accent")
+    ready_btn.config(font=font(12, "bold"), pady=10)
+    ready_btn.pack(fill="x", pady=(8, 4))
     switch_row = tk.Frame(drive_card, bg=T["surface"])
-    switch_row.pack(fill="x", pady=(8, 4))
-    button(switch_row, "SW1 · 비상정지", lambda: send("SW1"), kind="stop").pack(side="left")
-    button(switch_row, "SW2 · 시작", lambda: send("SW2"), kind="accent").pack(side="left", padx=(6, 0))
-    tk.Label(drive_card, text="벤치 전용 · SW1 후 재부팅 필요 · SW2는 눌림/해제 1회",
+    switch_row.pack(fill="x", pady=(0, 4))
+    button(switch_row, "SW2만 · 시작", lambda: send("SW2")).pack(side="left")
+    button(switch_row, "SW1 · 비상정지", lambda: send("SW1"), kind="stop").pack(side="right")
+    tk.Label(drive_card, text="주행 준비 한 번이면 방향키에서 손을 떼도 허가가 유지됩니다 · "
+             "■ STOP을 누르면 다시 주행 준비 · SW1은 재부팅해야 풀림",
              bg=T["surface"], fg=T["muted"], font=font(9), wraplength=300,
              justify="left").pack(anchor="w")
     prow = tk.Frame(drive_card, bg=T["surface"])
     prow.pack(fill="x", pady=(4, 6))
     tk.Label(prow, text="출력", bg=T["surface"], fg=T["muted"], font=font(9)).pack(side="left")
-    power_label = tk.Label(prow, text="100", width=4, bg=T["surface"], fg=T["ink"], font=font(10, "bold", mono=True))
+    power_label = tk.Label(prow, text=str(DRIVE_LIMIT), width=4, bg=T["surface"], fg=T["ink"], font=font(10, "bold", mono=True))
     power_label.pack(side="right")
     tk.Scale(prow, from_=20, to=DRIVE_LIMIT, orient="horizontal", variable=power, showvalue=False,
              bg=T["surface"], troughcolor=T["sunk"], highlightthickness=0, bd=0, sliderrelief="flat",
@@ -1154,11 +1223,19 @@ def run_gui():
         elif up == "SW2":
             set_hint("SW2 눌림·해제를 요청했습니다. 보드의 시작 허용 상태를 확인하세요")
         elif up == "STOP" or up == "":
-            set_hint("정지했습니다. 다시 움직이려면 SW2를 눌렀다 떼세요")
+            set_hint("정지했습니다. 다시 움직이려면 주행 준비(또는 SW2)를 누르세요")
 
     def calibrating():
         c = state.cal
         return c is not None and c["state"] != "Idle" and state.cal_finished is None
+
+    def arm():
+        if not wheels_up.get():
+            set_hint("바퀴를 띄우고 '바퀴를 바닥에서 띄웠음'에 체크하세요")
+            return
+        send("MODE MANUAL")
+        # A mode change cancels a pending start, so the SW2 press goes after it.
+        root.after(400, lambda: send("SW2"))
 
     def drive_start(direction):
         if not link["obj"]:
@@ -1178,7 +1255,8 @@ def run_gui():
         for k in pad_keys.values():
             k.config(bg=T["sunk"], fg=T["ink"])
         if link["obj"] and link["obj"].drive:
-            send("STOP")
+            link["obj"].release()  # board stops within 250 ms; no STOP, so no new SW2 needed
+            add_log("› (방향키 뗌 · 반복 중지)", "sent")
         ui["driving"] = None
 
     def send_entry(_=None):
@@ -1266,7 +1344,7 @@ def run_gui():
         elif d and d["allowed"]:
             set_banner("ok", f"움직일 수 있음 · MODE {d['mode']}", "주행 버튼이나 방향키를 누르는 동안 움직입니다")
         elif d and d["mode"] in ("MANUAL", "MOTOR", "ALIGN", "FOLLOW", "AVOID"):
-            set_banner("warn", f"SW2 대기 · MODE {d['mode']}", "SW2를 눌렀다 떼면 움직일 수 있습니다")
+            set_banner("warn", f"SW2 대기 · MODE {d['mode']}", "주행 준비 버튼(또는 SW2)을 누르면 움직일 수 있습니다")
         elif d:
             set_banner("idle", f"MODE {d['mode']}", "센서 값을 보려면 DATA, 주행하려면 MANUAL")
         else:
@@ -1280,12 +1358,39 @@ def run_gui():
                                   fg=T["bad"] if state.estop else T["ok"] if link["obj"] else T["faint"])
         m = state.imu
         if m:
-            stat_rows["imu"].config(text=f"{m['state']} · {m['who']} · {'신선' if m['fresh'] else '멈춤'} · {m['samples']}",
+            stat_rows["imu"].config(text=f"{m['state']} · {m['who']} · {imu_freshness(m)} · {m['samples']}",
                                     fg=T["ok"] if m["fresh"] else T["bad"])
             stat_rows["acc"].config(text="  ".join(f"{v / 4096:+.2f}" for v in m["accel"]), fg=T["ink"])
         else:
             stat_rows["imu"].config(text="—", fg=T["faint"])
             stat_rows["acc"].config(text="—", fg=T["faint"])
+
+    def paint_tile(key, text, level):
+        bg, fg = {"off": (T["sunk"], T["ink"]), "on": (T["ok_soft"], T["ok"]),
+                  "drive": (T["accent_soft"], T["accent"]), "bad": (T["bad_soft"], T["bad"]),
+                  "stale": (T["sunk"], T["faint"])}[level]
+        tile, top_row, n, g, v = pin_tiles[key]
+        for w in (tile, top_row, n, g, v):
+            w.config(bg=bg)
+        v.config(text=text, fg=fg)
+
+    def render_pins():
+        p = state.pins
+        age = time.monotonic() - state.pins_at
+        if not p or age > 2.0:
+            for key, _, _ in PIN_TILES:
+                paint_tile(key, "—", "stale")
+            pin_note.config(text="PIN 줄 없음 · 펌웨어가 최신 robot_bench_v2_manual인지, LOG ON인지 확인" if not p
+                            else f"{age:.0f}초째 새 값 없음 · 연결/LOG ON 확인")
+            return
+        paint_tile("sw1", "눌림" if p["sw1"] else "안 눌림", "bad" if p["sw1"] else "off")
+        paint_tile("sw2", "눌림" if p["sw2"] else "안 눌림", "on" if p["sw2"] else "off")
+        for key, on in zip(("en1", "en2"), p["en"]):
+            paint_tile(key, "HIGH" if on else "LOW", "on" if on else "off")
+        for key, duty in zip(("lpwm1", "rpwm1", "lpwm2", "rpwm2"), p["pwm"]):
+            paint_tile(key, f"{duty * 100 // 255}%  ({duty})" if duty else "0", "drive" if duty else "off")
+        pin_note.config(text="EN HIGH + PWM 한쪽만 % = 그 방향으로 구동 · 브레이크는 EN HIGH + PWM 0 · "
+                             "실제 파형 측정이 아니라 보드 레지스터 값")
 
     def render_checks():
         auto = {}
@@ -1295,7 +1400,7 @@ def run_gui():
         if seen:
             auto["sensors"] = f"응답: {', '.join(map(str, seen))}번 · 가려서 번호가 맞으면 체크"
         if state.imu:
-            auto["imu"] = f"{state.imu['state']} · {'신선' if state.imu['fresh'] else '멈춤'}"
+            auto["imu"] = f"{state.imu['state']} · {imu_freshness(state.imu)}"
             if state.imu["state"] == "READY" and state.imu["fresh"] and not checks_done["imu"].get():
                 checks_done["imu"].set(True)
                 note("#", "check imu = True (auto)")
@@ -1312,6 +1417,7 @@ def run_gui():
     def render():
         render_banner()
         render_status()
+        render_pins()
         render_checks()
         paint_robot()
         render_cal()

@@ -22,6 +22,7 @@ ImuStatus current;
 ImuSample sample;
 uint32_t stateSinceMs = 0, lastPollMs = 0;
 uint8_t consecutiveErrors = 0;
+uint8_t pollCount = 0;
 bool resetSent = false;
 uint8_t wakeStep = 0;  // 0 WHO_AM_I, 1 config block, 2 INT_ENABLE
 uint8_t lastRaw[14] = {};
@@ -73,6 +74,12 @@ void poll(uint32_t nowMs) {
     memcpy(lastRaw, raw, sizeof(lastRaw));
     current.lastChangeMs = nowMs;
   }
+}
+void checkPower(uint32_t nowMs) {
+  uint8_t value = 0;
+  if (!read(REG_PWR_MGMT_1, &value, 1)) { busError(nowMs); return; }
+  consecutiveErrors = 0;
+  current.powerMgmt = value;
 }
 }  // namespace
 
@@ -138,21 +145,25 @@ void ImuMonitor::update(uint32_t nowMs) {
       if (++wakeStep < 3) break;
       enter(ImuState::Ready, nowMs);
       lastPollMs = nowMs;
+      pollCount = 0;
       current.lastSampleMs = current.lastChangeMs = nowMs;
       break;
     }
     case ImuState::Ready:
       if (nowMs - lastPollMs >= POLL_PERIOD_MS) {
         lastPollMs = nowMs;
-        poll(nowMs);
+        if (++pollCount >= POWER_CHECK_POLLS) { pollCount = 0; checkPower(nowMs); }
+        else poll(nowMs);
       }
       break;
     case ImuState::Fault:
       break;
   }
-  current.dataFresh = current.state == ImuState::Ready && current.samples > 0 &&
-                      nowMs - current.lastSampleMs <= STALE_MS &&
-                      nowMs - current.lastChangeMs <= FROZEN_MS;
+  if (current.state != ImuState::Ready || current.samples == 0) current.stale = ImuStale::NotReady;
+  else if (nowMs - current.lastSampleMs > STALE_MS) current.stale = ImuStale::NoData;
+  else if (nowMs - current.lastChangeMs > FROZEN_MS) current.stale = ImuStale::Frozen;
+  else current.stale = ImuStale::Fresh;
+  current.dataFresh = current.stale == ImuStale::Fresh;
 }
 
 ImuStatus ImuMonitor::status() { return current; }

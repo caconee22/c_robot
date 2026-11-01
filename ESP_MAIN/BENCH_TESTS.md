@@ -138,19 +138,28 @@ BatteryMonitor를 그대로 사용한다. 전원 투입 후 3초 판정 창 안�
 분압비와 전압 판정은 멀티미터로 비교해야 한다.
 
 D 행과 네 S 행은 기존 형식 그대로다. 프레임마다 여섯 번째 행 하나가 붙고,
-그 행은 돌아가며 바뀐다: I(IMU)는 두 프레임마다, 나머지는 여덟 프레임(0.8초)마다.
+그 행은 돌아가며 바뀐다: I(IMU)는 두 프레임마다, PIN은 여섯 프레임(0.6초)마다, 나머지는 열두 프레임(1.2초)마다.
 UART0에는 128바이트 하드웨어 FIFO만 있고 TX 링버퍼가 없어서(`availableForWrite()` ≤ 128)
 128바이트가 넘는 줄은 영영 나가지 못한다. 그래서 진단을 기존 줄 끝에 붙이지 않고
 따로 짧은 줄로 낸다(PC 시험이 모든 줄 < 128바이트를 확인). 숫자 enum은 해당 API 헤더 정의를 따른다.
 EV 프레임은 기존 이벤트만 출력하며 실시간 수치를 EventLogger로 보내지 않는다.
 
 ```text
-I,ms,IMU상태,WHO_AM_I(hex),dataFresh,samples,busErrors,ax,ay,az,gx,gy,gz
+I,ms,IMU상태,WHO_AM_I(hex),dataFresh,samples,busErrors,ax,ay,az,gx,gy,gz,신선아님이유,PWR_MGMT_1(hex)
 SYSTEM,ms,SystemState,모터비상래치,runRequested,motorAllowed,rearmRequired,startEventCount,resetReason,faultFlags
 MOTOR,ms,요청좌,요청우,outputsActive,lastResult,stopMode,commandValidUntilMs,watchdogStopCount
 LINK,ms,lastSequence,lastPacketMs,lastFrameMs,validPackets,invalidPackets,duplicatePackets
 POWER_LED,ms,BatteryCheckResult,packMillivolts,cells,okSamples,LedState,outputOn,R,G,B
+PIN,ms,SW1눌림,SW2눌림,EN1,EN2,LPWM1,RPWM1,LPWM2,RPWM2
 ```
+
+PIN은 보드에서 실제로 읽은 값이다. SW는 1 = 눌림, EN은 핀 레벨(1 = HIGH), PWM은 LEDC 듀티(0..255,
+51 = 20%)다. 모터가 안 돌 때 EN·PWM이 나가는지부터 이 줄로 확인한다. 실제 파형 측정은 아니다.
+I 행 끝 두 값은 IMU가 "멈춤"일 때 원인 진단용이다. 신선아님이유: 0 신선, 1 준비 안 됨, 2 샘플 끊김(STALE_MS 동안
+data-ready 없음), 3 값 고정(FROZEN_MS 동안 같은 값). PWR_MGMT_1은 0.5초마다 다시 읽은 값으로 01이면 정상,
+40이면 칩이 혼자 리셋되어 잠든 것(전원 흔들림 의심)이다. 이때 버스 오류는 늘지 않는다. 자동 재초기화는 없고 `IMU RESET`으로 되살린다.
+GUI IMU 줄에 "멈춤(샘플 끊김) · 칩 리셋됨(잠자기)"처럼 뜬다.
+GUI 시험 탭 가운데 위 **핀 상태** 판에 8칸(SW1·SW2·EN 왼/오·PWM 4개, GPIO 번호 포함)으로 색과 함께 뜬다. 2초 넘게 새 PIN 줄이 없으면 회색 —로 바뀐다.
 
 적용 좌우 출력과 라즈 연결·최신 여부는 기존 D 필드에서 확인한다.
 100ms마다 여섯 행을 순서대로 시도하며 각 행은 해당 루프 시점의 스냅샷이다.
@@ -171,7 +180,10 @@ PC 시험은 실제 최대 호출 시간을 보장하지 않는다.
 | `SW1` / SW1 · 비상정지 | 물리 SW1과 같은 영구 구동 금지, EN 즉시 차단, 브레이크와 ESTOP 루프. 교정 중에도 동작. 복구는 보드 재부팅만 가능 |
 | `SW2` / SW2 · 시작 | 최소 60ms 눌림 및 기존 눌림 확인 후 해제, 기존 40ms 디바운스 각각 적용. MODE 선택 후 사용 |
 
-`MODE MANUAL` → `SW2` → 약 0.15초 대기 → GUI 주행 버튼 순서다.
+GUI의 **주행 준비** 버튼 하나가 `MODE MANUAL` → 0.4초 뒤 `SW2`를 보낸다. 그 뒤 방향키를 누르는 동안 움직인다.
+방향키에서 손을 떼면 GUI는 `STOP`을 보내지 않고 DRIVE 반복만 멈춘다. 보드가 250ms 안에 멈추고
+출발 허가는 유지되므로 다음 방향키에 SW2가 다시 필요 없다. ■ STOP/Esc/Space는 허가까지 해제한다.
+GUI 출력 슬라이더는 상한 200(20%)에서 시작한다(10%로는 바퀴가 돌지 않았음, 10/31).
 `MODE MOTOR`에서 SW2는 자동 모터 시험을 시작할 수 있다. GUI는 바퀴 띄움 체크가 있어야 SW2를 보내고,
 CLI 모드는 `--allow-drive`가 있어야 SW2를 보낸다. SW1은 이 체크 없이 항상 보낼 수 있다.
 명령은 정확히 대문자 `SW1`/`SW2` 한 줄이며 해제·래치 초기화 명령은 없다.
