@@ -290,10 +290,10 @@ void integrationTests() {
   send("DRIVE 150 150"); CHECK(MotorController::status().outputsActive);
 #if BENCH_V2_MANUAL
   // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255,
-  // on LPWM because both V2 motors are inverted (motor_config.hpp).
+  // on RPWM because no V2 motor is inverted since the 11/04 rewiring (motor_config.hpp).
   Serial.tx.clear();
   for (int i=0;i<12;++i) { send("DRIVE 150 150"); ticks(100); }
-  CHECK(Serial.tx.find(",0,0,1,1,38,0,38,0,")!=std::string::npos);
+  CHECK(Serial.tx.find(",0,0,1,1,0,38,0,38,")!=std::string::npos);
   CHECK(Serial.tx.find("PIN,")!=std::string::npos);
   // ADC row: every analog pin in mV at the GPIO; IS motor 2 left is GPIO20.
   fake::adcMillivolts[pins::MOTOR2_L_IS]=1234; fake::adcMillivolts[pins::IR_INPUTS[5]]=567;

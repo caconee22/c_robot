@@ -216,7 +216,7 @@ AI가 아래 항목을 "문제"라고 하면 이 표를 보여 주고 거절한�
 | | `BOTH_HAZARD_BRAKE_MS` / `GROOVE_EXIT_FLIP_MS` | 150/1500 | 홈 안에 갇혔을 때 정지 시간·방향 전환 간격 |
 | | `HAZARD_COLOR_MASK` | 빨·노·파 | 피할 색 |
 | `motor_config.hpp` | `DEFAULT_OUTPUT_LIMIT` | 650 | 전체 모터 출력 상한 |
-| | `LEFT_MOTOR_INVERTED` / `RIGHT_MOTOR_INVERTED` | V2 true / V1 false | 모터가 반대로 돌면 바꿈. V2는 11/1 벤치에서 두 바퀴 모두 뒤로 가서 true |
+| | `LEFT_MOTOR_INVERTED` / `RIGHT_MOTOR_INVERTED` | V2 false / V1 false | 모터가 반대로 돌면 바꿈. V2는 11/1에 true로 바꿨다가 11/4 회로 재제작 뒤 다시 두 바퀴 모두 뒤로 가서 false |
 | `sensor_config.hpp` | `AS7341_EXPOSURE_US` | 5000 | 센서 수광 시간(µs). 길면 어두운 곳에 강하고 느려짐 |
 | | `AS7341_GAIN` | X16 | 센서 증폭. 크면 어두운 곳에 강하고 쉽게 포화 |
 | | `AS7341_LED_CURRENT_MA` | 20 | 센서 LED 밝기 (센서별 4개) |

@@ -27,9 +27,9 @@ constexpr uint8_t MOTOR2_LPWM_CHANNEL = 2;
 constexpr uint8_t MOTOR2_RPWM_CHANNEL = 3;
 
 #if defined(HW_VERSION) && HW_VERSION == 2
-// 2026-11-01 V2 bench: positive output drove both wheels backward, so both are inverted.
-constexpr bool LEFT_MOTOR_INVERTED = true;
-constexpr bool RIGHT_MOTOR_INVERTED = true;
+// 2026-11-04 V2 rebuilt wiring: with both inverted (11/01 setting) both wheels ran backward again, so neither is inverted.
+constexpr bool LEFT_MOTOR_INVERTED = false;
+constexpr bool RIGHT_MOTOR_INVERTED = false;
 #else
 // Change these after checking whether positive output moves the robot forward.
 constexpr bool LEFT_MOTOR_INVERTED = false;
