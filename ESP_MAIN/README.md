@@ -375,7 +375,7 @@ const MotorControllerStatus motor = MotorController::status();
 이 코드를 생산 main에 덧붙이면 FSM과 경쟁한다. 실행 모드당 명령 생성자가 한 곳이 되게 연결한다.
 caller가 임의 Running 안전 스냅샷을 꾸며서 우회하지 않는다.
 
-- 단위 -1000..1000 천분율, 생산 기본±650, 벤치±200.
+- 단위 -1000..1000 천분율, 생산 기본±650, 벤치±400.
 - setOutputLimit 변경은 기존 출력을 정지한다. 새 명령이 필요하다.
 - forward/reverse/rotateLeft/rotateRight, stop/coast/brake, status/outputLimit 제공.
 - timeoutMs=0은 기본100ms. INT32_MAX 초과는 InvalidArgument와 브레이크로 거부한다.

@@ -56,7 +56,7 @@ void help() {
   reply("SW1: permanent ESTOP; SW2: debounced start press/release (bench only)\r\n");
 #endif
   reply("MODE STOP|MOTOR|MANUAL|DATA|ALIGN|FOLLOW|AVOID\r\n");
-  reply("SW2 press/release to arm; DRIVE -200..200, repeat <250ms\r\n");
+  reply("SW2 press/release to arm; DRIVE -400..400, repeat <250ms\r\n");
   reply("STOP / LOG ON|OFF / STATUS / HELP / IMU RESET; UART0 57600\r\n");
   reply("CAL START / CAL ERASE / CAL STATUS: floor color calibration\r\n");
   reply("I2C SCAN: main bus + TCA9548A channels\r\n");

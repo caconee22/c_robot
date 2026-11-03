@@ -57,7 +57,7 @@ void logicTests() {
   CHECK(BenchController::setManual(-200,200,100,true));
   CHECK(BenchController::update(349,true,s,v).leftPermille==-200);
   CHECK(stopped(BenchController::update(350,true,s,v)));
-  CHECK(!BenchController::setManual(201,0,360,true));
+  CHECK(!BenchController::setManual(401,0,360,true));
   CHECK(stopped(BenchController::update(361,true,s,v)));
   CHECK(BenchController::setManual(100,100,UINT32_MAX-100,true));
   CHECK(!stopped(BenchController::update(50,true,s,v)));
@@ -276,7 +276,7 @@ void integrationTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
   setup(); ticks(30);
-  CHECK(MotorController::outputLimit()==200); CHECK(!SystemManager::motorAllowed());
+  CHECK(MotorController::outputLimit()==400); CHECK(!SystemManager::motorAllowed());
   send("MODE MANUAL"); send("DRIVE 100 100");
   CHECK(!SystemManager::motorAllowed()); CHECK(!MotorController::status().outputsActive);
   fake::level(pins::START_SWITCH,LOW); ticks(10);

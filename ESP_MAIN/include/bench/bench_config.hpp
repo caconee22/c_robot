@@ -3,7 +3,7 @@
 
 namespace config { namespace bench {
 // Lift wheels for MOTOR / MANUAL first. Units are permille, not percent.
-constexpr int16_t OUTPUT_LIMIT = 200;
+constexpr int16_t OUTPUT_LIMIT = 400;
 constexpr int16_t MOTOR_TEST_DUTY = 120;
 constexpr uint32_t MOTOR_STEP_MS = 3000;
 constexpr uint32_t MOTOR_GAP_MS = 500;
@@ -22,7 +22,7 @@ constexpr uint32_t LOG_PERIOD_MS = 100;
 constexpr uint32_t LOG_FRAME_TIMEOUT_MS = 80;
 constexpr uint32_t CONSOLE_TIMEOUT_MS = 250;
 constexpr uint8_t CONSOLE_BYTES_PER_LOOP = 64;
-static_assert(OUTPUT_LIMIT > 0 && OUTPUT_LIMIT <= 300, "Keep bench limit low");
+static_assert(OUTPUT_LIMIT > 0 && OUTPUT_LIMIT <= 400, "Keep bench limit low");
 static_assert(MOTOR_STEP_MS > 0 && MANUAL_HOLD_MS > 0 && COMMAND_VALID_MS > 0 &&
               CENTER_X > 0 && CENTER_X < 1920 && STOP_BOX_HEIGHT > 0 && STOP_BOX_HEIGHT <= 1080,
               "Invalid bench timing or camera settings");

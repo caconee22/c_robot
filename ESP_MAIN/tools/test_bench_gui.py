@@ -60,7 +60,7 @@ assert kind == "adc" and adc["is_l2"] == 3000 and adc["ir6"] == 6 and adc["bat"]
 assert drive_command("fwd", 100) == "DRIVE 100 100"
 assert drive_command("back", 100) == "DRIVE -100 -100"
 assert drive_command("left", 50) == "DRIVE -50 50"
-assert drive_command("right", 999) == "DRIVE 200 -200"  # clamped to the bench limit
+assert drive_command("right", 999) == "DRIVE 400 -400"  # clamped to the bench limit
 assert requires_drive_permission("SW2") and requires_drive_permission(" sw2 ")
 assert requires_drive_permission("DRIVE 100 100")
 assert not requires_drive_permission("SW1") and not requires_drive_permission("STOP")

@@ -31,7 +31,7 @@ import time
 import traceback
 
 REPEAT_S = 0.1          # well under the firmware's 250 ms manual hold
-DRIVE_LIMIT = 200       # firmware bench output limit (permille)
+DRIVE_LIMIT = 400       # firmware bench output limit (permille)
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 CORNERS = {1: "앞 왼쪽", 2: "앞 오른쪽", 3: "뒤 왼쪽", 4: "뒤 오른쪽"}
 CAL_STEPS = 48          # 4 sensors x 4 colors x 3 poses (firmware order)
