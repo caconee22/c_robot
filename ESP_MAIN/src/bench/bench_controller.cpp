@@ -9,9 +9,13 @@ bool wasAllowed = false, done = false, manualValid = false, escaping = false;
 uint32_t runStarted = 0, manualReceived = 0, escapeStarted = 0;
 int16_t manualLeft = 0, manualRight = 0;
 uint8_t escapeMask = 0;
+int8_t lastSide = 0;            // ALIGN: +1 tower last seen right of center, -1 left, 0 never
+bool lost = false;
+uint32_t lostSince = 0;
 
 void resetMotion() {
-  wasAllowed = done = manualValid = escaping = false;
+  wasAllowed = done = manualValid = escaping = lost = false;
+  lastSide = 0;
   manualLeft = manualRight = 0;
 }
 
@@ -33,13 +37,46 @@ bool floorsReady(uint32_t now, const SensorSnapshot& sensors) {
   return true;
 }
 
+// Equal and opposite wheels; the trims only make up for a weaker side.
+MotorCommand spin(uint32_t now, int side, int16_t duty) {
+  const int16_t left = duty + LEFT_SPIN_TRIM, right = duty + RIGHT_SPIN_TRIM;
+  return side > 0 ? command(now, left, -right) : command(now, -left, right);
+}
+
+// Slower as the tower nears the center window, so it stops without overshooting.
+int16_t alignDuty(int magnitude) {
+  if (magnitude >= ALIGN_FULL_ERROR) return ALIGN_MAX_DUTY;
+  return static_cast<int16_t>(ALIGN_MIN_DUTY + (magnitude - ALIGN_DEADBAND) *
+      (ALIGN_MAX_DUTY - ALIGN_MIN_DUTY) / (ALIGN_FULL_ERROR - ALIGN_DEADBAND));
+}
+
+// Spin in place only, never forward or back.
+MotorCommand align(uint32_t now, const VisionSnapshot& vision, bool targetOk) {
+  if (!targetOk) {
+    // Pi silent or camera/pipeline down: stop, do not search blind.
+    const bool visionOk = vision.linkValid && vision.frameFresh && vision.cameraOk && vision.pipelineOk;
+    if (!visionOk || lastSide == 0) return command(now);
+    if (!lost) { lost = true; lostSince = now; }
+    if (now - lostSince >= SEARCH_TURN_MS) return command(now);  // about one turn: give up
+    return spin(now, lastSide, TURN_DUTY);
+  }
+  lost = false;
+  const int error = static_cast<int>(vision.targetX) - CENTER_X;
+  if (error) lastSide = error > 0 ? 1 : -1;
+  const int magnitude = error < 0 ? -error : error;
+  if (magnitude <= ALIGN_DEADBAND) return command(now);
+  return spin(now, error, alignDuty(magnitude));
+}
+
 MotorCommand track(uint32_t now, const VisionSnapshot& vision) {
-  if (!vision.linkValid || !vision.frameFresh || !vision.targetValid ||
-      !vision.cameraOk || !vision.pipelineOk || vision.targetX >= 1920 ||
-      vision.targetHeight == 0 || vision.targetHeight > 1080) return command(now);
+  const bool targetOk = vision.linkValid && vision.frameFresh && vision.targetValid &&
+      vision.cameraOk && vision.pipelineOk && vision.targetX < 1920 &&
+      vision.targetHeight != 0 && vision.targetHeight <= 1080;
+  if (selected == BenchMode::Align) return align(now, vision, targetOk);
+  if (!targetOk) return command(now);
   const int error = static_cast<int>(vision.targetX) - CENTER_X;
   const int magnitude = error < 0 ? -error : error;
-  if (selected == BenchMode::Align || magnitude > TURN_ONLY_ERROR) {
+  if (magnitude > TURN_ONLY_ERROR) {
     if (magnitude <= CENTER_DEADBAND) return command(now);
     return error > 0 ? command(now, TURN_DUTY, -TURN_DUTY)
                      : command(now, -TURN_DUTY, TURN_DUTY);

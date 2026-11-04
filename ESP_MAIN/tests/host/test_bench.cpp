@@ -67,6 +67,26 @@ void logicTests() {
   v.targetX=1300; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille>0 && c.rightPermille<0);
   v.targetX=600; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille<0 && c.rightPermille>0);
   v.frameFresh=false; CHECK(stopped(BenchController::update(0,true,s,v)));
+  // Output ramps: 250 just outside the window, 350 far off, never forward/back.
+  v=target(); v.targetX=960+201; c=BenchController::update(0,true,s,v);
+  CHECK(c.leftPermille==250 && c.rightPermille==-250);
+  v.targetX=960-450; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==-300 && c.rightPermille==300);
+  v.targetX=1919; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==350 && c.rightPermille==-350);
+  v.targetX=5; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==-350 && c.rightPermille==350);
+  // Wider ALIGN window: 150 px off center is centered enough.
+  v=target(); v.targetX=960+150; CHECK(stopped(BenchController::update(0,true,s,v)));
+  // Tower lost (Pi fine, no target): spin toward the side last seen, ~one turn, then stop.
+  v.targetX=1500; c=BenchController::update(10,true,s,v); CHECK(c.leftPermille>0 && c.rightPermille<0);
+  v.targetValid=false; v.targetX=0; v.targetHeight=0;
+  c=BenchController::update(20,true,s,v); CHECK(c.leftPermille==300 && c.rightPermille==-300);
+  c=BenchController::update(20+config::bench::SEARCH_TURN_MS-1,true,s,v); CHECK(c.leftPermille>0);
+  CHECK(stopped(BenchController::update(20+config::bench::SEARCH_TURN_MS,true,s,v)));
+  v=target(); v.targetX=400; c=BenchController::update(4000,true,s,v); CHECK(c.leftPermille<0);  // found again
+  v.targetValid=false; v.targetX=0; v.targetHeight=0;
+  c=BenchController::update(4010,true,s,v); CHECK(c.leftPermille<0 && c.rightPermille>0);  // lost on the left
+  v.linkValid=false; CHECK(stopped(BenchController::update(4020,true,s,v)));  // no Pi: no blind search
+  BenchController::select(BenchMode::Align); v=target(); v.targetValid=false; v.targetX=0; v.targetHeight=0;
+  CHECK(stopped(BenchController::update(0,true,s,v)));  // never seen since start: stay still
   v=target(); BenchController::select(BenchMode::Follow);
   c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==160 && c.rightPermille==160);
   v.targetX=1100; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille>c.rightPermille);
@@ -310,6 +330,19 @@ void integrationTests() {
   camera(1300,200); CHECK(MotorController::status().appliedLeftPermille>0);
   CHECK(MotorController::status().appliedRightPermille<0);
   ticks(130); CHECK(!MotorController::status().outputsActive);
+  // SW2 held 3 s while stopped picks ALIGN and the release starts it; 2.9 s does not.
+  send("MODE STOP");
+  fake::level(pins::START_SWITCH,LOW); ticks(2900); fake::level(pins::START_SWITCH,HIGH); ticks(50);
+  CHECK(BenchController::mode()==BenchMode::Stop);
+  CHECK(SystemManager::motorAllowed());  // a normal start in STOP mode: nothing moves
+  camera(1300,200,5); CHECK(!MotorController::status().outputsActive);
+  send("STOP");
+  fake::level(pins::START_SWITCH,LOW); ticks(3100);
+  CHECK(BenchController::mode()==BenchMode::Align); CHECK(!SystemManager::motorAllowed());
+  fake::level(pins::START_SWITCH,HIGH); ticks(50); CHECK(SystemManager::motorAllowed());
+  camera(600,200,6); CHECK(MotorController::status().appliedLeftPermille<0);
+  CHECK(MotorController::status().appliedRightPermille>0);
+  camera(960,200,7); CHECK(!MotorController::status().outputsActive);  // centered: stop
   send("MODE FOLLOW"); startButton(); camera(960,200,2);
   CHECK(MotorController::status().appliedLeftPermille==160);
   CHECK(MotorController::status().appliedRightPermille==160);

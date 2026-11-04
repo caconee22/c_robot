@@ -319,7 +319,7 @@ class BenchState:
             self.estop = self.estop or v["estop"]
         elif kind == "cal":
             if self.cal and v["step"] != self.cal["step"]:
-                self.cal_results, self.cal_previews = {}, {}
+                self.cal_results, self.cal_previews, self.cal_message = {}, {}, None
             if v["state"] not in ("Countdown", "Measuring"):
                 self.cal_count, self.cal_measuring = None, False
             if v["state"] == "WaitingForReady" and self.cal and self.cal["state"] == "WaitingForAccept":
@@ -334,13 +334,14 @@ class BenchState:
             self.cal_stored = v["stored"]
         elif kind == "cal_result":
             self.cal_results[v["sensor"]] = v
-            self.cal_measuring, self.cal_count = False, None
+            self.cal_measuring, self.cal_count, self.cal_message = False, None, None
         elif kind == "cal_preview":
             self.cal_previews[v["sensor"]] = v
         elif kind == "cal_count":
-            self.cal_count = v["n"]
+            # A new attempt: an old "Too few samples" must not stay on screen (11/04 bug).
+            self.cal_count, self.cal_message = v["n"], None
         elif kind == "cal_measuring":
-            self.cal_measuring, self.cal_count = True, None
+            self.cal_measuring, self.cal_count, self.cal_message = True, None, None
         elif kind in ("cal_saved", "cal_aborted"):
             self.cal_finished = "saved" if kind == "cal_saved" else "aborted"
             if kind == "cal_saved":

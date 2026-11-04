@@ -2,6 +2,7 @@
 #include "bench_v2/software_switches.hpp"
 #include "bench_v2/i2c_scan.hpp"
 #include "hardware/reset_manager.hpp"
+#include "interrupts/button_interrupts.hpp"
 #if HW_VERSION != 2
 #error V2 bench requires HW_VERSION=2
 #endif
@@ -57,6 +58,7 @@ void help() {
 #endif
   reply("MODE STOP|MOTOR|MANUAL|DATA|ALIGN|FOLLOW|AVOID\r\n");
   reply("SW2 press/release to arm; DRIVE -400..400, repeat <250ms\r\n");
+  reply("SW2 held 3s while stopped: ALIGN (turn to center the tower)\r\n");
   reply("STOP / LOG ON|OFF / STATUS / HELP / IMU RESET; UART0 57600\r\n");
   reply("CAL START / CAL ERASE / CAL STATUS: floor color calibration\r\n");
   reply("I2C SCAN: main bus + TCA9548A channels\r\n");
@@ -286,6 +288,18 @@ void calibrationLine(uint32_t now) {
   }
 }
 
+// SW2 held ALIGN_HOLD_MS while stopped picks ALIGN, so the field needs no PC:
+// the release is the normal start gesture. While running a 0.5 s hold is the
+// emergency stop (SystemManager), so this never fires then.
+void alignHold(uint32_t now) {
+  if (SystemManager::running() || ColorCalibration::active() ||
+      BenchController::mode() == BenchMode::Align ||
+      ButtonInterrupts::startHeldMs(now) < ALIGN_HOLD_MS) return;
+  BenchController::select(BenchMode::Align);
+  EventLogger::modeChanged(static_cast<uint8_t>(BenchMode::Align));
+  reply("OK MODE ALIGN (SW2 3s); release SW2 to start\r\n");
+}
+
 void telemetry(uint32_t now) {
   if (!logging) return;
   if (logRow >= ROWS) {
@@ -359,6 +373,7 @@ void BenchV2App::update() {
   BenchSoftwareSwitches::update(millis());
 #endif
   SystemManager::update(millis());
+  alignHold(millis());
   RaspberryLink::poll();
   SensorManager::update();
   ColorCalibration::tick(millis());

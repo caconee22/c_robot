@@ -137,3 +137,15 @@ assert i2c_summary(scan_state.i2c) == "먹스 없음 · 본선 68(IMU)"
 scan_state.feed("OK I2C SCAN")
 assert i2c_summary(scan_state.i2c) == "스캔 중…"
 print("i2c scan parse checks passed")
+
+# 11/04 bug: "Too few samples" stayed on screen after the retry and the next step.
+retry = BenchState()
+retry.feed("[CAL] Calibration started. Motors are braked until it ends.")
+retry.feed("[CAL] Too few samples: 3. Type READY to retry.")
+assert "Too few" in retry.cal_message
+retry.feed("[CAL] Starting in 1...")
+assert retry.cal_message is None
+retry.feed("[CAL] Too few samples: 3. Type READY to retry.")
+retry.feed("[CAL][RESULT] S1 samples=28 brightness=100.0 min=90 max=110 noise=1.00")
+assert retry.cal_message is None
+print("cal retry message checks passed")

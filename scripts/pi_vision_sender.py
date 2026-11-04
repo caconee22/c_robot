@@ -1,6 +1,8 @@
 """Raspberry Pi: detect the color tower and send packet V1 to the ESP32 over UART.
 
-Detection runs as fast as the camera and CPU allow (about 25-40 fps on a Pi 5).
+Detection runs as fast as the camera and CPU allow. 11/04: 1280x720 (search 640x360)
+gives ~45 fps and ~33 ms frame age vs ~33 fps / ~83 ms at 1920x1080; the packet
+still uses the 1920x1080 scale.
 A small sender thread writes the latest packet every 20 ms (50 Hz, the protocol
 requirement). The sequence changes only when a new frame was processed, so a
 repeat of the same result never looks fresh to the ESP32 (README section 10).
@@ -79,10 +81,10 @@ def main() -> None:
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--dry-run", action="store_true", help="do not open the UART")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--width", type=int, default=1920)
-    parser.add_argument("--height", type=int, default=1080)
-    parser.add_argument("--search-width", type=int, default=960)
-    parser.add_argument("--search-height", type=int, default=540)
+    parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--search-width", type=int, default=640)
+    parser.add_argument("--search-height", type=int, default=360)
     parser.add_argument("--fps", type=float, default=50.0)
     parser.add_argument("--max-frames", type=int, default=0, help="stop after N frames, 0 = run until Ctrl+C")
     parser.add_argument("--quiet", action="store_true", help="no once-per-second status line")

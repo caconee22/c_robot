@@ -1,0 +1,13 @@
+[Unit]
+Description=C_ROBOT back up Wi-Fi profiles once the network is up
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Wait a little so NetworkManager has finished writing after connecting.
+ExecStartPre=/bin/sleep 30
+ExecStart=/usr/bin/python3 /home/caconee/c_robot/scripts/pi_netfix.py save
+
+[Install]
+WantedBy=multi-user.target
