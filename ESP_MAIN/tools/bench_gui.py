@@ -596,7 +596,10 @@ class DemoLink:
 
 def list_ports():
     from serial.tools import list_ports as lp
-    return [(p.device, p.description) for p in lp.comports()]
+    # On the Pi, ttyAMA*/ttyS* are the camera packet line to the ESP32 and the
+    # console, never the bench port (that is the ESP32 USB, /dev/ttyACM0).
+    return [(p.device, p.description) for p in lp.comports()
+            if not p.device.startswith(("/dev/ttyAMA", "/dev/ttyS"))]
 
 
 # ---------- command-line mode ----------

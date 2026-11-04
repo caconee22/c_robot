@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=C_ROBOT 카메라 보기
+Comment=타워 감지 화면 (q로 종료하면 자동 송신 복귀)
+Exec=lxterminal --title="C_ROBOT 카메라" -e bash /home/caconee/c_robot/scripts/vision_preview.sh
+Icon=camera-video
+Terminal=false

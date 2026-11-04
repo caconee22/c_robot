@@ -12,6 +12,16 @@ then drops the link after 120 ms and drives without vision. No auto restart.
 
   python3 scripts/pi_vision_sender.py                 # camera -> /dev/ttyAMA0
   python3 scripts/pi_vision_sender.py --dry-run       # no UART, print packets
+  python3 scripts/pi_vision_sender.py --detector legacy   # pre-11/04 4-filter detector
+  python3 scripts/pi_vision_sender.py --preview       # live window (VNC desktop), bench only
+
+--preview: live window with the tower color calibrator (scripts/vision_preview.py).
+Stop the c-robot-vision service first, the camera can only be opened once.
+
+Detector (11/04): default "hsv" = scripts/tower_detector_hsv.py (HSV + shape +
+tracking, color range from config/tower_hsv.json saved by the calibrator; same
+accuracy on the 10/06 videos, worst case 50 ms -> 2.3 ms on the Pi).
+"legacy" = color_detection_lightweight with config/color_detector_last.json.
 """
 from __future__ import annotations
 
@@ -26,6 +36,7 @@ import cv2
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from color_detection_lightweight import LightweightOptions, detect_frame_lightweight  # noqa: E402
 from pi_green_tracker import DEFAULT_CONFIG, PiCameraSource, VideoSource, load_params  # noqa: E402
+from tower_detector_hsv import TowerDetector  # noqa: E402
 import vision_packet  # noqa: E402
 
 SEND_PERIOD_S = 0.020  # 50 Hz
@@ -86,14 +97,23 @@ def main() -> None:
     parser.add_argument("--search-width", type=int, default=640)
     parser.add_argument("--search-height", type=int, default=360)
     parser.add_argument("--fps", type=float, default=50.0)
+    parser.add_argument("--detector", choices=("hsv", "legacy"), default="hsv")
+    parser.add_argument("--preview", action="store_true", help="live window, every 3rd frame")
     parser.add_argument("--max-frames", type=int, default=0, help="stop after N frames, 0 = run until Ctrl+C")
     parser.add_argument("--quiet", action="store_true", help="no once-per-second status line")
     args = parser.parse_args()
+    if args.preview and args.detector != "hsv":
+        parser.error("--preview calibrates the hsv detector; drop --detector legacy")
 
     cv2.setUseOptimized(True)
     cv2.setNumThreads(4)
     params = load_params(args.config)
     options = LightweightOptions(args.search_width, args.search_height)
+    tower = TowerDetector()
+    preview = None
+    if args.preview:
+        from vision_preview import EVERY, Preview  # needs a desktop; never loaded by the service
+        preview = Preview(tower)
     source = (
         PiCameraSource(args.width, args.height, args.search_width, args.search_height, args.fps)
         if args.source.lower() == "camera"
@@ -112,15 +132,20 @@ def main() -> None:
             ok, frame, search_frame = source.read()
             if not ok:
                 break
-            result = detect_frame_lightweight(
-                frame, params, options, search_frame=search_frame, build_output_masks=False
-            )
+            if args.detector == "hsv":
+                result = tower.detect(frame, search_frame)
+            else:
+                result = detect_frame_lightweight(
+                    frame, params, options, search_frame=search_frame, build_output_masks=False
+                )
             stable = stable + 1 if result.candidates else 0
             sequence = (sequence + 1) & 0xFF
             packet = vision_packet.from_candidates(
                 sequence, result.candidates, (frame.shape[1], frame.shape[0]), stable
             )
             sender.latest = packet
+            if preview and frames % EVERY == 0:
+                preview.show(frame, search_frame, result.candidates, frames)
             frames += 1
             report_frames += 1
             now = time.perf_counter()
