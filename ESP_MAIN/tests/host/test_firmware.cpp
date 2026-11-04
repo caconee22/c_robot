@@ -36,9 +36,11 @@ void fixture() {
   fake::reset(); EventLogger::begin(); MotorController::begin();
   ButtonInterrupts::begin(); StatusLed::begin(); SystemManager::begin();
 }
+// SW2 held past debounce + the 0.5 s hold, then released.
 void pressStart() {
   fake::level(pins::START_SWITCH,LOW); SystemManager::update(millis());
   fake::advance(40); SystemManager::update(millis());
+  fake::advance(config::switches::HOLD_MS); SystemManager::update(millis());
   fake::level(pins::START_SWITCH,HIGH); SystemManager::update(millis());
   fake::advance(40); SystemManager::update(millis());
 }
@@ -99,17 +101,33 @@ void testButtonsAndEstop() {
   fake::advance(10); fake::level(pins::START_SWITCH,HIGH); ButtonInterrupts::update(millis());
   fake::advance(50); ButtonInterrupts::update(millis()); CHECK(!ButtonInterrupts::consumeStartEvent());
   pressStart(); CHECK(SystemManager::running());
+  // A short SW2 press (shorter than the hold) neither stops nor starts.
+  fake::level(pins::START_SWITCH,LOW); SystemManager::update(millis());
+  fake::advance(300); SystemManager::update(millis());
+  fake::level(pins::START_SWITCH,HIGH); SystemManager::update(millis());
+  fake::advance(60); SystemManager::update(millis());
+  CHECK(SystemManager::running() && !ButtonInterrupts::emergencyLatched());
+  CHECK(SystemManager::status().startEventCount==1);
   CHECK(MotorController::forward(500,running()));
   // Inject the emergency edge while a motor write is in progress.
   fake::writeHook=[] { fake::level(pins::SAFETY_SWITCH,LOW); };
   MotorController::forward(400,running());
-  CHECK(ButtonInterrupts::emergencyLatched());
-  CHECK(!Bts7960Driver::clearDriveInhibit());
-  // The SW1 ISR by itself must clear every configured EN pin. The register
-  // bank masks are built from pins.hpp, so this also covers the V2 pins.
+  // An impact-length SW1 press does nothing; a bounce restarts the hold.
+  ButtonInterrupts::pollEmergencyHold(millis()); CHECK(!ButtonInterrupts::emergencyLatched());
+  fake::advance(300); ButtonInterrupts::pollEmergencyHold(millis());
+  fake::level(pins::SAFETY_SWITCH,HIGH); fake::level(pins::SAFETY_SWITCH,LOW);
+  fake::advance(300); ButtonInterrupts::pollEmergencyHold(millis());
+  CHECK(!ButtonInterrupts::emergencyLatched());
+  // An older timestamp from the other caller must not trip it.
+  ButtonInterrupts::pollEmergencyHold(millis()-400); CHECK(!ButtonInterrupts::emergencyLatched());
+  // After the full hold the poll itself clears every configured EN pin. The
+  // register bank masks are built from pins.hpp, so this covers V2 too.
   const gpio_num_t enPins[]={pins::MOTOR1_LEN,pins::MOTOR1_REN,pins::MOTOR2_LEN,pins::MOTOR2_REN};
   for(const auto en:enPins) fake::pins[en]=HIGH;
-  fake::level(pins::SAFETY_SWITCH,HIGH); fake::level(pins::SAFETY_SWITCH,LOW);
+  fake::advance(config::switches::HOLD_MS-1); ButtonInterrupts::pollEmergencyHold(millis()); CHECK(!ButtonInterrupts::emergencyLatched());
+  fake::advance(1); ButtonInterrupts::pollEmergencyHold(millis());
+  CHECK(ButtonInterrupts::emergencyLatched());
+  CHECK(!Bts7960Driver::clearDriveInhibit());
   for(const auto en:enPins) CHECK(fake::pins[en]==LOW);
   fake::stopOnDelay=true;
   try { SystemManager::update(millis()); CHECK(false); } catch(const fake::StopLoop&) {}
@@ -125,9 +143,24 @@ void testButtonsAndEstop() {
   fake::level(pins::START_SWITCH,HIGH); ButtonInterrupts::update(millis());
   fake::advance(40); ButtonInterrupts::update(millis()); CHECK(!ButtonInterrupts::consumeStartEvent());
   pressStart(); CHECK(SystemManager::running());
+  // SW2 held while running is an emergency stop.
+  fixture(); pressStart(); CHECK(SystemManager::running());
+  fake::level(pins::START_SWITCH,LOW); SystemManager::update(millis());
+  fake::advance(40); SystemManager::update(millis());
+  fake::advance(config::switches::HOLD_MS-1); SystemManager::update(millis());
+  CHECK(!ButtonInterrupts::emergencyLatched());
+  fake::advance(1); fake::stopOnDelay=true;
+  try { SystemManager::update(millis()); CHECK(false); } catch(const fake::StopLoop&) {}
+  fake::stopOnDelay=false; CHECK(ButtonInterrupts::emergencyLatched());
+  CHECK(!MotorController::clearEmergencyStop(running()));
+  // A start press shorter than the hold is ignored.
+  fixture(); fake::level(pins::START_SWITCH,LOW); ButtonInterrupts::update(millis());
+  fake::advance(40); ButtonInterrupts::update(millis()); fake::advance(400);
+  fake::level(pins::START_SWITCH,HIGH); ButtonInterrupts::update(millis());
+  fake::advance(40); ButtonInterrupts::update(millis()); CHECK(!ButtonInterrupts::consumeStartEvent());
   // A release bounce inside the debounce window restarts the timer.
   fixture(); fake::level(pins::START_SWITCH,LOW); ButtonInterrupts::update(millis());
-  fake::advance(40); ButtonInterrupts::update(millis());
+  fake::advance(40); ButtonInterrupts::update(millis()); fake::advance(config::switches::HOLD_MS);
   fake::level(pins::START_SWITCH,HIGH); ButtonInterrupts::update(millis());
   fake::advance(35); fake::level(pins::START_SWITCH,LOW); fake::level(pins::START_SWITCH,HIGH);
   ButtonInterrupts::update(millis()); fake::advance(5); ButtonInterrupts::update(millis());
@@ -143,7 +176,7 @@ void testSystem() {
   pressStart(); CHECK(!SystemManager::status().runRequested);
   SystemManager::setMotorHealthy(true); CHECK(!SystemManager::motorAllowed());
   pressStart(); CHECK(SystemManager::motorAllowed());
-  pressStart(); CHECK(SystemManager::running()); SystemManager::requestStop(); CHECK(!SystemManager::running());
+  CHECK(SystemManager::running()); SystemManager::requestStop(); CHECK(!SystemManager::running());
   // STOP cancels both a stable press and a press still being debounced.
   for (uint32_t held : {10U, 50U}) {
     fixture();
@@ -263,8 +296,8 @@ void testFsm() {
   }
   // Both ends at once with no history: back out.
   RobotFsm::begin(); sensors=SensorSnapshot{};
-  sensors.floorColor[1].color=FloorColor::Yellow; sensors.floorColor[1].reliable=true;
-  sensors.floorColor[3].color=FloorColor::Yellow; sensors.floorColor[3].reliable=true;
+  sensors.floorColor[1].color=FloorColor::Red; sensors.floorColor[1].reliable=true;
+  sensors.floorColor[3].color=FloorColor::Blue; sensors.floorColor[3].reliable=true;
   CHECK(RobotFsm::update(10,sensors,missing,running()).type==DriveIntentType::Brake);
   CHECK(RobotFsm::update(160,sensors,missing,running()).type==DriveIntentType::Reverse);
   sensors=SensorSnapshot{}; RobotFsm::begin();
@@ -373,17 +406,23 @@ void testCalibration() {
   command("CAL START"); command("CAL MARGIN 20 40");
   command("CAL MARGIN 10 30 JUNK");
   command("CAL MARGIN 4294967316 4294967336");
-  for(uint8_t step=0;step<48;++step) {
-    auto status=ColorCalibration::status(); fake::floor(status.sensorIndex,static_cast<uint8_t>(status.color));
+  for(uint8_t step=0;step<ColorCalibration::STEP_COUNT;++step) {
+    auto status=ColorCalibration::status();
+    CHECK(status.color!=FloorColor::Yellow);
+    CHECK(status.sensorMask==(status.pose!=CalibrationPose::Pressed ? 0x0F : step%2==0 ? 0x03 : 0x0C));
     // Model a different brightness for level/lifted/pressed references.
     const unsigned scale=status.pose==CalibrationPose::Level ? 2 :
                           status.pose==CalibrationPose::Lifted ? 1 : 3;
-    auto& device=fake::sensors[status.sensorIndex];
-    for(auto& value:device.low) value=value*scale/4;
-    for(auto& value:device.high) value=value*scale/4;
-    for(auto& value:device.rgbc) value=value*scale/4;
+    for(uint8_t corner=0;corner<4;++corner) {
+      if(!(status.sensorMask&(1U<<corner))) continue;
+      fake::floor(corner,static_cast<uint8_t>(status.color));
+      auto& device=fake::sensors[corner];
+      for(auto& value:device.low) value=value*scale/4;
+      for(auto& value:device.high) value=value*scale/4;
+      for(auto& value:device.rgbc) value=value*scale/4;
+    }
     command("READY");
-    // Two 3-second intervals: countdown then independent samples.
+    // Countdown then independent samples.
     for(int i=0;i<6100;++i) {
       fake::advance(1); SensorManager::update(); ColorCalibration::update(millis());
     }
@@ -403,7 +442,7 @@ void testCalibration() {
     }
   }
   CHECK(ColorCalibration::status().state==CalibrationState::Completed);
-  command("STATUS"); CHECK(Serial.tx.find("step=48/48")!=std::string::npos);
+  command("STATUS"); CHECK(Serial.tx.find("step=12/12")!=std::string::npos);
   fake::nvsWriteOk=false; command("CAL SAVE"); CHECK(ColorCalibration::status().state==CalibrationState::Error);
   fake::nvsWriteOk=true; command("CAL SAVE"); CHECK(CalibrationStore::valid());
   CHECK(!ColorCalibration::active()); CHECK(!fake::nvs.empty());
@@ -411,6 +450,7 @@ void testCalibration() {
   CHECK(CalibrationStore::data().brightnessMarginPermille==400);
   for(uint8_t corner=0;corner<4;++corner) {
     for(uint8_t color=0;color<4;++color) {
+      if(color==static_cast<uint8_t>(FloorColor::Yellow)) continue;  // not calibrated
       fake::floor(corner,color); sensorTicks(200);
       const auto raw=ColorSensorManager::sample(corner);
       const auto result=FloorColorClassifier::classify(corner,raw,CalibrationStore::data());
@@ -545,7 +585,8 @@ void testMainIntegration() {
   // Calibration is a separate firmware: production ignores its commands.
   Serial.inject("CAL START\n"); for(int i=0;i<10;++i) loop();
   CHECK(!SystemManager::motorAllowed()); CHECK(Serial.tx.find("[CAL]")==std::string::npos);
-  fake::level(pins::START_SWITCH,LOW); for(int i=0;i<50;++i) loop();
+  fake::level(pins::START_SWITCH,LOW);
+  for(const uint32_t pressed=millis(); millis()-pressed<config::switches::HOLD_MS+60;) loop();
   fake::level(pins::START_SWITCH,HIGH); for(int i=0;i<50;++i) loop();
   CHECK(SystemManager::motorAllowed()); CHECK(MotorController::status().outputsActive);
   CHECK(RobotFsm::state()==RobotState::Search);
@@ -581,7 +622,7 @@ int main(int argc,char** argv) {
       {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},
       {"color sampling/errors/no recovery",testColorsAndErrors},{"three independent samples",testThreeSamples},
       {"continuous single-exposure floor mode",testContinuousFloorMode},
-      {"48-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},
+      {"12-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},
       {"power-on battery check",testBattery},
       {"real main loop integration",testMainIntegration},
       {"I2C time/optional sensors/boot ESTOP",testRealisticTimingAndBoot}};

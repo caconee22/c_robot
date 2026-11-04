@@ -8,7 +8,8 @@
 namespace {
 bool pressing = false;
 uint32_t pressedMs = 0;
-constexpr uint32_t PRESS_TIMEOUT_MS = 250;
+// The software press is held past the 0.5 s button hold, then released.
+constexpr uint32_t PRESS_TIMEOUT_MS = config::switches::DEBOUNCE_MS + config::switches::HOLD_MS + 250;
 bool startHealthy() {
   const auto status = SystemManager::status();
   return !status.startHeld && status.applicationHealthy &&
@@ -23,7 +24,8 @@ void BenchSoftwareSwitches::begin() {
 }
 
 bool BenchSoftwareSwitches::pressStart(uint32_t nowMs) {
-  if (pressing || !startHealthy() || ButtonInterrupts::startPressed() ||
+  // Refused while running: a held SW2 would be an emergency stop there.
+  if (pressing || !startHealthy() || SystemManager::running() || ButtonInterrupts::startPressed() ||
       digitalRead(pins::START_SWITCH) == LOW) return false;
   pressing = true;
   pressedMs = nowMs;
@@ -37,7 +39,7 @@ void BenchSoftwareSwitches::update(uint32_t nowMs) {
     cancelStart();  // do not keep a start request pending across a long loop stall
     return;
   }
-  if (pressing && nowMs - pressedMs >= config::switches::DEBOUNCE_MS + 20 &&
+  if (pressing && ButtonInterrupts::startHeldMs(nowMs) >= config::switches::HOLD_MS + 20 &&
       ButtonInterrupts::status().startPressQualified) {
     pressing = false;
     ButtonInterrupts::benchSetStartPressed(false);

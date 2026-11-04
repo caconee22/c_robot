@@ -89,7 +89,7 @@ uint8_t BenchController::hazardMask(const SensorSnapshot& sensors) {
   for (uint8_t i = 0; i < COLOR_SENSOR_COUNT; ++i) {
     const auto& floor = sensors.floorColor[i];
     if (floor.reliable && (floor.color == FloorColor::Red ||
-        floor.color == FloorColor::Yellow || floor.color == FloorColor::Blue)) mask |= 1U << i;
+        floor.color == FloorColor::Blue)) mask |= 1U << i;  // yellow is not a hazard
   }
   return mask;
 }

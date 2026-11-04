@@ -163,6 +163,11 @@ void SystemManager::begin() {
 
 void SystemManager::update(uint32_t nowMs) {
   ButtonInterrupts::update(nowMs);
+  // While driving, every button is an emergency stop (both need the 0.5 s hold).
+  if (latestStatus.state == SystemState::Running &&
+      ButtonInterrupts::startHeldMs(nowMs) >= config::switches::HOLD_MS) {
+    ButtonInterrupts::triggerEmergencyStop();
+  }
   if (ButtonInterrupts::emergencyLatched()) {
     latestStatus.state = SystemState::EmergencyStop;
     latestStatus.motorAllowed = false;

@@ -272,13 +272,13 @@ int extraLine(char* line, size_t size, uint32_t now, Extra kind) {
 }
 
 // While calibrating: one short machine-readable line every 250 ms for the GUI.
-// CAL,ms,state,step(0-based),sensor(0-based),color,pose,samples,stored
+// CAL,ms,state,step(0-based),sensorMask(bit n = sensor n+1),color,pose,samples,stored
 void calibrationLine(uint32_t now) {
   if (!ColorCalibration::active() || now - lastCalLineMs < 250) return;
   const auto cal = ColorCalibration::status();
   char line[96];
   const int length = snprintf(line, sizeof(line), "CAL,%lu,%u,%u,%u,%s,%s,%u,%u\r\n",
-      static_cast<unsigned long>(now), static_cast<unsigned>(cal.state), cal.step, cal.sensorIndex,
+      static_cast<unsigned long>(now), static_cast<unsigned>(cal.state), cal.step, cal.sensorMask,
       floorColorName(cal.color), calibrationPoseName(cal.pose), cal.sampleCount, cal.storedDataValid ? 1 : 0);
   if (length > 0 && static_cast<size_t>(length) < sizeof(line) && Serial.availableForWrite() >= length) {
     Serial.write(reinterpret_cast<const uint8_t*>(line), length);
@@ -300,12 +300,15 @@ void telemetry(uint32_t now) {
   if (logRow == 0) {
     const auto vision = RaspberryLink::latest();
     const auto motor = MotorController::status();
-    length = snprintf(line, sizeof(line), "D,%lu,%s,%u,%d,%d,%u,%u,%u,%u,%u,%u\r\n",
+    // D,ms,mode,allowed,left,right,link,fresh,target,x,height,hazard,y,width,flags,seq
+    // (y..seq appended 11/04 for the GUI camera box; old readers ignore them)
+    length = snprintf(line, sizeof(line), "D,%lu,%s,%u,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\r\n",
         static_cast<unsigned long>(now), BenchController::modeName(BenchController::mode()),
         SystemManager::motorAllowed() ? 1 : 0, motor.appliedLeftPermille,
         motor.appliedRightPermille, vision.linkValid ? 1 : 0, vision.frameFresh ? 1 : 0,
         vision.targetValid ? 1 : 0, vision.targetX, vision.targetHeight,
-        BenchController::hazardMask(sensors));
+        BenchController::hazardMask(sensors), vision.targetY, vision.targetWidth,
+        vision.statusBits, vision.sequence);
   } else if (logRow == ROWS - 1) {
     length = extraLine(line, sizeof(line), now, EXTRA_ORDER[extraIndex]);
   } else {

@@ -50,11 +50,10 @@ constexpr uint8_t colorBit(FloorColor color) {
   return 1U << static_cast<uint8_t>(color);
 }
 
-// Black is the normal floor. Colored grooves are treated as hazards until the
-// final scoring strategy defines a different meaning for each color.
+// Black is the normal floor. Red and blue grooves are hazards.
+// Yellow is not a hazard (11/04 decision).
 constexpr uint8_t HAZARD_COLOR_MASK =
-    colorBit(FloorColor::Red) | colorBit(FloorColor::Yellow) |
-    colorBit(FloorColor::Blue);
+    colorBit(FloorColor::Red) | colorBit(FloorColor::Blue);
 
 }  // namespace control
 }  // namespace config

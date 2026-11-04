@@ -25,7 +25,7 @@ void setup();
 void loop();
 namespace {
 unsigned checks = 0;
-#define CHECK(expression) do { ++checks; if (!(expression)) throw std::runtime_error(#expression); } while (0)
+#define CHECK(expression) do { ++checks; if (!(expression)) throw std::runtime_error(std::to_string(__LINE__)+" "+#expression); } while (0)
 bool stopped(const MotorCommand& command) { return !command.leftPermille && !command.rightPermille; }
 VisionSnapshot target(uint32_t now = 0) {
   VisionSnapshot v;
@@ -83,7 +83,8 @@ void logicTests() {
   s=floor(1500); CHECK(!stopped(BenchController::update(1500,true,s,v)));
   BenchController::select(BenchMode::Avoid); s=floor(0); s.floorColor[2].color=FloorColor::Blue;
   c=BenchController::update(0,true,s,v); CHECK(c.leftPermille>0 && c.rightPermille>0);
-  s.floorColor[0].color=FloorColor::Yellow; CHECK(stopped(BenchController::update(1,true,s,v)));
+  s.floorColor[0].color=FloorColor::Yellow; CHECK(!stopped(BenchController::update(1,true,s,v)));  // yellow is not a hazard
+  s.floorColor[0].color=FloorColor::Red; CHECK(stopped(BenchController::update(1,true,s,v)));
   CHECK(stopped(BenchController::update(2,false,s,v)));
 }
 void ticks(uint32_t duration) {
@@ -92,7 +93,7 @@ void ticks(uint32_t duration) {
 }
 void send(const std::string& line) { Serial.inject(line+"\n"); ticks(5); }
 void startButton() {
-  fake::level(pins::START_SWITCH,LOW); ticks(50);
+  fake::level(pins::START_SWITCH,LOW); ticks(config::switches::HOLD_MS+60);
   fake::level(pins::START_SWITCH,HIGH); ticks(50);
 }
 void camera(uint16_t x, uint16_t height, uint8_t sequence = 1) {
@@ -122,6 +123,8 @@ void i2cScanTests() {
   CHECK(Serial.tx.find("I2C DONE")!=std::string::npos);
   fake::tcaConnected=true;
 }
+// Software SW2 holds past the 0.5 s button hold, then releases and debounces.
+constexpr uint32_t SW2_MS = config::switches::DEBOUNCE_MS*2 + config::switches::HOLD_MS + 60;
 void softwareSwitchTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
@@ -135,7 +138,7 @@ void softwareSwitchTests() {
   CHECK(!SystemManager::motorAllowed());  // old command was discarded
   send("SW2"); ticks(25); CHECK(!SystemManager::motorAllowed());
   fake::advance(80); loop();  // a delayed loop must still qualify the press before release
-  ticks(100); CHECK(SystemManager::motorAllowed());
+  ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
   CHECK(SystemManager::status().startEventCount==1);
   send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
   send("STOP"); CHECK(!SystemManager::motorAllowed());
@@ -145,29 +148,29 @@ void softwareSwitchTests() {
   send("SW2"); ticks(20); send("MODE FOLLOW"); ticks(150);
   CHECK(!SystemManager::motorAllowed());  // mode changes cancel the old gesture
   send("MODE MANUAL");
-  fake::level(pins::START_SWITCH,LOW); ticks(50);
+  fake::level(pins::START_SWITCH,LOW); ticks(config::switches::HOLD_MS+60);
   send("SW2"); CHECK(Serial.tx.find("ERR SW2 blocked")!=std::string::npos);
   send("STOP"); fake::level(pins::START_SWITCH,HIGH); ticks(60);
   CHECK(!SystemManager::motorAllowed());
-  send("SW2"); send("SW2"); ticks(150);
+  send("SW2"); send("SW2"); ticks(SW2_MS);
   CHECK(SystemManager::motorAllowed());
   CHECK(SystemManager::status().startEventCount==2);  // repeat does not queue another start
   send("STOP");
   send("CAL START"); CHECK(ColorCalibration::active());
   send("SW2"); ticks(150); CHECK(!SystemManager::motorAllowed());
   send("ABORT"); ticks(100); CHECK(!SystemManager::motorAllowed());
-  send("MODE MOTOR"); send("SW2"); ticks(130);
+  send("MODE MOTOR"); send("SW2"); ticks(SW2_MS);
   CHECK(SystemManager::motorAllowed() && MotorController::status().outputsActive);
   send("STOP");
   send("MODE MANUAL"); send("SW2");
-  fake::advance(300); loop(); ticks(130);
+  fake::advance(SW2_MS+300); loop(); ticks(130);
   CHECK(!SystemManager::motorAllowed());  // a stale virtual press must not start later
   SystemManager::setApplicationHealthy(false);
   send("MODE MANUAL"); send("SW2"); ticks(130);
   CHECK(!SystemManager::motorAllowed());
   SystemManager::setApplicationHealthy(true); ticks(100);
   CHECK(!SystemManager::motorAllowed());
-  send("SW2"); ticks(130); CHECK(SystemManager::motorAllowed());
+  send("SW2"); ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
   send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
   // SW1 command enters the same permanent loop as the physical switch.
   fake::stopOnDelay=true;
@@ -322,6 +325,9 @@ void integrationTests() {
   send("0 200"); CHECK(!MotorController::status().outputsActive);  // Discard remainder.
   send("MODE DATA"); ticks(150); CHECK(Serial.tx.find("D,")!=std::string::npos);
   CHECK(Serial.tx.find("S,")!=std::string::npos);
+  // The D row carries the whole Pi target for the GUI camera box: ...,x,height,hazard,y,width,flags,seq
+  camera(700,300,9); ticks(150);
+  CHECK(Serial.tx.find(",1,1,1,700,300,0,540,100,49,9\r\n")!=std::string::npos);
 #if BENCH_V2_MANUAL
   ticks(900);  // extra rows take turns over 8 frames
   CHECK(Serial.baud == 57600);
@@ -351,9 +357,12 @@ void integrationTests() {
 #endif
   Serial.capacity=4096;
   send("MODE MANUAL"); startButton(); send("DRIVE 100 100");
-  fake::level(pins::SAFETY_SWITCH,LOW); CHECK(fake::pins[pins::MOTOR1_LEN]==LOW);
+  // SW1 acts only after the 0.5 s hold (impacts pressed it on the robot).
+  fake::level(pins::SAFETY_SWITCH,LOW); loop(); CHECK(!ButtonInterrupts::emergencyLatched());
+  fake::advance(config::switches::HOLD_MS);
   fake::stopOnDelay=true;
   try { loop(); CHECK(false); } catch (const fake::StopLoop&) {}
+  CHECK(ButtonInterrupts::emergencyLatched());
   CHECK(MotorController::status().emergencyStopLatched);
 }
 }

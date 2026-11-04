@@ -11,6 +11,12 @@ assert state.feed("BAT battery_ok 15200mV 4S") == "bat"
 assert state.bat == {"result": "battery_ok", "mv": 15200, "cells": 4}
 assert state.feed("D,1234,MANUAL,1,100,-100,0,0,0,0,0,0") == "d"
 assert state.d["mode"] == "MANUAL" and state.d["allowed"] and state.d["right"] == -100
+assert state.d["y"] is None  # older bench firmware: no camera box fields
+assert state.feed("D,1300,DATA,0,0,0,1,1,1,700,300,0,540,100,49,9") == "d"
+assert (state.d["x"], state.d["y"], state.d["width"], state.d["height"]) == (700, 540, 100, 300)
+assert state.d["flags"] == 0x31 and state.d["seq"] == 9 and state.d["link"] and state.d["target"]
+assert state.feed("LINK,1400,9,1390,1390,120,2,1") == "link"
+assert state.link == {"ms": 1400, "valid": 120, "invalid": 2, "duplicate": 1}
 assert state.feed("S,1240,3,77,1,RED,1,812,10,20,30,40,50,0") == "s"
 assert state.sensors[3]["color"] == "RED" and state.sensors[3]["error"] == 0
 assert state.feed("S,1240,9,77,1,RED,1,812,10,20,30,40,50,0") == "s" and 9 not in state.sensors
@@ -85,30 +91,37 @@ finally:
 
 # Calibration lines (formats from color_calibration.cpp and bench_v2_app.cpp).
 cal = BenchState()
-assert cal.feed("[CAL][STATUS] active=0 stored=1 state=0 step=1/48 sensor=1 FRONT_LEFT color=RED pose=LEVEL samples=0 margin=15/20%") == "cal_status"
+assert cal.feed("[CAL][STATUS] active=0 stored=1 state=0 step=1/12 sensors=0xF color=BLACK pose=LEVEL samples=0 margin=15/20%") == "cal_status"
 assert cal.cal_stored is True
 assert cal.feed("[CAL] Calibration started. Motors are braked until it ends.") == "cal_started"
-assert cal.cal["state"] == "WaitingForReady" and cal.cal["step"] == 0
-assert cal.feed("CAL,1234,1,6,0,BLUE,LEVEL,0,1") == "cal"
-assert cal.cal == {"ms": 1234, "state": "WaitingForReady", "step": 6, "sensor": 1, "color": "BLUE",
-                   "pose": "LEVEL", "samples": 0, "stored": True}
-assert cal.feed("[CAL][PREVIEW] S1 F2=1 F3=2 F5=3 F6=4 F7=5 C=512") == "cal_preview" and cal.cal_preview["clear"] == 512
-assert cal.feed("[CAL][PREVIEW] S1 NOT_READY") == "cal_preview" and not cal.cal_preview["ready"]
-assert cal.feed("[CAL] Starting in 2...") == "cal_count" and cal.cal_count == 2
-assert cal.feed("[CAL] Measuring for 3 seconds. Do not move.") == "cal_measuring" and cal.cal_measuring
-assert cal.feed("[CAL][RESULT] samples=28 brightness=612.3 min=600 max=625 noise=2.10") == "cal_result"
-assert cal.cal_result == {"samples": 28, "brightness": 612.3, "min": 600, "max": 625, "noise": 2.1}
-assert cal_quality(cal.cal_result) == [("ok", "좋아 보입니다")]
-assert cal.feed("CAL,1500,1,7,0,BLUE,LIFTED,0,1") == "cal" and cal.cal_result is None  # next step clears it
+assert cal.cal["state"] == "WaitingForReady" and cal.cal["step"] == 0 and cal.cal["sensors"] == [1, 2, 3, 4]
+assert cal.feed("CAL,1234,1,6,3,RED,PRESSED,0,1") == "cal"
+assert cal.cal == {"ms": 1234, "state": "WaitingForReady", "step": 6, "sensors": [1, 2], "color": "RED",
+                   "pose": "PRESSED", "samples": 0, "stored": True}
+assert cal.feed("[CAL][PREVIEW] S1 F2=1 F3=2 F5=3 F6=4 F7=5 C=512") == "cal_preview" and cal.cal_previews[1]["clear"] == 512
+assert cal.feed("[CAL][PREVIEW] S2 NOT_READY") == "cal_preview" and not cal.cal_previews[2]["ready"]
+assert cal.feed("[CAL] Starting in 1...") == "cal_count" and cal.cal_count == 1
+assert cal.feed("[CAL] Measuring for 1000 ms. Do not move.") == "cal_measuring" and cal.cal_measuring
+assert cal.feed("[CAL][RESULT] S1 samples=28 brightness=612.3 min=600 max=625 noise=2.10") == "cal_result"
+assert cal.feed("[CAL][RESULT] S2 samples=30 brightness=500.0 min=490 max=510 noise=1.00") == "cal_result"
+assert cal.cal_results[1] == {"sensor": 1, "samples": 28, "brightness": 612.3, "min": 600, "max": 625, "noise": 2.1}
+assert sorted(cal.cal_results) == [1, 2]
+assert cal_quality(cal.cal_results[1]) == [("ok", "좋아 보입니다")]
+assert cal.feed("CAL,1500,1,7,12,RED,PRESSED,0,1") == "cal" and cal.cal_results == {}  # next step clears it
+assert cal.cal["sensors"] == [3, 4]
 assert cal.feed("[CAL] Calibration saved to NVS.") == "cal_saved" and cal.cal_finished == "saved"
 assert cal.feed("[CAL] Stored calibration erased.") == "cal_erased" and cal.cal_stored is False
 assert cal.feed("[CAL] Rejected: sensor ready mask is 0x07.") == "cal_rejected"
 levels = [lvl for lvl, _ in cal_quality({"samples": 4, "brightness": 20.0, "min": 1, "max": 1700, "noise": 9.0})]
 assert levels == ["bad", "warn", "warn", "warn"]
 assert cal_quality({"samples": 28, "brightness": 1500.0, "min": 1490, "max": 1610, "noise": 2.0})[0][0] == "ok"
-assert cal_step_info(0) == {"sensor": 1, "color": "RED", "pose": "LEVEL"}
-assert cal_step_info(4) == {"sensor": 1, "color": "YELLOW", "pose": "LIFTED"}
-assert cal_step_info(47) == {"sensor": 4, "color": "BLACK", "pose": "PRESSED"}
+# Same order as color_calibration.cpp STEPS: no yellow, 12 steps.
+assert cal_step_info(0) == {"sensors": [1, 2, 3, 4], "color": "BLACK", "pose": "LEVEL"}
+assert cal_step_info(1) == {"sensors": [1, 2, 3, 4], "color": "BLACK", "pose": "LIFTED"}
+assert cal_step_info(2) == {"sensors": [1, 2], "color": "BLACK", "pose": "PRESSED"}
+assert cal_step_info(3) == {"sensors": [3, 4], "color": "BLACK", "pose": "PRESSED"}
+assert cal_step_info(4)["color"] == "RED" and cal_step_info(11) == {"sensors": [3, 4], "color": "BLUE", "pose": "PRESSED"}
+assert all(cal_step_info(i)["color"] != "YELLOW" for i in range(12))
 print("bench_gui parse checks passed")
 
 # I2C SCAN result, fed line by line as the firmware prints it

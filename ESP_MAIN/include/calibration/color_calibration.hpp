@@ -15,7 +15,7 @@ enum class CalibrationState : uint8_t {
 struct ColorCalibrationStatus {
   CalibrationState state = CalibrationState::Idle;
   uint8_t step = 0;
-  uint8_t sensorIndex = 0;
+  uint8_t sensorMask = 0;  // bit n = sensor n+1 is measured in this step
   FloorColor color = FloorColor::Red;
   CalibrationPose pose = CalibrationPose::Level;
   uint16_t sampleCount = 0;
@@ -24,8 +24,9 @@ struct ColorCalibrationStatus {
 };
 
 // Contract
-// Role: UART0 guided calibration (4 sensors x 4 colors x 3 poses). Saves
-//   through CalibrationStore. Not linked into the match firmware.
+// Role: UART0 guided calibration, 12 steps: black/red/blue x (level all 4,
+//   lifted all 4, pressed front pair, pressed rear pair). Yellow is not
+//   calibrated. Saves through CalibrationStore. Not linked into the match firmware.
 // Called from: the bench firmware (bench_v2_app.cpp), which owns the UART0
 //   console, passes calibration lines to command() and calls tick() every
 //   loop; it brakes the motors for as long as active() is true.
@@ -35,6 +36,7 @@ struct ColorCalibrationStatus {
 //   acceptable only because the motors are braked while calibrating.
 class ColorCalibration {
  public:
+  static constexpr uint8_t STEP_COUNT = 12;
   static void begin();
   static void update(uint32_t nowMs);  // pollSerial + tick
   static void command(const char* line, uint32_t nowMs);  // one console line

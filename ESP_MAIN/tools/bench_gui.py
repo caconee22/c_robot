@@ -23,6 +23,7 @@ Claude) can replay what happened:
 """
 import argparse
 import datetime
+import math
 import os
 import queue
 import sys
@@ -34,7 +35,12 @@ REPEAT_S = 0.1          # well under the firmware's 250 ms manual hold
 DRIVE_LIMIT = 400       # firmware bench output limit (permille)
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 CORNERS = {1: "앞 왼쪽", 2: "앞 오른쪽", 3: "뒤 왼쪽", 4: "뒤 오른쪽"}
-CAL_STEPS = 48          # 4 sensors x 4 colors x 3 poses (firmware order)
+# Firmware order (color_calibration.cpp STEPS): per color level all 4, lifted all 4,
+# pressed front pair, pressed rear pair. Yellow is not calibrated (11/04).
+CAL_ORDER = [(color, pose, sensors) for color in ("BLACK", "RED", "BLUE")
+             for pose, sensors in (("LEVEL", (1, 2, 3, 4)), ("LIFTED", (1, 2, 3, 4)),
+                                   ("PRESSED", (1, 2)), ("PRESSED", (3, 4)))]
+CAL_STEPS = len(CAL_ORDER)
 # AS7341 ADC full scale = (ATIME+1)*(ASTEP+1) from sensor_config.hpp; 5 ms gives 1798.
 # shortcut: fixed to the 5 ms setting, update it if AS7341_EXPOSURE_US changes.
 AS7341_FULL_SCALE = 1798
@@ -45,8 +51,8 @@ COLOR_KO = {"RED": ("빨강", "가운데 빨간 홈"), "YELLOW": ("노랑", "노
             "BLUE": ("파랑", "모서리 파란 홈"), "BLACK": ("검정", "검은 바닥")}
 # pose: (short name, gap mm, what it stands for) - gaps from sensor_config.hpp
 POSE_KO = {"LEVEL": ("평평", 10, "로봇을 평평하게 두고 센서-바닥 간격 10mm"),
-           "LIFTED": ("들림", 20, "이 모서리만 들어서 간격 20mm (단차에 걸쳐 센서가 뜬 상태)"),
-           "PRESSED": ("눌림", 3, "이 모서리를 눌러 간격 3mm (바닥에 거의 붙은 상태)")}
+           "LIFTED": ("들림", 20, "로봇 전체를 10mm 받침에 수평으로 올려 간격 20mm (단차에 걸친 상태)"),
+           "PRESSED": ("눌림", 3, "로봇을 기울여 이쪽 센서를 바닥에 붙여 간격 3mm")}
 
 
 # Pin panel rows: (key, label, GPIO). GPIO numbers copied from include/pins_v2.hpp.
@@ -155,10 +161,17 @@ def parse_line(line):
     f = line.split(",")
     tag = f[0]
     if tag == "D" and len(f) >= 12:
+        extra = len(f) >= 16  # y, width, flags, seq (bench firmware from 11/04)
         return "d", {"ms": _int(f[1]), "mode": f[2], "allowed": f[3] == "1",
                      "left": _int(f[4]), "right": _int(f[5]), "link": f[6] == "1",
                      "fresh": f[7] == "1", "target": f[8] == "1", "x": _int(f[9]),
-                     "height": _int(f[10]), "hazard": _int(f[11])}
+                     "height": _int(f[10]), "hazard": _int(f[11]),
+                     "y": _int(f[12]) if extra else None, "width": _int(f[13]) if extra else None,
+                     "flags": _int(f[14]) if extra else None, "seq": _int(f[15]) if extra else None}
+    if tag == "LINK" and len(f) >= 8:
+        # LINK,ms,lastSeq,lastPacketMs,lastFrameMs,valid,invalid,duplicate
+        return "link", {"ms": _int(f[1]), "valid": _int(f[5]), "invalid": _int(f[6]),
+                        "duplicate": _int(f[7])}
     if tag == "S" and len(f) >= 14:
         return "s", {"ms": _int(f[1]), "index": _int(f[2]), "valid": f[4] == "1",
                      "color": f[5], "reliable": f[6] == "1", "brightness": _int(f[7]),
@@ -189,16 +202,19 @@ def parse_line(line):
         # ADC,ms,IS_L1,IS_R1,IS_L2,IS_R2,IR1..IR6,BAT pin (mV at the GPIO)
         return "adc", {"ms": _int(f[1]), **{k: _int(v) for k, v in zip(ADC_KEYS, f[2:])}}
     if tag == "CAL" and len(f) >= 9:
+        mask = _int(f[4])
         return "cal", {"ms": _int(f[1]), "state": CAL_STATES.get(_int(f[2]), "Idle"),
-                       "step": _int(f[3]), "sensor": _int(f[4]) + 1, "color": f[5],
+                       "step": _int(f[3]), "sensors": [n + 1 for n in range(4) if mask >> n & 1], "color": f[5],
                        "pose": f[6], "samples": _int(f[7]), "stored": f[8].strip() == "1"}
     return None, None
 
 
 def _parse_cal_text(line):
     if line.startswith("[CAL][RESULT]"):
+        rest = line[13:].split()
         kv = _keyvals(line[13:])
-        return "cal_result", {"samples": _int(kv.get("samples", "0")),
+        sensor = _int(rest[0][1:]) if rest and rest[0].startswith("S") else 0
+        return "cal_result", {"sensor": sensor, "samples": _int(kv.get("samples", "0")),
                               "brightness": _float(kv.get("brightness", "0")),
                               "min": _int(kv.get("min", "0")), "max": _int(kv.get("max", "0")),
                               "noise": _float(kv.get("noise", "0"))}
@@ -207,10 +223,11 @@ def _parse_cal_text(line):
         return "cal_status", {"active": kv.get("active") == "1", "stored": kv.get("stored") == "1"}
     if line.startswith("[CAL][PREVIEW]"):
         rest = line[14:].split()
+        sensor = _int(rest[0][1:]) if rest and rest[0].startswith("S") else 0
         if len(rest) >= 2 and rest[1] == "NOT_READY":
-            return "cal_preview", {"ready": False, "clear": 0}
+            return "cal_preview", {"sensor": sensor, "ready": False, "clear": 0}
         kv = _keyvals(" ".join(rest[1:]))
-        return "cal_preview", {"ready": True, "clear": _int(kv.get("C", "0"))}
+        return "cal_preview", {"sensor": sensor, "ready": True, "clear": _int(kv.get("C", "0"))}
     if "Starting in" in line:
         return "cal_count", {"n": _int(line.rsplit(" ", 1)[-1].rstrip("."))}
     for key, kind in (("Measuring for", "cal_measuring"), ("saved to NVS", "cal_saved"),
@@ -238,10 +255,8 @@ def cal_quality(result):
 
 
 def cal_step_info(step):
-    """Firmware step order: sensor-major, then color, then pose."""
-    colors = ["RED", "YELLOW", "BLUE", "BLACK"]
-    poses = ["LEVEL", "LIFTED", "PRESSED"]
-    return {"sensor": step // 12 + 1, "color": colors[(step // 3) % 4], "pose": poses[step % 3]}
+    color, pose, sensors = CAL_ORDER[step]
+    return {"sensors": list(sensors), "color": color, "pose": pose}
 
 
 class BenchState:
@@ -259,9 +274,10 @@ class BenchState:
         self.i2c = None            # last I2C SCAN result, filled line by line
         self.adc_at = 0.0
         self.estop = False
+        self.link = None           # last LINK row: Pi packet counters
         self.cal = None            # last CAL status line (only while calibrating)
-        self.cal_result = None     # last measurement result, until the next step
-        self.cal_preview = None
+        self.cal_results = {}      # sensor -> last measurement result, until the next step
+        self.cal_previews = {}     # sensor -> live preview
         self.cal_count = None
         self.cal_measuring = False
         self.cal_finished = None   # "saved", "aborted" or None
@@ -276,6 +292,8 @@ class BenchState:
             self.bat = v
         elif kind == "d":
             self.d = v
+        elif kind == "link":
+            self.link = v
         elif kind == "s" and 1 <= v["index"] <= 4:
             self.sensors[v["index"]] = v
         elif kind == "i":
@@ -301,23 +319,24 @@ class BenchState:
             self.estop = self.estop or v["estop"]
         elif kind == "cal":
             if self.cal and v["step"] != self.cal["step"]:
-                self.cal_result = None
+                self.cal_results, self.cal_previews = {}, {}
             if v["state"] not in ("Countdown", "Measuring"):
                 self.cal_count, self.cal_measuring = None, False
             if v["state"] == "WaitingForReady" and self.cal and self.cal["state"] == "WaitingForAccept":
-                self.cal_result = None   # RETRY / BACK
+                self.cal_results = {}   # RETRY / BACK
             self.cal, self.cal_finished, self.cal_stored = v, None, v["stored"]
         elif kind == "cal_started":
-            self.cal_finished, self.cal_result, self.cal_message = None, None, None
+            self.cal_finished, self.cal_results, self.cal_message = None, {}, None
             # Show step 1 at once; the firmware's CAL line follows within 250 ms.
-            self.cal = {"ms": 0, "state": "WaitingForReady", "step": 0, "sensor": 1, "color": "RED",
-                        "pose": "LEVEL", "samples": 0, "stored": self.cal_stored}
+            self.cal = {"ms": 0, "state": "WaitingForReady", "step": 0, **cal_step_info(0),
+                        "samples": 0, "stored": self.cal_stored}
         elif kind == "cal_status":
             self.cal_stored = v["stored"]
         elif kind == "cal_result":
-            self.cal_result, self.cal_measuring, self.cal_count = v, False, None
+            self.cal_results[v["sensor"]] = v
+            self.cal_measuring, self.cal_count = False, None
         elif kind == "cal_preview":
-            self.cal_preview = v
+            self.cal_previews[v["sensor"]] = v
         elif kind == "cal_count":
             self.cal_count = v["n"]
         elif kind == "cal_measuring":
@@ -473,7 +492,7 @@ class DemoLink:
                           "I2C CH 2", "I2C CH 3 39", "I2C CH 4", "I2C CH 5", "I2C CH 6", "I2C CH 7", "I2C DONE 160"):
                 self.lines.put(reply)
         elif line == "CAL STATUS":
-            self.lines.put(f"[CAL][STATUS] active={int(self.cal is not None)} stored=0 state=0 step=1/48")
+            self.lines.put(f"[CAL][STATUS] active={int(self.cal is not None)} stored=0 state=0 step=1/{CAL_STEPS}")
         elif self.cal is not None:
             self._cal_command(line)
         elif line.startswith("CAL START"):
@@ -495,7 +514,7 @@ class DemoLink:
     def _cal_command(self, line):
         state, step = self.cal[0], self.cal[1]
         if line == "READY" and state == 1:
-            self.cal = [2, step, time.time() + 3]
+            self.cal = [2, step, time.time() + 1]
         elif line == "ACCEPT" and state == 4:
             self.cal = [5, step, 0] if step + 1 >= CAL_STEPS else [1, step + 1, 0]
             if step + 1 >= CAL_STEPS:
@@ -526,7 +545,12 @@ class DemoLink:
             elif self.cal is not None:
                 self._cal_tick(t)
             else:
-                self.lines.put(f"D,{t},{self.mode},{int(self.allowed)},{self.out[0]},{self.out[1]},0,0,0,0,0,0")
+                seen = t % 4000 < 3000  # tower visible 3 s, then 1 s without
+                x = 960 + int(500 * math.sin(t / 2000))
+                vis = f"1,{x},330,0,700,280,51" if seen else "0,0,0,0,0,0,48"
+                self.lines.put(f"D,{t},{self.mode},{int(self.allowed)},{self.out[0]},{self.out[1]},1,1,{vis},{t // 20 % 256}")
+                if t % 1600 == 0:
+                    self.lines.put(f"LINK,{t},{t // 20 % 256},{t},{t},{t // 20},0,0")
                 for i, color in enumerate(colors, 1):
                     self.lines.put(f"S,{t},{i},{t // 10},1,{color},1,{r.randint(300, 900)},1,2,3,4,5,0")
                 if t % 300 == 0:
@@ -547,19 +571,22 @@ class DemoLink:
         state, step, until = self.cal
         info = cal_step_info(step)
         if state == 2 and time.time() >= until:
-            self.cal = [3, step, time.time() + 3]
-            self.lines.put("[CAL] Measuring for 3 seconds. Do not move.")
+            self.cal = [3, step, time.time() + 1]
+            self.lines.put("[CAL] Measuring for 1000 ms. Do not move.")
         elif state == 2:
             self.lines.put(f"[CAL] Starting in {max(1, int(until - time.time()) + 1)}...")
         elif state == 3 and time.time() >= until:
             self.cal = [4, step, 0]
-            b = {"BLACK": 120, "RED": 600, "YELLOW": 900, "BLUE": 450}[info["color"]]
-            self.lines.put(f"[CAL][RESULT] samples=28 brightness={b + self.random.random() * 20:.1f} "
-                           f"min={b - 9} max={b + 11} noise={self.random.random() * 4:.2f}")
+            b = {"BLACK": 120, "RED": 600, "BLUE": 450}[info["color"]]
+            for n in info["sensors"]:
+                self.lines.put(f"[CAL][RESULT] S{n} samples=28 brightness={b + self.random.random() * 20:.1f} "
+                               f"min={b - 9} max={b + 11} noise={self.random.random() * 4:.2f}")
         elif state == 1 and t % 200 == 0:
-            self.lines.put(f"[CAL][PREVIEW] S{info['sensor']} F2=1 F3=2 F5=3 F6=4 F7=5 C={self.random.randint(400, 700)}")
+            for n in info["sensors"]:
+                self.lines.put(f"[CAL][PREVIEW] S{n} F2=1 F3=2 F5=3 F6=4 F7=5 C={self.random.randint(400, 700)}")
         if t % 300 == 0 and self.cal is not None:
-            self.lines.put(f"CAL,{t},{self.cal[0]},{step},{info['sensor'] - 1},{info['color']},{info['pose']},"
+            mask = sum(1 << (n - 1) for n in info["sensors"])
+            self.lines.put(f"CAL,{t},{self.cal[0]},{step},{mask},{info['color']},{info['pose']},"
                            f"{28 if self.cal[0] >= 3 else 0},0")
 
     def close(self):
@@ -623,6 +650,7 @@ THEME = {
     "log_bg": "#1E1D1B", "log_ink": "#D9D5CB", "log_dim": "#8C877C",
 }
 FLOOR = {"BLACK": "#232220", "RED": "#D0402F", "YELLOW": "#E5B52B", "BLUE": "#2F67C9"}
+FLOOR_TOWER = "#2FA84F"  # green color tower in the camera box
 UI_FONT = "Malgun Gothic"
 MONO_FONT = "Consolas"
 
@@ -641,7 +669,8 @@ CAL_PREP = [
     "모터 전원은 빼 두는 것을 권합니다. 교정 중에는 펌웨어가 모터를 브레이크로 묶어 둡니다.",
     "경기장 실사 현수막 위에서, 대회장과 비슷한 조명으로 합니다.",
     "센서-바닥 간격을 맞출 자(또는 3·10·20mm 블록)를 준비합니다.",
-    "48단계 × 약 10초 ≈ 15–20분. 중간에 멈추면 처음부터 다시 해야 합니다.",
+    "로봇 전체를 수평으로 10mm 올릴 받침과 로봇보다 큰 검정·빨강·파랑 면을 준비합니다.",
+    f"{CAL_STEPS}단계 (색마다 평평 → 들림 → 앞 눌림 → 뒤 눌림) ≈ 5–10분. 중간에 멈추면 처음부터 다시 해야 합니다.",
 ]
 
 
@@ -791,8 +820,10 @@ def run_gui():
     tabs.pack(fill="both", expand=True, padx=16)
     test_tab = tk.Frame(tabs, bg=T["bg"])
     cal_tab = tk.Frame(tabs, bg=T["bg"])
+    cam_tab = tk.Frame(tabs, bg=T["bg"])
     tabs.add(test_tab, text="  시험  ")
     tabs.add(cal_tab, text="  색 교정  ")
+    tabs.add(cam_tab, text="  라즈 카메라  ")
 
     # =================== 시험 tab ===================
     cols = tk.Frame(test_tab, bg=T["bg"])
@@ -899,6 +930,68 @@ def run_gui():
     pin_note = tk.Label(pin_box, text="", bg=T["surface"], fg=T["faint"], font=font(9), anchor="w",
                         justify="left", wraplength=520)
     pin_note.pack(fill="x", pady=(4, 0))
+
+    # camera box: where the Pi says the tower is (1920x1080 frame, from the D row)
+    cam_box = card(cam_tab, "타워 위치 · ESP32가 라즈에게 받은 좌표 (1920×1080 화면) · 로그가 켜져 있어야 함 (MODE DATA 등)")
+    cam_box.master.pack_configure(pady=(10, 0))
+    cam_row = tk.Frame(cam_box, bg=T["surface"])
+    cam_row.pack(fill="x")
+    CAM_W, CAM_H = 640, 360
+    cam = tk.Canvas(cam_row, width=CAM_W, height=CAM_H, bg=T["sunk"], highlightthickness=1,
+                    highlightbackground=T["line"])
+    cam.pack(side="left")
+    cam.create_line(CAM_W // 2, 0, CAM_W // 2, CAM_H, fill=T["line"], dash=(3, 3))
+    cam_target = cam.create_rectangle(0, 0, 0, 0, outline=FLOOR_TOWER, width=3, state="hidden")
+    cam_dot = cam.create_oval(0, 0, 0, 0, fill=FLOOR_TOWER, outline="", state="hidden")
+    cam_text = cam.create_text(CAM_W // 2, CAM_H // 2, text="연결 안 됨", fill=T["faint"], font=font(16, "bold"))
+    cam_info = tk.Label(cam_row, text="", bg=T["surface"], fg=T["ink"], font=font(12), anchor="nw",
+                        justify="left")
+    cam_info.pack(side="left", fill="both", expand=True, padx=(16, 0))
+    cam_btns = tk.Frame(cam_box, bg=T["surface"])
+    cam_btns.pack(fill="x", pady=(10, 0))
+    button(cam_btns, "로그 켜기 (MODE DATA)", lambda: (send("LOG ON"), send("MODE DATA"))).pack(side="left")
+    tk.Label(cam_btns, text="라즈에서: cd ~/c_robot && python3 scripts/pi_vision_sender.py   ·   "
+             "배선: 라즈 8번(TX)→ESP32 RX, 10번(RX)←TX, GND 공통",
+             bg=T["surface"], fg=T["muted"], font=font(9), wraplength=900, justify="left").pack(side="left", padx=10)
+
+    def paint_camera():
+        d = state.d
+        has_box = bool(d and d["link"] and d["target"] and d.get("y") is not None)
+        if has_box:
+            sx, sy = CAM_W / 1920, CAM_H / 1080
+            cx, cy, w, h = d["x"] * sx, d["y"] * sy, d["width"] * sx, d["height"] * sy
+            cam.coords(cam_target, cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+            cam.coords(cam_dot, cx - 6, cy - 6, cx + 6, cy + 6)
+        state_flag = "normal" if has_box else "hidden"
+        cam.itemconfig(cam_target, state=state_flag, outline=FLOOR_TOWER if d and d["fresh"] else T["faint"])
+        cam.itemconfig(cam_dot, state=state_flag)
+        if not d:
+            cam.itemconfig(cam_text, text="보드 로그 없음", state="normal")
+            cam_info.config(text="")
+            return
+        if not d["link"]:
+            cam.itemconfig(cam_text, text="라즈 연결 안 됨", state="normal")
+        elif not d["target"]:
+            cam.itemconfig(cam_text, text="타워 없음", state="normal")
+        else:
+            cam.itemconfig(cam_text, state="hidden")
+        lines = [("라즈 링크  " + ("연결" if d["link"] else "끊김 (120ms 넘게 정상 패킷 없음)")),
+                 ("영상  " + ("새 프레임" if d["fresh"] else "멈춤 (sequence가 안 바뀜)") if d["link"] else "영상  —")]
+        if d["link"] and d["target"]:
+            side = "가운데" if abs(d["x"] - 960) < 120 else ("왼쪽" if d["x"] < 960 else "오른쪽")
+            lines.append(f"타워  x {d['x']}  y {d.get('y', '—')}  ({side})")
+            lines.append(f"박스  {d.get('width', '—')} × {d['height']}")
+        flags = d.get("flags")
+        if d["link"] and flags is not None:
+            names = [n for bit, n in ((2, "안정"), (4, "여러 개"), (8, "가장자리"))
+                     if flags & bit]
+            lines.append(f"seq {d['seq']}  flags 0x{flags:02X} " + " ".join(names))
+            if not (flags & 0x10 and flags & 0x20):
+                lines.append("⚠ 라즈 카메라/처리 이상 보고")
+        lk = state.link
+        if lk:
+            lines.append(f"패킷 정상 {lk['valid']}  오류 {lk['invalid']}  중복 {lk['duplicate']}")
+        cam_info.config(text="\n".join(lines), fg=T["ink"] if d["link"] else T["muted"])
 
     log_card = card(mid, None, fill="both", expand=True)
     head = tk.Frame(log_card, bg=T["surface"])
@@ -1087,20 +1180,18 @@ def run_gui():
     abort_btn = button(action_row, "중단", kind="stop")
     abort_btn.pack(side="right")
 
-    overview = card(cal_right, "전체 순서 (센서 × 색, 칸마다 평평·들림·눌림)")
-    ov = tk.Canvas(overview, height=150, bg=T["surface"], highlightthickness=0)
+    overview = card(cal_right, "전체 순서 (색마다 평평 · 들림 · 앞 눌림 · 뒤 눌림)")
+    ov = tk.Canvas(overview, height=110, bg=T["surface"], highlightthickness=0)
     ov.pack(fill="x")
     ov_cells = {}
-    colors_order = ["RED", "YELLOW", "BLUE", "BLACK"]
-    for ci, color in enumerate(colors_order):
-        ov.create_text(110 + ci * 130, 10, text=COLOR_KO[color][0], fill=T["muted"], font=font(9, "bold"))
-    for s in range(4):
-        ov.create_text(40, 36 + s * 30, text=f"센서 {s + 1}", fill=T["muted"], font=font(9, "bold"))
-        for ci, color in enumerate(colors_order):
-            for p in range(3):
-                x = 70 + ci * 130 + p * 28
-                ov_cells[s * 12 + ci * 3 + p] = ov.create_rectangle(x, 26 + s * 30, x + 24, 46 + s * 30,
-                                                                    fill=T["sunk"], outline="")
+    for p, label in enumerate(("평평 4개", "들림 4개", "눌림 앞 1·2", "눌림 뒤 3·4")):
+        ov.create_text(130 + p * 90, 10, text=label, fill=T["muted"], font=font(9, "bold"))
+    for ci, color in enumerate(("BLACK", "RED", "BLUE")):
+        ov.create_text(40, 36 + ci * 30, text=COLOR_KO[color][0], fill=T["muted"], font=font(9, "bold"))
+        for p in range(4):
+            x = 90 + p * 90
+            ov_cells[ci * 4 + p] = ov.create_rectangle(x, 26 + ci * 30, x + 80, 46 + ci * 30,
+                                                       fill=T["sunk"], outline="")
 
     def cal_send(line):
         note("#", f"calibration button -> {line}")
@@ -1123,9 +1214,9 @@ def run_gui():
 
     abort_btn.config(command=confirm_abort)
 
-    def paint_cal_robot(sensor, color):
+    def paint_cal_robot(sensors, color):
         for i, (rect, num, name, info) in cal_tiles.items():
-            on = i == sensor
+            on = i in sensors
             fill = FLOOR.get(color, T["sunk"]) if on else T["sunk"]
             ink = ("#FFFFFF" if color != "YELLOW" else T["ink"]) if on else T["faint"]
             cal_canvas.itemconfig(rect, fill=fill, outline=T["accent"] if on else "")
@@ -1156,11 +1247,13 @@ def run_gui():
         stored = state.cal_stored
         cal_stored_label.config(text="저장된 교정: " + ("있음" if stored else "없음" if stored is False else "—"))
 
-        r = state.cal_result
-        if r and active and c["state"] == "WaitingForAccept":
-            result_text.config(text=f"샘플 {r['samples']}개   밝기 평균 {r['brightness']:.1f}\n"
-                                    f"최소 {r['min']}   최대 {r['max']}   흔들림 {r['noise']:.2f}", fg=T["ink"])
-            notes = cal_quality(r)
+        rs = state.cal_results
+        if rs and active and c["state"] == "WaitingForAccept":
+            result_text.config(text="\n".join(
+                f"센서 {n}: 샘플 {r['samples']}  밝기 {r['brightness']:.1f}  최소 {r['min']}  최대 {r['max']}  흔들림 {r['noise']:.2f}"
+                for n, r in sorted(rs.items())), fg=T["ink"])
+            notes = [(level, f"센서 {n}: {msg}") for n, r in sorted(rs.items())
+                     for level, msg in cal_quality(r) if level != "ok"] or [("ok", "좋아 보입니다")]
         else:
             result_text.config(text="아직 없음", fg=T["faint"])
             notes = []
@@ -1171,17 +1264,17 @@ def run_gui():
                      fg={"ok": T["ok"], "warn": T["warn"], "bad": T["bad"]}[level], font=font(10, "bold"),
                      anchor="w").pack(fill="x")
 
-        p = state.cal_preview
-        if active and c["state"] == "WaitingForReady" and p and p["ready"]:
+        ps = {n: p for n, p in state.cal_previews.items() if c and n in c.get("sensors", [])}
+        # Firmware reports NOT_READY for saturated (too close / too bright) samples too.
+        preview_value.config(width=30, text="  ".join(
+            f"{n}:{p['clear'] if p['ready'] else '포화?'}" for n, p in sorted(ps.items())) if active and ps else "—")
+        brightest = max((p["clear"] for p in ps.values() if p["ready"]), default=0)
+        if active and c["state"] == "WaitingForReady" and brightest:
             width = preview_bar.winfo_width()
-            frac = min(1.0, p["clear"] / AS7341_FULL_SCALE)
-            preview_bar.coords(preview_fill, 0, 0, int(width * frac), 14)
-            preview_bar.itemconfig(preview_fill, fill=T["bad"] if p["clear"] >= NEAR_SATURATION else T["accent"])
-            preview_value.config(text=str(p["clear"]))
+            preview_bar.coords(preview_fill, 0, 0, int(width * min(1.0, brightest / AS7341_FULL_SCALE)), 14)
+            preview_bar.itemconfig(preview_fill, fill=T["bad"] if brightest >= NEAR_SATURATION else T["accent"])
         else:
             preview_bar.coords(preview_fill, 0, 0, 0, 14)
-            # Firmware reports NOT_READY for saturated (too close / too bright) samples too.
-            preview_value.config(text="측정 안 됨 (포화?)" if active and p and not p["ready"] else "—")
 
         if not connected:
             cal_step_label.config(text="교정 전")
@@ -1189,7 +1282,7 @@ def run_gui():
             cal_steps_text.config(text="\n".join(f"{n}. {t}" for n, t in enumerate(CAL_PREP, 1)))
             cal_state_label.config(text="연결 안 됨", fg=T["faint"])
             cal_state_sub.config(text="위의 포트를 고르고 연결을 누르세요. 펌웨어는 robot_bench_v2_manual이어야 합니다.")
-            paint_cal_robot(0, "BLACK")
+            paint_cal_robot((), "BLACK")
             set_buttons(abort=False)
             return
         if not active:
@@ -1197,7 +1290,7 @@ def run_gui():
             if state.cal_finished == "saved":
                 cal_title.config(text="저장했습니다. 이제 색이 맞게 나오는지 확인하세요")
                 cal_steps_text.config(text="1. 아래 '색 확인하러 가기'를 누릅니다.\n"
-                                           "2. 각 센서를 빨강·노랑·파랑·검정 위에 올려 봅니다.\n"
+                                           "2. 각 센서를 빨강·파랑·검정 위에 올려 봅니다 (노랑은 교정하지 않음).\n"
                                            "3. 로봇 그림의 칸 색이 바닥과 같으면 끝입니다.\n"
                                            "4. 경기 전에는 yd_esp32_s3_v2를 다시 올리세요 (교정값은 그대로 남습니다).")
                 cal_state_label.config(text="저장 완료", fg=T["ok"])
@@ -1217,19 +1310,23 @@ def run_gui():
                     cal_state_label.config(text="시작 전", fg=T["ink"])
                     cal_state_sub.config(text="교정 중에는 모터가 브레이크로 묶이고 시험 로그가 멈춥니다.")
                 set_buttons(("교정 시작  ▶", lambda: cal_send("CAL START")), ("저장된 교정 지우기", confirm_erase), abort=False)
-            paint_cal_robot(0, "BLACK")
+            paint_cal_robot((), "BLACK")
             return
 
-        info = {"sensor": c["sensor"], "color": c["color"], "pose": c["pose"]}
+        info = {"sensors": c["sensors"], "color": c["color"], "pose": c["pose"]}
         cname, cplace = COLOR_KO.get(info["color"], (info["color"], info["color"]))
         pname, gap, pdesc = POSE_KO.get(info["pose"], (info["pose"], 0, ""))
         cal_step_label.config(text=f"단계 {step + 1} / {CAL_STEPS}")
-        cal_title.config(text=f"센서 {info['sensor']} ({CORNERS[info['sensor']]}) · {cname} · {pname} {gap}mm")
-        paint_cal_robot(info["sensor"], info["color"])
-        cal_steps_text.config(text=f"1. 센서 {info['sensor']}({CORNERS[info['sensor']]})을 {cplace} 위에 둡니다.\n"
+        which = ("센서 4개" if len(info["sensors"]) == 4 else
+                 "앞 센서 1·2" if info["sensors"] == [1, 2] else "뒤 센서 3·4")
+        tilt = ("" if info["pose"] != "PRESSED" else
+                " (앞으로 기울임)" if info["sensors"] == [1, 2] else " (뒤로 기울임)")
+        cal_title.config(text=f"{which} · {cname} · {pname} {gap}mm{tilt}")
+        paint_cal_robot(info["sensors"], info["color"])
+        cal_steps_text.config(text=f"1. {which}가 모두 {cplace} 위에 있게 로봇을 둡니다.\n"
                                    f"2. {pdesc}.\n"
                                    f"3. 손으로 잡아 움직이지 않게 한 뒤 '측정 시작'을 누릅니다.\n"
-                                   f"   3초 카운트다운 → 3초 측정. 그동안 움직이지 마세요.")
+                                   f"   1초 카운트다운 → 1초 측정. 그동안 움직이지 마세요.")
         st = c["state"]
         if st == "WaitingForReady":
             if state.cal_message and "Too few" in state.cal_message:
@@ -1246,17 +1343,17 @@ def run_gui():
             set_buttons()
         elif st == "Measuring":
             cal_state_label.config(text=f"측정 중 · 샘플 {c['samples']}", fg=T["accent"])
-            cal_state_sub.config(text="3초 동안 움직이지 마세요")
+            cal_state_sub.config(text="1초 동안 움직이지 마세요")
             set_buttons()
         elif st == "WaitingForAccept":
-            bad = any(level != "ok" for level, _ in cal_quality(r)) if r else False
+            bad = any(level != "ok" for r in rs.values() for level, _ in cal_quality(r))
             cal_state_label.config(text="결과 확인", fg=T["warn"] if bad else T["ok"])
             cal_state_sub.config(text="좋으면 다음 단계로, 이상하면 다시 재세요.")
             set_buttons(("좋음 · 다음 단계  ▶   (Enter)", lambda: cal_send("ACCEPT")),
                         ("다시 측정", lambda: cal_send("RETRY")), back=True)
         elif st == "Completed":
             cal_step_label.config(text=f"단계 {CAL_STEPS} / {CAL_STEPS}")
-            cal_title.config(text="48단계를 모두 쟀습니다")
+            cal_title.config(text=f"{CAL_STEPS}단계를 모두 쟀습니다")
             cal_steps_text.config(text="'보드에 저장'을 눌러야 교정값이 남습니다.\n저장하지 않고 중단하면 모두 버려집니다.")
             cal_state_label.config(text="저장 대기", fg=T["accent"])
             cal_state_sub.config(text="")
@@ -1516,6 +1613,7 @@ def run_gui():
         render_pins()
         render_checks()
         paint_robot()
+        paint_camera()
         render_cal()
         enabled = wheels_up.get() and link["obj"] is not None and not calibrating()
         for d, k in pad_keys.items():
@@ -1530,14 +1628,13 @@ def run_gui():
                     line = l.lines.get_nowait()
                 except queue.Empty:
                     break
-                before = state.cal_result
                 kind = state.feed(line)
                 if kind in ("d", "s", "bat", "cal"):
                     ui["seen_data"] = True
-                if kind == "cal_result" and state.cal and state.cal_result is not before:
-                    c = state.cal
-                    verdict = "; ".join(m for _, m in cal_quality(state.cal_result))
-                    note("#", f"CAL step {c['step'] + 1} sensor {c['sensor']} {c['color']} {c['pose']} -> {verdict}")
+                if kind == "cal_result" and state.cal:
+                    c, r = state.cal, parse_line(line)[1]
+                    verdict = "; ".join(m for _, m in cal_quality(r))
+                    note("#", f"CAL step {c['step'] + 1} sensor {r['sensor']} {c['color']} {c['pose']} -> {verdict}")
                 if kind in ("cal_rejected", "cal_save_failed", "cal_too_few"):
                     note("!", f"calibration problem: {line}")
                 if visible(line):

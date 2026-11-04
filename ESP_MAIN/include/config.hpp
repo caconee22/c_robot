@@ -15,6 +15,9 @@ constexpr size_t RASPBERRY_MAX_BYTES_PER_POLL = 128;
 
 namespace switches {
 constexpr uint32_t DEBOUNCE_MS = 40;
+// 11/04: the robot's own slams pressed SW1/SW2, so a button acts only after
+// being held this long (SW1 stop, SW2 start, SW2 stop while running).
+constexpr uint32_t HOLD_MS = 500;
 constexpr uint32_t ESTOP_LOG_PERIOD_MS = 3000;
 }  // namespace switches
 

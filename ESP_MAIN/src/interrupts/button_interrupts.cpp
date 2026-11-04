@@ -15,6 +15,9 @@
 namespace {
 volatile bool emergencyIsLatched = false;
 volatile bool emergencyEventPending = false;
+volatile bool emergencyEdgePending = false;
+bool emergencyHolding = false;
+uint32_t emergencyLowSinceMs = 0;
 volatile bool startEdgePending = false;
 portMUX_TYPE buttonMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -53,13 +56,20 @@ void IRAM_ATTR disableMotorEnPins() {
   GPIO.out1_w1tc.val = EN_MASK_HIGH_BANK;
 }
 
-void IRAM_ATTR onEmergencyPressed() {
-  Bts7960Driver::latchPermanentDriveInhibitFromIsr();
-  disableMotorEnPins();
+// Any SW1 edge restarts the hold, so bounces from an impact never add up.
+void IRAM_ATTR onEmergencyChanged() {
   portENTER_CRITICAL_ISR(&buttonMux);
+  emergencyEdgePending = true;
+  portEXIT_CRITICAL_ISR(&buttonMux);
+}
+
+void latchEmergency() {
+  Bts7960Driver::latchPermanentDriveInhibit();
+  disableMotorEnPins();
+  portENTER_CRITICAL(&buttonMux);
   emergencyIsLatched = true;
   emergencyEventPending = true;
-  portEXIT_CRITICAL_ISR(&buttonMux);
+  portEXIT_CRITICAL(&buttonMux);
 }
 
 void IRAM_ATTR onStartChanged() {
@@ -94,29 +104,45 @@ void ButtonInterrupts::begin() {
   startEdgePending = false;
   startDebounceActive = false;
 
+  // Held at boot: stop at once, nothing is driving yet.
   emergencyIsLatched = digitalRead(pins::SAFETY_SWITCH) == LOW;
   emergencyEventPending = emergencyIsLatched;
+  emergencyEdgePending = false;
+  emergencyHolding = false;
   if (emergencyIsLatched) {
     Bts7960Driver::latchPermanentDriveInhibit();
     disableMotorEnPins();
   }
 
   attachInterrupt(digitalPinToInterrupt(pins::SAFETY_SWITCH),
-                  onEmergencyPressed, FALLING);
+                  onEmergencyChanged, CHANGE);
   attachInterrupt(digitalPinToInterrupt(pins::START_SWITCH), onStartChanged,
                   CHANGE);
 }
 
-void ButtonInterrupts::update(uint32_t nowMs) {
-  // Poll the real level too: an edge can happen while boot is attaching ISR.
-  if (digitalRead(pins::SAFETY_SWITCH) == LOW && !emergencyLatched()) {
-    Bts7960Driver::latchPermanentDriveInhibit();
-    disableMotorEnPins();
-    portENTER_CRITICAL(&buttonMux);
-    emergencyIsLatched = true;
-    emergencyEventPending = true;
-    portEXIT_CRITICAL(&buttonMux);
+void ButtonInterrupts::pollEmergencyHold(uint32_t nowMs) {
+  const bool low = digitalRead(pins::SAFETY_SWITCH) == LOW;
+  portENTER_CRITICAL(&buttonMux);
+  const bool edge = emergencyEdgePending;
+  emergencyEdgePending = false;
+  if (!low) {
+    emergencyHolding = false;
+  } else if (edge || !emergencyHolding) {
+    emergencyHolding = true;
+    emergencyLowSinceMs = nowMs;
   }
+  // Signed: the loop and the watchdog task may pass slightly different times.
+  const bool trip = low && !emergencyIsLatched &&
+      static_cast<int32_t>(nowMs - emergencyLowSinceMs) >=
+          static_cast<int32_t>(config::switches::HOLD_MS);
+  portEXIT_CRITICAL(&buttonMux);
+  if (trip) latchEmergency();
+}
+
+void ButtonInterrupts::triggerEmergencyStop() { latchEmergency(); }
+
+void ButtonInterrupts::update(uint32_t nowMs) {
+  pollEmergencyHold(nowMs);
   portENTER_CRITICAL(&buttonMux);
   const bool edgePending = startEdgePending;
   startEdgePending = false;
@@ -147,6 +173,7 @@ void ButtonInterrupts::update(uint32_t nowMs) {
   }
 
   portENTER_CRITICAL(&buttonMux);
+  const uint32_t heldMs = nowMs - startLastStableChangeMs;  // press length on release
   startStablePressed = startRawPressed;
   startLastStableChangeMs = nowMs;
   portEXIT_CRITICAL(&buttonMux);
@@ -162,7 +189,7 @@ void ButtonInterrupts::update(uint32_t nowMs) {
 
   startHasSeenReleased = true;
   portENTER_CRITICAL(&buttonMux);
-  const bool qualified = startPressQualified;
+  const bool qualified = startPressQualified && heldMs >= config::switches::HOLD_MS;
   startPressQualified = false;
   portEXIT_CRITICAL(&buttonMux);
   if (!qualified) {
@@ -208,6 +235,14 @@ bool ButtonInterrupts::startPressed() {
   return result;
 }
 
+uint32_t ButtonInterrupts::startHeldMs(uint32_t nowMs) {
+  portENTER_CRITICAL(&buttonMux);
+  const int32_t held = startStablePressed
+      ? static_cast<int32_t>(nowMs - startLastStableChangeMs) : 0;
+  portEXIT_CRITICAL(&buttonMux);
+  return held > 0 ? static_cast<uint32_t>(held) : 0;
+}
+
 void ButtonInterrupts::cancelStartGesture() {
   const bool released = !readStartPressed() && !startStablePressed &&
                         !startDebounceActive;
@@ -240,14 +275,7 @@ void ButtonInterrupts::benchSetStartPressed(bool pressed) {
   portEXIT_CRITICAL(&buttonMux);
 }
 
-void ButtonInterrupts::benchEmergencyStop() {
-  Bts7960Driver::latchPermanentDriveInhibit();
-  disableMotorEnPins();
-  portENTER_CRITICAL(&buttonMux);
-  emergencyIsLatched = true;
-  emergencyEventPending = true;
-  portEXIT_CRITICAL(&buttonMux);
-}
+void ButtonInterrupts::benchEmergencyStop() { latchEmergency(); }
 #endif
 
 [[noreturn]] void ButtonInterrupts::enterEmergencyStopLoop() {

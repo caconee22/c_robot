@@ -126,8 +126,8 @@ static_assert(MATCH_COLOR_BRIGHTNESS_WEIGHT >= 0 && MATCH_COLOR_BRIGHTNESS_WEIGH
 // LEVEL / LIFTED / PRESSED: guidance only, no distance sensor in V1.
 constexpr uint8_t CALIBRATION_HEIGHT_MM[3] = {10, 20, 3};
 constexpr uint32_t CALIBRATION_PREVIEW_PERIOD_MS = 200;
-constexpr uint32_t CALIBRATION_COUNTDOWN_MS = 3000;
-constexpr uint32_t CALIBRATION_MEASURE_MS = 3000;
+constexpr uint32_t CALIBRATION_COUNTDOWN_MS = 1000;  // 11/04: 3 s -> 1 s
+constexpr uint32_t CALIBRATION_MEASURE_MS = 1000;
 constexpr uint16_t CALIBRATION_MIN_SAMPLES = 5;
 constexpr uint16_t DEFAULT_RATIO_MARGIN_PERMILLE = 150;
 constexpr uint16_t DEFAULT_BRIGHTNESS_MARGIN_PERMILLE = 300;

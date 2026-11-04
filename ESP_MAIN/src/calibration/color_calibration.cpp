@@ -10,8 +10,31 @@
 #include "sensors/sensor_config.hpp"
 
 namespace {
-constexpr uint8_t TOTAL_STEPS =
-    COLOR_SENSOR_COUNT * FLOOR_COLOR_COUNT * CALIBRATION_POSE_COUNT;
+// 11/04 decision: yellow is not calibrated (not a hazard, no need to tell it
+// apart). Level and lifted measure all four corners at once; pressed tilts the
+// robot, so front and rear pairs are measured separately.
+struct Step {
+  FloorColor color;
+  CalibrationPose pose;
+  uint8_t sensorMask;
+};
+constexpr uint8_t ALL_SENSORS = 0x0F, FRONT_SENSORS = 0x03, REAR_SENSORS = 0x0C;
+constexpr Step STEPS[] = {
+    {FloorColor::Black, CalibrationPose::Level, ALL_SENSORS},
+    {FloorColor::Black, CalibrationPose::Lifted, ALL_SENSORS},
+    {FloorColor::Black, CalibrationPose::Pressed, FRONT_SENSORS},
+    {FloorColor::Black, CalibrationPose::Pressed, REAR_SENSORS},
+    {FloorColor::Red, CalibrationPose::Level, ALL_SENSORS},
+    {FloorColor::Red, CalibrationPose::Lifted, ALL_SENSORS},
+    {FloorColor::Red, CalibrationPose::Pressed, FRONT_SENSORS},
+    {FloorColor::Red, CalibrationPose::Pressed, REAR_SENSORS},
+    {FloorColor::Blue, CalibrationPose::Level, ALL_SENSORS},
+    {FloorColor::Blue, CalibrationPose::Lifted, ALL_SENSORS},
+    {FloorColor::Blue, CalibrationPose::Pressed, FRONT_SENSORS},
+    {FloorColor::Blue, CalibrationPose::Pressed, REAR_SENSORS},
+};
+constexpr uint8_t TOTAL_STEPS = sizeof(STEPS) / sizeof(STEPS[0]);
+static_assert(TOTAL_STEPS == ColorCalibration::STEP_COUNT, "Update STEP_COUNT");
 struct MeasurementAccumulator {
   uint32_t count = 0;
   uint16_t featureMask = 0;
@@ -24,44 +47,38 @@ struct MeasurementAccumulator {
 };
 
 ColorCalibrationData workingData;
-ColorCalibrationReference pendingReference;
-MeasurementAccumulator accumulator;
+ColorCalibrationReference pendingReference[COLOR_SENSOR_COUNT];
+MeasurementAccumulator accumulators[COLOR_SENSOR_COUNT];
 ColorCalibrationStatus latestStatus;
 
 char inputLine[64] = {};
 size_t inputLength = 0;
 uint32_t stateStartedMs = 0;
 uint32_t lastPreviewMs = 0;
-uint32_t lastSampleSequence = 0;
+uint32_t lastSampleSequence[COLOR_SENSOR_COUNT] = {};
 int8_t lastCountdownNumber = -1;
 bool discardInputLine = false;
 
-uint8_t stepSensor(uint8_t step) {
-  return step / (FLOOR_COLOR_COUNT * CALIBRATION_POSE_COUNT);
-}
-
-FloorColor stepColor(uint8_t step) {
-  return static_cast<FloorColor>(
-      (step / CALIBRATION_POSE_COUNT) % FLOOR_COLOR_COUNT);
-}
-
-CalibrationPose stepPose(uint8_t step) {
-  return static_cast<CalibrationPose>(step % CALIBRATION_POSE_COUNT);
+bool inStep(uint8_t sensor) {
+  return (latestStatus.sensorMask & (1U << sensor)) != 0;
 }
 
 void setStepFields() {
-  latestStatus.sensorIndex = stepSensor(latestStatus.step);
-  latestStatus.color = stepColor(latestStatus.step);
-  latestStatus.pose = stepPose(latestStatus.step);
+  const Step& step = STEPS[min(latestStatus.step, static_cast<uint8_t>(TOTAL_STEPS - 1))];
+  latestStatus.sensorMask = step.sensorMask;
+  latestStatus.color = step.color;
+  latestStatus.pose = step.pose;
 }
 
 void printStepPrompt() {
   setStepFields();
-  Serial.printf("\n[CAL] Step %u/%u, sensor %u %s\n",
+  Serial.printf("\n[CAL] Step %u/%u, sensors",
                 static_cast<unsigned>(latestStatus.step + 1),
-                static_cast<unsigned>(TOTAL_STEPS),
-                static_cast<unsigned>(latestStatus.sensorIndex + 1),
-                sensorCornerName(latestStatus.sensorIndex));
+                static_cast<unsigned>(TOTAL_STEPS));
+  for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+    if (inStep(sensor)) Serial.printf(" %u", static_cast<unsigned>(sensor + 1));
+  }
+  Serial.println();
   Serial.printf("[CAL] Floor=%s, position=%s\n",
                 floorColorName(latestStatus.color),
                 calibrationPoseName(latestStatus.pose));
@@ -70,44 +87,58 @@ void printStepPrompt() {
   if (latestStatus.pose == CalibrationPose::Level) {
     Serial.println("[CAL] Keep the robot level.");
   } else if (latestStatus.pose == CalibrationPose::Lifted) {
-    Serial.println("[CAL] Lift this corner away from the floor.");
+    Serial.println("[CAL] Raise the whole robot level by 10 mm.");
+  } else if (latestStatus.sensorMask == FRONT_SENSORS) {
+    Serial.println("[CAL] Tilt the robot forward onto the front sensors.");
   } else {
-    Serial.println("[CAL] Press this corner toward the floor.");
+    Serial.println("[CAL] Tilt the robot backward onto the rear sensors.");
   }
   Serial.println("[CAL] Type READY when the position is stable.");
 }
 
-void printRaw(const ColorRawSample& sample) {
+void printRaw(uint8_t sensor, const ColorRawSample& sample) {
   if (!sample.valid) {
-    Serial.printf("[CAL][PREVIEW] S%u NOT_READY\n",
-                  static_cast<unsigned>(latestStatus.sensorIndex + 1));
+    Serial.printf("[CAL][PREVIEW] S%u NOT_READY\n", static_cast<unsigned>(sensor + 1));
     return;
   }
 
   if (ColorSensorManager::model() == ColorSensorModel::AS7341) {
     Serial.printf(
         "[CAL][PREVIEW] S%u F2=%u F3=%u F5=%u F6=%u F7=%u C=%u\n",
-        static_cast<unsigned>(latestStatus.sensorIndex + 1),
+        static_cast<unsigned>(sensor + 1),
         sample.channel[1], sample.channel[2], sample.channel[4],
         sample.channel[5], sample.channel[6], sample.channel[8]);
   } else {
     Serial.printf("[CAL][PREVIEW] S%u R=%u G=%u B=%u C=%u\n",
-                  static_cast<unsigned>(latestStatus.sensorIndex + 1),
+                  static_cast<unsigned>(sensor + 1),
                   sample.channel[0], sample.channel[1], sample.channel[2],
                   sample.channel[8]);
   }
 }
 
 void resetAccumulator() {
-  accumulator = MeasurementAccumulator{};
-  pendingReference = ColorCalibrationReference{};
+  for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+    accumulators[sensor] = MeasurementAccumulator{};
+    pendingReference[sensor] = ColorCalibrationReference{};
+    lastSampleSequence[sensor] = 0;
+  }
   latestStatus.sampleCount = 0;
-  lastSampleSequence = 0;
 }
 
-void addSample(const ColorRawSample& sample) {
-  if (!sample.valid || sample.sequence == lastSampleSequence) return;
-  lastSampleSequence = sample.sequence;
+// sampleCount reports the sensor with the fewest samples in this step.
+void updateSampleCount() {
+  uint32_t fewest = UINT32_MAX;
+  for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+    if (inStep(sensor)) fewest = min(fewest, accumulators[sensor].count);
+  }
+  latestStatus.sampleCount = static_cast<uint16_t>(
+      min(fewest, static_cast<uint32_t>(UINT16_MAX)));
+}
+
+void addSample(uint8_t sensor, const ColorRawSample& sample) {
+  if (!sample.valid || sample.sequence == lastSampleSequence[sensor]) return;
+  lastSampleSequence[sensor] = sample.sequence;
+  MeasurementAccumulator& accumulator = accumulators[sensor];
   ++accumulator.count;
   accumulator.featureMask = sample.featureMask;
 
@@ -129,38 +160,41 @@ void addSample(const ColorRawSample& sample) {
       min(accumulator.brightnessMin, sample.brightness);
   accumulator.brightnessMax =
       max(accumulator.brightnessMax, sample.brightness);
-  latestStatus.sampleCount = static_cast<uint16_t>(
-      min(accumulator.count, static_cast<uint32_t>(UINT16_MAX)));
 }
 
 void finishMeasurement() {
-  if (accumulator.count < config::sensors::CALIBRATION_MIN_SAMPLES) {
-    Serial.printf("[CAL] Too few samples: %lu. Type READY to retry.\n",
-                  static_cast<unsigned long>(accumulator.count));
+  updateSampleCount();
+  if (latestStatus.sampleCount < config::sensors::CALIBRATION_MIN_SAMPLES) {
+    Serial.printf("[CAL] Too few samples: %u. Type READY to retry.\n",
+                  static_cast<unsigned>(latestStatus.sampleCount));
     latestStatus.state = CalibrationState::WaitingForReady;
     resetAccumulator();
     return;
   }
 
-  const double divisor = accumulator.count > 1 ? accumulator.count - 1 : 1;
-  for (size_t index = 0; index < COLOR_CHANNEL_COUNT; ++index) {
-    pendingReference.normalizedMean[index] = accumulator.mean[index];
-    pendingReference.normalizedStdDev[index] =
-        sqrt(accumulator.m2[index] / divisor);
-  }
-  pendingReference.brightnessMean = accumulator.brightnessMean;
-  pendingReference.brightnessStdDev =
-      sqrt(accumulator.brightnessM2 / divisor);
-  pendingReference.brightnessMin = accumulator.brightnessMin;
-  pendingReference.brightnessMax = accumulator.brightnessMax;
-  pendingReference.sampleCount = latestStatus.sampleCount;
-  pendingReference.valid = true;
+  for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+    if (!inStep(sensor)) continue;
+    const MeasurementAccumulator& accumulator = accumulators[sensor];
+    ColorCalibrationReference& reference = pendingReference[sensor];
+    const double divisor = accumulator.count > 1 ? accumulator.count - 1 : 1;
+    for (size_t index = 0; index < COLOR_CHANNEL_COUNT; ++index) {
+      reference.normalizedMean[index] = accumulator.mean[index];
+      reference.normalizedStdDev[index] = sqrt(accumulator.m2[index] / divisor);
+    }
+    reference.brightnessMean = accumulator.brightnessMean;
+    reference.brightnessStdDev = sqrt(accumulator.brightnessM2 / divisor);
+    reference.brightnessMin = accumulator.brightnessMin;
+    reference.brightnessMax = accumulator.brightnessMax;
+    reference.sampleCount = static_cast<uint16_t>(
+        min(accumulator.count, static_cast<uint32_t>(UINT16_MAX)));
+    reference.valid = true;
 
-  Serial.printf(
-      "[CAL][RESULT] samples=%u brightness=%.1f min=%u max=%u noise=%.2f\n",
-      pendingReference.sampleCount, pendingReference.brightnessMean,
-      pendingReference.brightnessMin, pendingReference.brightnessMax,
-      pendingReference.brightnessStdDev);
+    Serial.printf(
+        "[CAL][RESULT] S%u samples=%u brightness=%.1f min=%u max=%u noise=%.2f\n",
+        static_cast<unsigned>(sensor + 1), reference.sampleCount,
+        reference.brightnessMean, reference.brightnessMin,
+        reference.brightnessMax, reference.brightnessStdDev);
+  }
   Serial.println("[CAL] Type ACCEPT, RETRY, BACK or ABORT.");
   latestStatus.state = CalibrationState::WaitingForAccept;
 }
@@ -192,10 +226,11 @@ void abortCalibration(const char* reason) {
 }
 
 void acceptMeasurement() {
-  const uint8_t sensor = stepSensor(latestStatus.step);
-  const uint8_t color = static_cast<uint8_t>(stepColor(latestStatus.step));
-  const uint8_t pose = static_cast<uint8_t>(stepPose(latestStatus.step));
-  workingData.reference[sensor][color][pose] = pendingReference;
+  const uint8_t color = static_cast<uint8_t>(latestStatus.color);
+  const uint8_t pose = static_cast<uint8_t>(latestStatus.pose);
+  for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+    if (inStep(sensor)) workingData.reference[sensor][color][pose] = pendingReference[sensor];
+  }
 
   ++latestStatus.step;
   resetAccumulator();
@@ -212,14 +247,13 @@ void acceptMeasurement() {
 void printStatus() {
   Serial.printf(
       "[CAL][STATUS] active=%u stored=%u state=%u step=%u/%u "
-      "sensor=%u %s color=%s pose=%s samples=%u margin=%u/%u%%\n",
+      "sensors=0x%X color=%s pose=%s samples=%u margin=%u/%u%%\n",
       latestStatus.active ? 1 : 0,
       latestStatus.storedDataValid ? 1 : 0,
       static_cast<unsigned>(latestStatus.state),
       static_cast<unsigned>(min(static_cast<uint8_t>(latestStatus.step + 1), TOTAL_STEPS)),
       static_cast<unsigned>(TOTAL_STEPS),
-      static_cast<unsigned>(latestStatus.sensorIndex + 1),
-      sensorCornerName(latestStatus.sensorIndex),
+      static_cast<unsigned>(latestStatus.sensorMask),
       floorColorName(latestStatus.color),
       calibrationPoseName(latestStatus.pose), latestStatus.sampleCount,
       workingData.ratioMarginPermille / 10,
@@ -374,20 +408,20 @@ void pollSerial(uint32_t nowMs) {
 }
 
 void updateActiveState(uint32_t nowMs) {
-  const ColorRawSample current =
-      ColorSensorManager::sample(latestStatus.sensorIndex);
-
   if (latestStatus.state == CalibrationState::WaitingForReady &&
       nowMs - lastPreviewMs >=
           config::sensors::CALIBRATION_PREVIEW_PERIOD_MS) {
     lastPreviewMs = nowMs;
-    printRaw(current);
+    for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+      if (inStep(sensor)) printRaw(sensor, ColorSensorManager::sample(sensor));
+    }
   }
 
   if (latestStatus.state == CalibrationState::Countdown) {
     const uint32_t elapsed = nowMs - stateStartedMs;
-    const int8_t number = static_cast<int8_t>(
-        3 - min(elapsed / 1000U, static_cast<uint32_t>(2)));
+    const uint32_t remainingMs = config::sensors::CALIBRATION_COUNTDOWN_MS -
+        min(elapsed, config::sensors::CALIBRATION_COUNTDOWN_MS);
+    const int8_t number = static_cast<int8_t>(max((remainingMs + 999U) / 1000U, 1U));
     if (number != lastCountdownNumber) {
       lastCountdownNumber = number;
       Serial.printf("[CAL] Starting in %d...\n", number);
@@ -396,14 +430,21 @@ void updateActiveState(uint32_t nowMs) {
       latestStatus.state = CalibrationState::Measuring;
       stateStartedMs = nowMs;
       resetAccumulator();
-      lastSampleSequence = current.sequence;
-      Serial.println("[CAL] Measuring for 3 seconds. Do not move.");
+      // Count only samples taken after the countdown.
+      for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+        lastSampleSequence[sensor] = ColorSensorManager::sample(sensor).sequence;
+      }
+      Serial.printf("[CAL] Measuring for %lu ms. Do not move.\n",
+                    static_cast<unsigned long>(config::sensors::CALIBRATION_MEASURE_MS));
     }
     return;
   }
 
   if (latestStatus.state == CalibrationState::Measuring) {
-    addSample(current);
+    for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
+      if (inStep(sensor)) addSample(sensor, ColorSensorManager::sample(sensor));
+    }
+    updateSampleCount();
     if (nowMs - stateStartedMs >= config::sensors::CALIBRATION_MEASURE_MS) {
       finishMeasurement();
     }
