@@ -137,6 +137,8 @@ def parse_line(line):
         return None, None
     if line == "ESTOP":
         return "estop", {}
+    if line.startswith("BATCHECK,"):
+        return "batcheck", {"on": line.split(",")[1].strip() == "1"}
     if line.startswith("BAT "):
         parts = line.split()
         if len(parts) >= 4:
@@ -264,6 +266,7 @@ class BenchState:
 
     def __init__(self):
         self.bat = None
+        self.bat_check = None      # saved power-on battery check switch (BATCHECK row)
         self.d = None
         self.sensors = {}
         self.imu = None
@@ -290,6 +293,8 @@ class BenchState:
             self.estop = True
         elif kind == "bat":
             self.bat = v
+        elif kind == "batcheck":
+            self.bat_check = v["on"]
         elif kind == "d":
             self.d = v
         elif kind == "link":
@@ -903,6 +908,13 @@ def run_gui():
         v = tk.Label(r, text="—", anchor="w", bg=T["surface"], fg=T["ink"], font=font(10, "bold"))
         v.pack(side="left", fill="x")
         stat_rows[key] = v
+    # 11/05: off for matches (keep running on a sagging pack), on for bench tests.
+    bat_check_btn = button(stat, "배터리 판정: —",
+                           lambda: send("BAT CHECK OFF" if state.bat_check else "BAT CHECK ON"))
+    bat_check_btn.config(font=font(9))
+    bat_check_btn.pack(fill="x", pady=(4, 0))
+    tk.Label(stat, text="저장됨 · 끄기는 바로, 켜기는 다음 전원부터 · 경기용 펌웨어도 같은 값", bg=T["surface"],
+             fg=T["faint"], font=font(8)).pack(anchor="w")
 
     # middle: log + manual command
     # pin panel: levels the board read back from its own pins (PIN row)
@@ -954,7 +966,7 @@ def run_gui():
     cam_btns = tk.Frame(cam_box, bg=T["surface"])
     cam_btns.pack(fill="x", pady=(10, 0))
     button(cam_btns, "로그 켜기 (MODE DATA)", lambda: (send("LOG ON"), send("MODE DATA"))).pack(side="left")
-    tk.Label(cam_btns, text="라즈에서: cd ~/c_robot && python3 scripts/pi_vision_sender.py   ·   "
+    tk.Label(cam_btns, text="라즈는 부팅하면 자동 송신 · 화면·색 설정은 라즈 바탕화면 'C_ROBOT 타워 설정'   ·   "
              "배선: 라즈 8번(TX)→ESP32 RX, 10번(RX)←TX, GND 공통",
              bg=T["surface"], fg=T["muted"], font=font(9), wraplength=900, justify="left").pack(side="left", padx=10)
 
@@ -1531,9 +1543,13 @@ def run_gui():
             set_banner("idle", "연결됨", "로그가 멈춰 있으면 LOG ON")
 
     def render_status():
+        bat_check_btn.config(text="배터리 판정: " + ("— (보드 연결 후 표시)" if state.bat_check is None else
+                                                   "켜짐 → 누르면 끔 (경기용)" if state.bat_check else
+                                                   "꺼짐 → 누르면 켬 (시험용 보호)"))
         b = state.bat
         stat_rows["bat"].config(text=f"{b['mv'] / 1000:.2f} V · {b['cells']}S · {b['result']}" if b else "— (부팅 직후 한 번)",
-                                fg=(T["ok"] if b["result"].endswith("ok") else T["bad"]) if b else T["faint"])
+                                fg=(T["ok"] if b["result"].endswith("ok") else T["warn"] if b["result"].endswith("check_off")
+                                    else T["bad"]) if b else T["faint"])
         stat_rows["estop"].config(text="ESTOP · 재부팅 필요" if state.estop else "정상",
                                   fg=T["bad"] if state.estop else T["ok"] if link["obj"] else T["faint"])
         m = state.imu

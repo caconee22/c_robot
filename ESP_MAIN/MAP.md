@@ -91,6 +91,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | 색 판별 | `sensors/floor_color_classifier.hpp` | `classify` | SensorManager | |
 | 교정값 저장소 | `sensors/calibration_store.hpp` | `load`, `data`, `valid` | SensorManager | |
 | 배터리 확인 (V2) | `system/battery_monitor.hpp` | `begin`, `update`, `status` | setup, loop | |
+| 배터리 판정 켜기/끄기 (NVS) | `system/battery_setting.hpp` | `checkEnabled`, `setCheckEnabled` | BatteryMonitor, 벤치 콘솔 | |
 | 로그 | `system/event_logger.hpp` | `log`, `faultChanged`, `process` | 모든 모듈 | |
 | LED | `system/status_led.hpp` | `setBoth`, `update` | 모든 모듈 | |
 

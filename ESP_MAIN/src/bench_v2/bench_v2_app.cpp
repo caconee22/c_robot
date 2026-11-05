@@ -22,6 +22,7 @@
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/sensor_manager.hpp"
 #include "system/battery_monitor.hpp"
+#include "system/battery_setting.hpp"
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
@@ -62,6 +63,12 @@ void help() {
   reply("STOP / LOG ON|OFF / STATUS / HELP / IMU RESET; UART0 57600\r\n");
   reply("CAL START / CAL ERASE / CAL STATUS: floor color calibration\r\n");
   reply("I2C SCAN: main bus + TCA9548A channels\r\n");
+  reply("BAT CHECK ON|OFF: power-on battery check, saved, next boot (match too)\r\n");
+}
+
+// BATCHECK,<1|0>: the saved setting, for the GUI.
+void replyBatteryCheck() {
+  reply(BatterySetting::checkEnabled() ? "BATCHECK,1\r\n" : "BATCHECK,0\r\n");
 }
 
 bool startsWith(const char* line, const char* prefix) { return !strncmp(line, prefix, strlen(prefix)); }
@@ -86,6 +93,18 @@ void execute(const char* line) {
 #endif
   // While calibrating every line belongs to the calibration; motors stay braked.
   if (ColorCalibration::active()) { ColorCalibration::command(line, millis()); return; }
+  if (!strcmp(line, "BAT CHECK ON") || !strcmp(line, "BAT CHECK OFF")) {
+    // OFF also applies now (a failed check stops blocking SW2; nothing starts by
+    // itself). ON waits for the next power-on so a run in progress is never cut.
+    const bool on = !strcmp(line, "BAT CHECK ON");
+    if (!on) BatteryMonitor::stopCheck();
+    if (BatterySetting::setCheckEnabled(on))
+      reply(on ? "OK BAT CHECK on from the next power-on\r\n" : "OK BAT CHECK off now and saved\r\n");
+    else reply("ERR BAT CHECK not saved (NVS)\r\n");
+    replyBatteryCheck();
+    return;
+  }
+  if (!strcmp(line, "BAT CHECK")) { replyBatteryCheck(); return; }
   if (!strcmp(line, "I2C SCAN")) {
     stop();  // motors stay braked; a new SW2 is needed after the scan
     BenchI2cScan::start(millis());
@@ -366,6 +385,7 @@ void BenchV2App::begin() {
   extraIndex = sizeof(EXTRA_ORDER) / sizeof(EXTRA_ORDER[0]) - 1;  // first frame shows the IMU
   lastInputMs = lastLogMs = millis();
   help();
+  replyBatteryCheck();
 }
 
 void BenchV2App::update() {

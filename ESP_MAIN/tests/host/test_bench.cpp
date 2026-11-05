@@ -284,6 +284,30 @@ void imuTests() {
 }
 #endif
 #if HW_VERSION == 2
+void batteryCheckSwitchTest() {
+  // Check fails (no pack), then OFF in the same boot: SW2 works without a reboot.
+  fake::reset();
+  fake::adcMillivolts[pins::BATTERY_ADC]=0;
+  setup(); ticks(3100);
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Missing);
+  send("MODE MANUAL"); send("SW2"); ticks(SW2_MS); CHECK(!SystemManager::motorAllowed());
+  send("BAT CHECK OFF");
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Disabled);
+  CHECK(!SystemManager::motorAllowed());                  // nothing starts by itself
+  send("MODE MANUAL"); send("SW2"); ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
+  send("STOP"); send("BAT CHECK ON");
+  fake::reset(); setup(); ticks(30);
+  Serial.tx.clear(); send("BAT CHECK OFF");
+  CHECK(Serial.tx.find("BATCHECK,0")!=std::string::npos);
+  fake::adcMillivolts[pins::BATTERY_ADC]=0;   // no pack: would fail the check
+  setup(); ticks(3100);                       // next power-on reads the saved switch
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Disabled);
+  CHECK(SystemManager::status().applicationHealthy);
+  send("MODE MANUAL"); send("SW2"); ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
+  send("STOP");
+  Serial.tx.clear(); send("BAT CHECK ON");
+  CHECK(Serial.tx.find("BATCHECK,1")!=std::string::npos);
+}
 void batteryFailureTest() {
   fake::reset();
   fake::adcMillivolts[pins::BATTERY_ADC] = 0;
@@ -414,6 +438,7 @@ int main(int argc, char** argv) {
       softwareEmergencyDuringCalibrationTest();
       imuTests();
       calibrationTests();
+      batteryCheckSwitchTest();
 #endif
     }
     std::cout<<"BENCH MODEL "<<COLOR_SENSOR_MODEL<<": "<<checks<<" checks passed\n";

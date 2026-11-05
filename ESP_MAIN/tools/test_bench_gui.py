@@ -149,3 +149,9 @@ retry.feed("[CAL] Too few samples: 3. Type READY to retry.")
 retry.feed("[CAL][RESULT] S1 samples=28 brightness=100.0 min=90 max=110 noise=1.00")
 assert retry.cal_message is None
 print("cal retry message checks passed")
+
+batcheck = BenchState()
+assert batcheck.feed("BATCHECK,0") == "batcheck" and batcheck.bat_check is False
+assert batcheck.feed("BATCHECK,1") == "batcheck" and batcheck.bat_check is True
+assert batcheck.feed("BAT battery_check_off 0mV 0S") == "bat"
+print("battery check switch parse checks passed")
