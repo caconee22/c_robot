@@ -25,7 +25,7 @@ void setup();
 void loop();
 namespace {
 unsigned checks = 0;
-#define CHECK(expression) do { ++checks; if (!(expression)) throw std::runtime_error(#expression); } while (0)
+#define CHECK(expression) do { ++checks; if (!(expression)) throw std::runtime_error(std::to_string(__LINE__)+" "+#expression); } while (0)
 bool stopped(const MotorCommand& command) { return !command.leftPermille && !command.rightPermille; }
 VisionSnapshot target(uint32_t now = 0) {
   VisionSnapshot v;
@@ -57,7 +57,7 @@ void logicTests() {
   CHECK(BenchController::setManual(-200,200,100,true));
   CHECK(BenchController::update(349,true,s,v).leftPermille==-200);
   CHECK(stopped(BenchController::update(350,true,s,v)));
-  CHECK(!BenchController::setManual(201,0,360,true));
+  CHECK(!BenchController::setManual(401,0,360,true));
   CHECK(stopped(BenchController::update(361,true,s,v)));
   CHECK(BenchController::setManual(100,100,UINT32_MAX-100,true));
   CHECK(!stopped(BenchController::update(50,true,s,v)));
@@ -67,6 +67,26 @@ void logicTests() {
   v.targetX=1300; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille>0 && c.rightPermille<0);
   v.targetX=600; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille<0 && c.rightPermille>0);
   v.frameFresh=false; CHECK(stopped(BenchController::update(0,true,s,v)));
+  // Output ramps: 250 just outside the window, 350 far off, never forward/back.
+  v=target(); v.targetX=960+201; c=BenchController::update(0,true,s,v);
+  CHECK(c.leftPermille==250 && c.rightPermille==-250);
+  v.targetX=960-450; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==-300 && c.rightPermille==300);
+  v.targetX=1919; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==350 && c.rightPermille==-350);
+  v.targetX=5; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==-350 && c.rightPermille==350);
+  // Wider ALIGN window: 150 px off center is centered enough.
+  v=target(); v.targetX=960+150; CHECK(stopped(BenchController::update(0,true,s,v)));
+  // Tower lost (Pi fine, no target): spin toward the side last seen, ~one turn, then stop.
+  v.targetX=1500; c=BenchController::update(10,true,s,v); CHECK(c.leftPermille>0 && c.rightPermille<0);
+  v.targetValid=false; v.targetX=0; v.targetHeight=0;
+  c=BenchController::update(20,true,s,v); CHECK(c.leftPermille==300 && c.rightPermille==-300);
+  c=BenchController::update(20+config::bench::SEARCH_TURN_MS-1,true,s,v); CHECK(c.leftPermille>0);
+  CHECK(stopped(BenchController::update(20+config::bench::SEARCH_TURN_MS,true,s,v)));
+  v=target(); v.targetX=400; c=BenchController::update(4000,true,s,v); CHECK(c.leftPermille<0);  // found again
+  v.targetValid=false; v.targetX=0; v.targetHeight=0;
+  c=BenchController::update(4010,true,s,v); CHECK(c.leftPermille<0 && c.rightPermille>0);  // lost on the left
+  v.linkValid=false; CHECK(stopped(BenchController::update(4020,true,s,v)));  // no Pi: no blind search
+  BenchController::select(BenchMode::Align); v=target(); v.targetValid=false; v.targetX=0; v.targetHeight=0;
+  CHECK(stopped(BenchController::update(0,true,s,v)));  // never seen since start: stay still
   v=target(); BenchController::select(BenchMode::Follow);
   c=BenchController::update(0,true,s,v); CHECK(c.leftPermille==160 && c.rightPermille==160);
   v.targetX=1100; c=BenchController::update(0,true,s,v); CHECK(c.leftPermille>c.rightPermille);
@@ -83,7 +103,8 @@ void logicTests() {
   s=floor(1500); CHECK(!stopped(BenchController::update(1500,true,s,v)));
   BenchController::select(BenchMode::Avoid); s=floor(0); s.floorColor[2].color=FloorColor::Blue;
   c=BenchController::update(0,true,s,v); CHECK(c.leftPermille>0 && c.rightPermille>0);
-  s.floorColor[0].color=FloorColor::Yellow; CHECK(stopped(BenchController::update(1,true,s,v)));
+  s.floorColor[0].color=FloorColor::Yellow; CHECK(!stopped(BenchController::update(1,true,s,v)));  // yellow is not a hazard
+  s.floorColor[0].color=FloorColor::Red; CHECK(stopped(BenchController::update(1,true,s,v)));
   CHECK(stopped(BenchController::update(2,false,s,v)));
 }
 void ticks(uint32_t duration) {
@@ -92,7 +113,7 @@ void ticks(uint32_t duration) {
 }
 void send(const std::string& line) { Serial.inject(line+"\n"); ticks(5); }
 void startButton() {
-  fake::level(pins::START_SWITCH,LOW); ticks(50);
+  fake::level(pins::START_SWITCH,LOW); ticks(config::switches::HOLD_MS+60);
   fake::level(pins::START_SWITCH,HIGH); ticks(50);
 }
 void camera(uint16_t x, uint16_t height, uint8_t sequence = 1) {
@@ -122,6 +143,8 @@ void i2cScanTests() {
   CHECK(Serial.tx.find("I2C DONE")!=std::string::npos);
   fake::tcaConnected=true;
 }
+// Software SW2 holds past the 0.5 s button hold, then releases and debounces.
+constexpr uint32_t SW2_MS = config::switches::DEBOUNCE_MS*2 + config::switches::HOLD_MS + 60;
 void softwareSwitchTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
@@ -135,7 +158,7 @@ void softwareSwitchTests() {
   CHECK(!SystemManager::motorAllowed());  // old command was discarded
   send("SW2"); ticks(25); CHECK(!SystemManager::motorAllowed());
   fake::advance(80); loop();  // a delayed loop must still qualify the press before release
-  ticks(100); CHECK(SystemManager::motorAllowed());
+  ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
   CHECK(SystemManager::status().startEventCount==1);
   send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
   send("STOP"); CHECK(!SystemManager::motorAllowed());
@@ -145,29 +168,29 @@ void softwareSwitchTests() {
   send("SW2"); ticks(20); send("MODE FOLLOW"); ticks(150);
   CHECK(!SystemManager::motorAllowed());  // mode changes cancel the old gesture
   send("MODE MANUAL");
-  fake::level(pins::START_SWITCH,LOW); ticks(50);
+  fake::level(pins::START_SWITCH,LOW); ticks(config::switches::HOLD_MS+60);
   send("SW2"); CHECK(Serial.tx.find("ERR SW2 blocked")!=std::string::npos);
   send("STOP"); fake::level(pins::START_SWITCH,HIGH); ticks(60);
   CHECK(!SystemManager::motorAllowed());
-  send("SW2"); send("SW2"); ticks(150);
+  send("SW2"); send("SW2"); ticks(SW2_MS);
   CHECK(SystemManager::motorAllowed());
   CHECK(SystemManager::status().startEventCount==2);  // repeat does not queue another start
   send("STOP");
   send("CAL START"); CHECK(ColorCalibration::active());
   send("SW2"); ticks(150); CHECK(!SystemManager::motorAllowed());
   send("ABORT"); ticks(100); CHECK(!SystemManager::motorAllowed());
-  send("MODE MOTOR"); send("SW2"); ticks(130);
+  send("MODE MOTOR"); send("SW2"); ticks(SW2_MS);
   CHECK(SystemManager::motorAllowed() && MotorController::status().outputsActive);
   send("STOP");
   send("MODE MANUAL"); send("SW2");
-  fake::advance(300); loop(); ticks(130);
+  fake::advance(SW2_MS+300); loop(); ticks(130);
   CHECK(!SystemManager::motorAllowed());  // a stale virtual press must not start later
   SystemManager::setApplicationHealthy(false);
   send("MODE MANUAL"); send("SW2"); ticks(130);
   CHECK(!SystemManager::motorAllowed());
   SystemManager::setApplicationHealthy(true); ticks(100);
   CHECK(!SystemManager::motorAllowed());
-  send("SW2"); ticks(130); CHECK(SystemManager::motorAllowed());
+  send("SW2"); ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
   send("DRIVE 100 100"); CHECK(MotorController::status().outputsActive);
   // SW1 command enters the same permanent loop as the physical switch.
   fake::stopOnDelay=true;
@@ -261,6 +284,30 @@ void imuTests() {
 }
 #endif
 #if HW_VERSION == 2
+void batteryCheckSwitchTest() {
+  // Check fails (no pack), then OFF in the same boot: SW2 works without a reboot.
+  fake::reset();
+  fake::adcMillivolts[pins::BATTERY_ADC]=0;
+  setup(); ticks(3100);
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Missing);
+  send("MODE MANUAL"); send("SW2"); ticks(SW2_MS); CHECK(!SystemManager::motorAllowed());
+  send("BAT CHECK OFF");
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Disabled);
+  CHECK(!SystemManager::motorAllowed());                  // nothing starts by itself
+  send("MODE MANUAL"); send("SW2"); ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
+  send("STOP"); send("BAT CHECK ON");
+  fake::reset(); setup(); ticks(30);
+  Serial.tx.clear(); send("BAT CHECK OFF");
+  CHECK(Serial.tx.find("BATCHECK,0")!=std::string::npos);
+  fake::adcMillivolts[pins::BATTERY_ADC]=0;   // no pack: would fail the check
+  setup(); ticks(3100);                       // next power-on reads the saved switch
+  CHECK(BatteryMonitor::status().result==BatteryCheckResult::Disabled);
+  CHECK(SystemManager::status().applicationHealthy);
+  send("MODE MANUAL"); send("SW2"); ticks(SW2_MS); CHECK(SystemManager::motorAllowed());
+  send("STOP");
+  Serial.tx.clear(); send("BAT CHECK ON");
+  CHECK(Serial.tx.find("BATCHECK,1")!=std::string::npos);
+}
 void batteryFailureTest() {
   fake::reset();
   fake::adcMillivolts[pins::BATTERY_ADC] = 0;
@@ -276,7 +323,7 @@ void integrationTests() {
   fake::reset();
   for (unsigned i=0;i<4;++i) fake::floor(i,3);
   setup(); ticks(30);
-  CHECK(MotorController::outputLimit()==200); CHECK(!SystemManager::motorAllowed());
+  CHECK(MotorController::outputLimit()==400); CHECK(!SystemManager::motorAllowed());
   send("MODE MANUAL"); send("DRIVE 100 100");
   CHECK(!SystemManager::motorAllowed()); CHECK(!MotorController::status().outputsActive);
   fake::level(pins::START_SWITCH,LOW); ticks(10);
@@ -290,10 +337,10 @@ void integrationTests() {
   send("DRIVE 150 150"); CHECK(MotorController::status().outputsActive);
 #if BENCH_V2_MANUAL
   // PIN row reports the real pin levels: EN HIGH, forward PWM 150 permille = 38/255,
-  // on LPWM because both V2 motors are inverted (motor_config.hpp).
+  // on RPWM because no V2 motor is inverted since the 11/04 rewiring (motor_config.hpp).
   Serial.tx.clear();
   for (int i=0;i<12;++i) { send("DRIVE 150 150"); ticks(100); }
-  CHECK(Serial.tx.find(",0,0,1,1,38,0,38,0,")!=std::string::npos);
+  CHECK(Serial.tx.find(",0,0,1,1,0,38,0,38,")!=std::string::npos);
   CHECK(Serial.tx.find("PIN,")!=std::string::npos);
   // ADC row: every analog pin in mV at the GPIO; IS motor 2 left is GPIO20.
   fake::adcMillivolts[pins::MOTOR2_L_IS]=1234; fake::adcMillivolts[pins::IR_INPUTS[5]]=567;
@@ -307,6 +354,19 @@ void integrationTests() {
   camera(1300,200); CHECK(MotorController::status().appliedLeftPermille>0);
   CHECK(MotorController::status().appliedRightPermille<0);
   ticks(130); CHECK(!MotorController::status().outputsActive);
+  // SW2 held 3 s while stopped picks ALIGN and the release starts it; 2.9 s does not.
+  send("MODE STOP");
+  fake::level(pins::START_SWITCH,LOW); ticks(2900); fake::level(pins::START_SWITCH,HIGH); ticks(50);
+  CHECK(BenchController::mode()==BenchMode::Stop);
+  CHECK(SystemManager::motorAllowed());  // a normal start in STOP mode: nothing moves
+  camera(1300,200,5); CHECK(!MotorController::status().outputsActive);
+  send("STOP");
+  fake::level(pins::START_SWITCH,LOW); ticks(3100);
+  CHECK(BenchController::mode()==BenchMode::Align); CHECK(!SystemManager::motorAllowed());
+  fake::level(pins::START_SWITCH,HIGH); ticks(50); CHECK(SystemManager::motorAllowed());
+  camera(600,200,6); CHECK(MotorController::status().appliedLeftPermille<0);
+  CHECK(MotorController::status().appliedRightPermille>0);
+  camera(960,200,7); CHECK(!MotorController::status().outputsActive);  // centered: stop
   send("MODE FOLLOW"); startButton(); camera(960,200,2);
   CHECK(MotorController::status().appliedLeftPermille==160);
   CHECK(MotorController::status().appliedRightPermille==160);
@@ -322,6 +382,9 @@ void integrationTests() {
   send("0 200"); CHECK(!MotorController::status().outputsActive);  // Discard remainder.
   send("MODE DATA"); ticks(150); CHECK(Serial.tx.find("D,")!=std::string::npos);
   CHECK(Serial.tx.find("S,")!=std::string::npos);
+  // The D row carries the whole Pi target for the GUI camera box: ...,x,height,hazard,y,width,flags,seq
+  camera(700,300,9); ticks(150);
+  CHECK(Serial.tx.find(",1,1,1,700,300,0,540,100,49,9\r\n")!=std::string::npos);
 #if BENCH_V2_MANUAL
   ticks(900);  // extra rows take turns over 8 frames
   CHECK(Serial.baud == 57600);
@@ -351,9 +414,12 @@ void integrationTests() {
 #endif
   Serial.capacity=4096;
   send("MODE MANUAL"); startButton(); send("DRIVE 100 100");
-  fake::level(pins::SAFETY_SWITCH,LOW); CHECK(fake::pins[pins::MOTOR1_LEN]==LOW);
+  // SW1 acts only after the 0.5 s hold (impacts pressed it on the robot).
+  fake::level(pins::SAFETY_SWITCH,LOW); loop(); CHECK(!ButtonInterrupts::emergencyLatched());
+  fake::advance(config::switches::HOLD_MS);
   fake::stopOnDelay=true;
   try { loop(); CHECK(false); } catch (const fake::StopLoop&) {}
+  CHECK(ButtonInterrupts::emergencyLatched());
   CHECK(MotorController::status().emergencyStopLatched);
 }
 }
@@ -372,6 +438,7 @@ int main(int argc, char** argv) {
       softwareEmergencyDuringCalibrationTest();
       imuTests();
       calibrationTests();
+      batteryCheckSwitchTest();
 #endif
     }
     std::cout<<"BENCH MODEL "<<COLOR_SENSOR_MODEL<<": "<<checks<<" checks passed\n";

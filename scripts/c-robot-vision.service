@@ -1,0 +1,16 @@
+[Unit]
+Description=C_ROBOT vision sender (camera -> ESP32 UART /dev/ttyAMA0)
+# A few retries cover a camera that is not ready right after power-on;
+# after that it stays stopped and the ESP32 drives without vision.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=caconee
+WorkingDirectory=/home/caconee/c_robot
+ExecStart=/usr/bin/python3 scripts/pi_vision_sender.py --quiet
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

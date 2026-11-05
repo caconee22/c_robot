@@ -9,6 +9,7 @@ enum class BatteryCheckResult : uint8_t {
   Missing,       // Pack voltage almost zero (no battery, USB power only).
   Low,           // No allowed cell count fits: empty pack or too few cells.
   High,          // Above the largest allowed pack: too many cells.
+  Disabled,      // Check switched off in NVS (BatterySetting): start is not held.
 };
 
 struct BatteryStatus {
@@ -28,12 +29,19 @@ struct BatteryStatus {
 //   SAMPLE_PERIOD_MS; never waits.
 // Failure: SystemManager::setApplicationHealthy(false, ...) once, with the pack
 //   millivolts as detail. Motors stay stopped until reboot (existing policy).
-//   After the check passes, the voltage is no longer watched.
+//   After the check passes, the voltage is no longer watched, so a stall sag in
+//   a match never trips it.
+//   BatterySetting off (bench "BAT CHECK OFF", read from NVS at begin, also by the
+//   match firmware): no check at all, result Disabled, SW2 not held.
 // Safety code: no (it only reports through SystemManager).
 class BatteryMonitor {
  public:
   static void begin(uint32_t nowMs);
   static void update(uint32_t nowMs);
   static BatteryStatus status();
+  // Bench "BAT CHECK OFF" during this boot: stop judging, release SW2 and clear
+  // a battery fault this check raised. Nothing starts by itself: a new SW2 is
+  // still needed (SystemManager drops starts while unhealthy or held).
+  static void stopCheck();
   static const char* resultName(BatteryCheckResult result);
 };

@@ -1,3 +1,5 @@
+#include <map>
+#include <string>
 #include "Arduino.h"
 #include "Wire.h"
 #include "soc/gpio_struct.h"
@@ -20,6 +22,7 @@ bool pwmSetupOk = true, watchdogEnabled = false, stopOnDelay = false;
 int criticalDepth = 0;
 std::function<void()> writeHook;
 std::vector<uint8_t> nvs;
+std::map<std::string, uint8_t> nvsU8;
 bool nvsWriteOk = true, nvsReadOk = true;
 SensorDevice sensors[4];
 ImuDevice imu;
@@ -34,7 +37,7 @@ void reset() {
   std::fill(interrupts,interrupts+64,nullptr); deferred.clear(); criticalDepth=0;
   Serial=FakeSerial{}; Serial1=FakeSerial{}; Wire=TwoWire{};
   writeHook=nullptr; stopOnDelay=false; pwmSetupOk=true;
-  nvs.clear(); nvsReadOk=nvsWriteOk=true; tcaConnected=true; busTransactions=0;
+  nvs.clear(); nvsU8.clear(); nvsReadOk=nvsWriteOk=true; tcaConnected=true; busTransactions=0;
   transactionDelayMs=0;
   for (auto& sensor : sensors) sensor=SensorDevice{};
   imu=ImuDevice{};

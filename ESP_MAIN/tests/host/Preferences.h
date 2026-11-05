@@ -1,8 +1,11 @@
 #pragma once
 #include "Arduino.h"
 #include <cstring>
+#include <map>
+#include <string>
 namespace fake {
 extern std::vector<uint8_t> nvs;
+extern std::map<std::string, uint8_t> nvsU8;   // getUChar/putUChar keys
 extern bool nvsWriteOk, nvsReadOk;
 }
 struct Preferences {
@@ -16,5 +19,12 @@ struct Preferences {
     auto* bytes = static_cast<const uint8_t*>(data); fake::nvs.assign(bytes, bytes+size); return size;
   }
   bool remove(const char*) { if (!fake::nvsWriteOk) return false; fake::nvs.clear(); return true; }
+  uint8_t getUChar(const char* key, uint8_t fallback) {
+    auto it = fake::nvsU8.find(key); return it == fake::nvsU8.end() ? fallback : it->second;
+  }
+  size_t putUChar(const char* key, uint8_t value) {
+    if (!fake::nvsWriteOk) return 0;
+    fake::nvsU8[key] = value; return 1;
+  }
   void end() {}
 };

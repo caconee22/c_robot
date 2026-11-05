@@ -2,6 +2,7 @@
 
 #include "config.hpp"
 #include "pins.hpp"
+#include "system/battery_setting.hpp"
 #include "system/event_logger.hpp"
 #include "system/system_manager.hpp"
 
@@ -53,6 +54,10 @@ void BatteryMonitor::begin(uint32_t nowMs) {
   current = BatteryStatus{};
 #if HW_VERSION == 2
   analogSetPinAttenuation(pins::BATTERY_ADC, ADC_11db);
+  if (!BatterySetting::checkEnabled()) {
+    current.result = BatteryCheckResult::Disabled;  // match: run on whatever pack is fitted
+    return;
+  }
   current.result = BatteryCheckResult::Checking;
   SystemManager::holdStart(true);  // No SW2 start before the pack is judged.
   checkStartedMs = nowMs;
@@ -95,6 +100,18 @@ void BatteryMonitor::update(uint32_t nowMs) {
 #endif
 }
 
+void BatteryMonitor::stopCheck() {
+#if HW_VERSION == 2
+  const auto result = current.result;
+  if (result == BatteryCheckResult::NotAvailable || result == BatteryCheckResult::Ok ||
+      result == BatteryCheckResult::Disabled) return;
+  current.result = BatteryCheckResult::Disabled;
+  SystemManager::holdStart(false);
+  // Only BatteryMonitor reports application health, so this clears just its own fault.
+  if (result != BatteryCheckResult::Checking) SystemManager::setApplicationHealthy(true);
+#endif
+}
+
 BatteryStatus BatteryMonitor::status() { return current; }
 
 const char* BatteryMonitor::resultName(BatteryCheckResult result) {
@@ -105,6 +122,7 @@ const char* BatteryMonitor::resultName(BatteryCheckResult result) {
     case BatteryCheckResult::Missing: return "battery_missing";
     case BatteryCheckResult::Low: return "battery_low_or_wrong";
     case BatteryCheckResult::High: return "battery_too_high";
+    case BatteryCheckResult::Disabled: return "battery_check_off";
     default: return "battery_unknown";
   }
 }

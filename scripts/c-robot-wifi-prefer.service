@@ -1,0 +1,7 @@
+[Unit]
+Description=C_ROBOT switch back to the preferred Wi-Fi (caconee22) when in range
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/caconee/c_robot/scripts/pi_wifi_prefer.sh

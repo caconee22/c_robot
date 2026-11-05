@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=C_ROBOT 벤치 GUI
+Comment=ESP32 벤치 시험·색 교정 (ESP32 USB를 라즈에 꽂은 상태)
+Exec=python3 /home/caconee/c_robot/ESP_MAIN/tools/bench_gui.py
+Path=/home/caconee/c_robot/ESP_MAIN/tools
+Icon=applications-engineering
+Terminal=false

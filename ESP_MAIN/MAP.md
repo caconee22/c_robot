@@ -67,8 +67,8 @@ StatusLed::update, EventLogger::process, delay(1)
 
 메인 루프 밖의 독립 경로:
 
-- SW1 ISR: 영구 구동 금지 래치와 BTS7960 EN 즉시 LOW. 재부팅 전 복구 없음.
-- 모터 만료 감시 태스크: 5ms마다 명령 기한을 확인하고 만료 시 브레이크.
+- SW1: ISR은 에지 표시만. 0.5초 연속 눌림을 메인 루프와 만료 감시 태스크가 확인하면 영구 구동 금지 래치와 EN LOW. 재부팅 전 복구 없음.
+- 모터 만료 감시 태스크: 5ms마다 명령 기한을 확인하고 만료 시 브레이크. SW1 0.5초 확인도 같이 한다.
 
 ## 4. 모듈 표
 
@@ -91,6 +91,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | 색 판별 | `sensors/floor_color_classifier.hpp` | `classify` | SensorManager | |
 | 교정값 저장소 | `sensors/calibration_store.hpp` | `load`, `data`, `valid` | SensorManager | |
 | 배터리 확인 (V2) | `system/battery_monitor.hpp` | `begin`, `update`, `status` | setup, loop | |
+| 배터리 판정 켜기/끄기 (NVS) | `system/battery_setting.hpp` | `checkEnabled`, `setCheckEnabled` | BatteryMonitor, 벤치 콘솔 | |
 | 로그 | `system/event_logger.hpp` | `log`, `faultChanged`, `process` | 모든 모듈 | |
 | LED | `system/status_led.hpp` | `setBoth`, `update` | 모든 모듈 | |
 
@@ -117,7 +118,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | `robot_bench_v2_manual` | `src/bench_v2_main.cpp` → `src/bench_v2/` | 저출력 실물 시험·진단 (PC 쪽: `tools/bench_gui.py`) |
 
 
-색 교정(48단계, NVS 저장)은 벤치 펌웨어 안에서 `CAL START`로 한다 (`bench_v2_app.cpp`가 `ColorCalibration`을 호출,
+색 교정(12단계, 노랑 제외, NVS 저장)은 벤치 펌웨어 안에서 `CAL START`로 한다 (`bench_v2_app.cpp`가 `ColorCalibration`을 호출,
 교정 중 모터 브레이크). 두 환경 모두 V2 기판용(`HW_VERSION=2`, `pins_v2.hpp`)이다. V1·TCS34725·기존 벤치(`bench_main.cpp`)·
 센서 점검(`sensor_serial_test.cpp`)·단독 교정(`calibration_main.cpp`) 환경은 2026-10-31에 `archive/`로 보관했다 (`archive/README.md`).
 

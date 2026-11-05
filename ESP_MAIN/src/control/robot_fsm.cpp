@@ -22,11 +22,21 @@ bool escapeStartedReversing = false;
 bool insideGroove = false;
 bool grooveExitForward = false;
 uint32_t insideGrooveSinceMs = 0;
+// Per sensor: when it last read a hazard (see HAZARD_CONTACT_HOLD_MS).
+uint32_t lastHazardMs[COLOR_SENSOR_COUNT] = {};
+bool hazardSeen[COLOR_SENSOR_COUNT] = {};
+// Search starts toward the side the tower was last seen, then alternates.
+uint32_t searchStartedMs = 0;
+bool searchFirstLeft = true;
 
 void transitionTo(RobotState next, uint32_t nowMs) {
   if (currentState == next) return;
   currentState = next;
   stateEnteredMs = nowMs;
+  if (next == RobotState::Search) {
+    searchStartedMs = nowMs;
+    searchFirstLeft = !lastTargetKnown || lastTargetX < config::control::TARGET_CENTER_X;
+  }
   EventLogger::stateChanged(static_cast<uint16_t>(currentState));
 }
 
@@ -49,17 +59,33 @@ bool isHazardColor(const FloorColorResult& result) {
   return (config::control::HAZARD_COLOR_MASK & bit) != 0;
 }
 
-uint8_t hazardSensorMask(const SensorSnapshot& sensors) {
+// Invalid sample from a sensor that is measuring (dark or saturated contact),
+// as opposed to a sensor that never produced a sample.
+bool contactBlind(const ColorRawSample& raw) { return raw.sequence != 0 && !raw.valid; }
+
+uint8_t hazardSensorMask(const SensorSnapshot& sensors, uint32_t nowMs) {
   uint8_t mask = 0;
   for (uint8_t index = 0; index < COLOR_SENSOR_COUNT; ++index) {
-    if (isHazardColor(sensors.floorColor[index])) mask |= 1U << index;
+    if (isHazardColor(sensors.floorColor[index])) {
+      mask |= 1U << index;
+      lastHazardMs[index] = nowMs;
+      hazardSeen[index] = true;
+    } else if (hazardSeen[index] && contactBlind(sensors.colorRaw[index]) &&
+               nowMs - lastHazardMs[index] < config::control::HAZARD_CONTACT_HOLD_MS) {
+      mask |= 1U << index;   // was a hazard a moment ago, now blinded by contact
+    }
   }
   return mask;
 }
 
+void clearHazardMemory() {
+  for (bool& seen : hazardSeen) seen = false;
+}
+
 DriveIntent searchIntent(uint32_t nowMs) {
-  const bool turnLeft =
-      ((nowMs / config::control::SEARCH_DIRECTION_PERIOD_MS) & 1U) == 0;
+  const bool flipped =
+      (((nowMs - searchStartedMs) / config::control::SEARCH_DIRECTION_PERIOD_MS) & 1U) != 0;
+  const bool turnLeft = searchFirstLeft != flipped;
   return intent(turnLeft ? DriveIntentType::SearchLeft
                          : DriveIntentType::SearchRight,
                 config::control::SEARCH_DUTY);
@@ -134,6 +160,16 @@ DriveIntent forwardAtTarget(DriveIntentType type, uint16_t duty,
   return intent(type, duty, targetSteering(targetX, maximumSteering));
 }
 
+// Slower near the center window so the spin stops without overshooting.
+uint16_t alignDuty(int32_t error) {
+  using namespace config::control;
+  const int32_t magnitude = error < 0 ? -error : error;
+  if (magnitude >= ALIGN_FULL_ERROR) return ALIGN_MAX_DUTY;
+  const int32_t span = ALIGN_FULL_ERROR - TARGET_CENTER_DEADBAND;
+  const int32_t over = constrain(magnitude - static_cast<int32_t>(TARGET_CENTER_DEADBAND), 0, span);
+  return static_cast<uint16_t>(ALIGN_MIN_DUTY + over * (ALIGN_MAX_DUTY - ALIGN_MIN_DUTY) / span);
+}
+
 void resetTargetConfirmation() { targetConfirmFrames = 0; }
 
 void observeTargetFrame(const VisionSnapshot& vision) {
@@ -160,6 +196,9 @@ void RobotFsm::begin() {
   lastOneEndHazards = 0;
   escapeStartedReversing = false;
   insideGroove = false;
+  searchStartedMs = stateEnteredMs;
+  searchFirstLeft = true;
+  clearHazardMemory();
   transitionTo(RobotState::WaitStart, stateEnteredMs);
 }
 
@@ -172,6 +211,7 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
     targetSequenceKnown = false;
     lastOneEndHazards = 0;
     insideGroove = false;
+    clearHazardMemory();
     transitionTo(safety.state == SafetyState::EmergencyStop
                      ? RobotState::EmergencyStop
                      : RobotState::WaitStart,
@@ -180,7 +220,7 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
   }
 
   // Colored-floor escape always interrupts an attack, including blind push.
-  const uint8_t hazards = hazardSensorMask(sensors);
+  const uint8_t hazards = hazardSensorMask(sensors, nowMs);
   if (frontHazardIn(hazards) != rearHazardIn(hazards)) {
     lastOneEndHazards = hazards;
   }
@@ -350,12 +390,12 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
   if (error < -static_cast<int32_t>(
                   config::control::TARGET_CENTER_DEADBAND)) {
     transitionTo(RobotState::TrackAlign, nowMs);
-    return intent(DriveIntentType::AlignLeft, config::control::ALIGN_DUTY);
+    return intent(DriveIntentType::AlignLeft, alignDuty(error));
   }
   if (error > static_cast<int32_t>(
                   config::control::TARGET_CENTER_DEADBAND)) {
     transitionTo(RobotState::TrackAlign, nowMs);
-    return intent(DriveIntentType::AlignRight, config::control::ALIGN_DUTY);
+    return intent(DriveIntentType::AlignRight, alignDuty(error));
   }
 
   const bool attackCentered =

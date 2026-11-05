@@ -40,7 +40,7 @@ void setup() {
     Serial.println("RAW_MOTOR ERROR: PWM setup failed; EN stays LOW");
     return;
   }
-  // RPWM drive = backward on the V2 robot (11/01); bench/match now invert both motors.
+  // RPWM drive = backward on the V2 robot before the 11/04 rewiring; after it, RPWM = forward.
   ledcWrite(1, kDuty);
   ledcWrite(3, kDuty);
   digitalWrite(pins::MOTOR1_EN, HIGH);

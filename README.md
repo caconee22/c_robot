@@ -207,7 +207,11 @@ cd D:\C_ROBOT\ESP_MAIN
   → [미구현: 14바이트 UART 패킷 송신] → ESP32 RaspberryLink → FSM → 모터
 ```
 
-현재 Pi 추적기는 pyserial/UART 송신을 하지 않는다. `--json`은 좌표를 표준출력에 쓰는 옵션이다.
+`pi_green_tracker.py`는 UART 송신을 하지 않는다(`--json`은 표준출력). ESP32 송신은 `scripts/pi_vision_sender.py`가 한다:
+같은 검출기로 처리한 최신 결과를 `/dev/ttyAMA0`(GPIO14 TX/15 RX)에 50Hz로 보내고, 새 프레임을 처리했을 때만 sequence를 올린다.
+2026-11-04 Pi 5 + Camera Module 3 Wide 실측: 타워가 보일 때 검출 약22fps, 송신 50Hz, 누락0 (ESP32 연결 전, 수신 미검증).
+2026-11-05 갱신: 기본 감지기는 `scripts/tower_detector_hsv.py`(여러 색 범위 합치기), 720p 60fps, 셔터 1ms 고정(`scripts/camera_settings.py`).
+라즈 실측 감지 약 50~60fps·4ms·영상 지연 약 16ms, ESP32 수신 확인(LINK 60/60). 설정은 `scripts/tower_settings_app.py`.
 그 JSON에는 현재 박스 폭/높이 등 ESP 패킷 필드가 전부 들어 있지도 않다.
 실물 ALIGN/FOLLOW/AVOID에는 규격 송신기가 필요하며, JSON을 그대로 UART1에 보내면 안 된다.
 50fps 카메라 설정도 실제 처리/송신 50Hz를 증명하지 않는다.
@@ -231,6 +235,9 @@ cd D:\C_ROBOT\ESP_MAIN
 | `scripts/face_tracking_demo.py` | Haar 얼굴 검출 설치 점검. 경기 타워 검출이나 FSM에 사용하지 않음 |
 | `cv_live_view.py` | 별도 합성 영상 data/synthetic.avi의 루프 표시 예제. 그 입력 파일이 있어야 하며 주요 Pi 실행 입구가 아님 |
 | `scripts/generate_htd5m_20t_pulley.py` | CadQuery/DXF 기반 기구 STEP/STL 생성. 주행/CV와 무관, 별도 CadQuery 환경 필요 |
+| `scripts/vision_packet.py` | 패킷 V1 인코더. ESP32 파서와 같은 규칙으로 잘못된 패킷은 만들지 않음 |
+| `scripts/pi_vision_sender.py` | 카메라 검출 → 패킷 V1을 UART로 50Hz 송신. `--dry-run`은 UART 없이 출력만 |
+| `tests/test_vision_packet.py` | README 예시 바이트, 무목표 0x30, 거부 규칙, 축척·플래그 검증 |
 | `tests/test_vision.py` | 가상 대상/비대상색·좌표·ROI 병합·경계·마스크 형식 검증. 실제 카메라 성능 시험은 아님 |
 | `setup_raspberry_pi.sh` | Raspberry Pi OS의 OpenCV/NumPy/Picamera2 시스템 패키지 설치 |
 | `run_pi_tracker.sh` | 저장소 위치로 이동 후 Pi 카메라 입력50fps로 공유 추적기 실행 |

@@ -4,6 +4,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include "interrupts/button_interrupts.hpp"
 #include "motor/bts7960_driver.hpp"
 #include "motor/motor_config.hpp"
 #include "pins.hpp"
@@ -29,6 +30,8 @@ void motorWatchdog(void*) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(config::motor::WATCHDOG_POLL_MS));
     MotorController::checkTimeout(millis());
+    // SW1 needs a 0.5 s hold; time it here too so a stalled loop cannot delay it.
+    ButtonInterrupts::pollEmergencyHold(millis());
   }
 }
 
