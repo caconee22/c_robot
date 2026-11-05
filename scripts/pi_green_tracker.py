@@ -80,12 +80,14 @@ class PiCameraSource:
         )
         self.camera.configure(config)
         self.camera.start()
+        self.metadata: dict = {}   # last frame's metadata (exposure, gains, focus, timestamp)
 
     def read(self):
         request = self.camera.capture_request()
         try:
             frame = request.make_array("main")
             search = request.make_array("lores")
+            self.metadata = request.get_metadata()
         finally:
             request.release()
         return True, frame, search

@@ -210,6 +210,8 @@ cd D:\C_ROBOT\ESP_MAIN
 `pi_green_tracker.py`는 UART 송신을 하지 않는다(`--json`은 표준출력). ESP32 송신은 `scripts/pi_vision_sender.py`가 한다:
 같은 검출기로 처리한 최신 결과를 `/dev/ttyAMA0`(GPIO14 TX/15 RX)에 50Hz로 보내고, 새 프레임을 처리했을 때만 sequence를 올린다.
 2026-11-04 Pi 5 + Camera Module 3 Wide 실측: 타워가 보일 때 검출 약22fps, 송신 50Hz, 누락0 (ESP32 연결 전, 수신 미검증).
+2026-11-05 갱신: 기본 감지기는 `scripts/tower_detector_hsv.py`(여러 색 범위 합치기), 720p 60fps, 셔터 1ms 고정(`scripts/camera_settings.py`).
+라즈 실측 감지 약 50~60fps·4ms·영상 지연 약 16ms, ESP32 수신 확인(LINK 60/60). 설정은 `scripts/tower_settings_app.py`.
 그 JSON에는 현재 박스 폭/높이 등 ESP 패킷 필드가 전부 들어 있지도 않다.
 실물 ALIGN/FOLLOW/AVOID에는 규격 송신기가 필요하며, JSON을 그대로 UART1에 보내면 안 된다.
 50fps 카메라 설정도 실제 처리/송신 50Hz를 증명하지 않는다.

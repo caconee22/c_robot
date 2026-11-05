@@ -12,7 +12,7 @@ import cv2  # noqa: E402
 
 import tower_detector_hsv as T  # noqa: E402
 from tower_detector_hsv import TRACK_FRAMES  # noqa: E402
-from vision_preview import pick_range  # noqa: E402
+from tower_settings_app import pick_range  # noqa: E402
 
 NO_FILE = Path(tempfile.gettempdir()) / "c_robot_no_such_range.json"
 
@@ -55,6 +55,23 @@ class TowerDetectorTests(unittest.TestCase):
         self.assertTrue(r.candidates)
         self.assertEqual(TowerDetector().detect(frame((320, 150, 4, 4))).candidates, [])
 
+
+
+class RangeUnionTests(unittest.TestCase):
+    def test_lit_and_shadow_ranges_make_one_tower(self):
+        image = np.full((360, 640, 3), 30, np.uint8)
+        image[100:150, 300:340] = (46, 88, 49)      # lit half  (H~58)
+        image[150:200, 300:340] = (20, 60, 15)      # shadow half (H~65, darker)
+        d = T.TowerDetector(NO_FILE)
+        d.ranges = [{"name": "lit", "low": (52, 80, 70), "high": (62, 255, 255), "on": True},
+                    {"name": "shadow", "low": (60, 80, 40), "high": (72, 255, 69), "on": False}]
+        self.assertEqual(d.detect(image).candidates[0]["bbox"], (300, 100, 40, 50))   # half only
+        d.ranges[1]["on"] = True
+        self.assertEqual(d.detect(image).candidates[0]["bbox"], (300, 100, 40, 100))  # whole tower
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "tower_hsv.json"
+            T.save_settings(d, path)
+            self.assertEqual([r["name"] for r in T.load_ranges(path)], ["lit", "shadow"])
 
 
 class CalibratorTests(unittest.TestCase):

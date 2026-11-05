@@ -14,8 +14,13 @@ Pick order:
 
 Stateful (remembers the last position), so use one TowerDetector per camera.
 
-Color range and tower size limits: config/tower_hsv.json when present (saved
-by the calibrator in scripts/vision_preview.py), otherwise the constants below.
+Several color ranges can be on at once (e.g. lit side, shadow side): their
+masks are OR-ed before the blobs are found, so a tower split by shading is one
+blob again (the 3 misses on the 10/06 video were such splits).
+
+Settings (color ranges, size limits, flat limit, tracking): config/tower_hsv.json
+when present (saved by scripts/tower_settings_app.py), otherwise the constants
+below. Each detect() also lists the rejected blobs and why, for the settings app.
 """
 from __future__ import annotations
 
@@ -83,28 +88,105 @@ def load_sizes(path: Path = RANGE_FILE) -> tuple[float, float]:
     return MIN_AREA_FRACTION, MAX_AREA_FRACTION
 
 
+def load_ranges(path: Path = RANGE_FILE) -> list[dict]:
+    """Saved color ranges [{name, low, high, on}]; a file from before 11/05 (one
+    low/high pair) becomes a single range."""
+    try:
+        ranges = []
+        for item in json.loads(path.read_text(encoding="utf-8"))["ranges"]:
+            if valid_range(item["low"], item["high"]):
+                ranges.append({"name": str(item.get("name", f"범위 {len(ranges) + 1}")),
+                               "low": tuple(int(v) for v in item["low"]),
+                               "high": tuple(int(v) for v in item["high"]),
+                               "on": bool(item.get("on", True))})
+        if ranges:
+            return ranges
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    low, high = load_range(path)
+    return [{"name": "범위 1", "low": low, "high": high, "on": True}]
+
+
 def save_range(low, high, path: Path = RANGE_FILE,
-               min_area: float = MIN_AREA_FRACTION, max_area: float = MAX_AREA_FRACTION) -> None:
+               min_area: float = MIN_AREA_FRACTION, max_area: float = MAX_AREA_FRACTION,
+               tall_ratio: float = TALL_RATIO, track: bool = True, ranges: list | None = None) -> None:
     if not valid_range(low, high):
         raise ValueError(f"bad HSV range {low} {high}")
+    ranges = ranges or [{"name": "범위 1", "low": low, "high": high, "on": True}]
+    if not all(valid_range(r["low"], r["high"]) for r in ranges):
+        raise ValueError("bad HSV range in the list")
     if not 0 <= min_area < max_area <= 1:
         raise ValueError(f"bad size limits {min_area} {max_area}")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"low": [int(v) for v in low], "high": [int(v) for v in high],
-                               "min_area": min_area, "max_area": max_area}), encoding="utf-8")
+                               "min_area": min_area, "max_area": max_area,
+                               "tall_ratio": tall_ratio, "track": bool(track),
+                               "ranges": [{"name": r["name"], "low": [int(v) for v in r["low"]],
+                                           "high": [int(v) for v in r["high"]], "on": bool(r["on"])}
+                                          for r in ranges]},
+                              ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)  # a power cut leaves the old file or the new one, never half
+
+
+def load_shape(path: Path = RANGE_FILE) -> tuple[float, bool]:
+    """Saved flat limit (height / width) and tracking switch, or the defaults."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        ratio, track = float(data["tall_ratio"]), bool(data["track"])
+        if 0 <= ratio <= 5:
+            return ratio, track
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return TALL_RATIO, True
+
+
+def save_settings(detector: "TowerDetector", path: Path = RANGE_FILE) -> None:
+    save_range(detector.low, detector.high, path, detector.min_area, detector.max_area,
+               detector.tall_ratio, detector.track, detector.ranges)
 
 
 class TowerDetector:
     def __init__(self, range_file: Path = RANGE_FILE) -> None:
         self.last_center: tuple[float, float] | None = None
         self.missed = 0
-        self.low, self.high = load_range(range_file)
+        self.load(range_file)
+        self.rejected: list = []   # (bbox, reason) of the last detect(), for the settings app
+
+    def load(self, range_file: Path = RANGE_FILE) -> None:
+        self.ranges = load_ranges(range_file)
+        self.active = 0                                          # range the sliders edit
         self.min_area, self.max_area = load_sizes(range_file)   # share of the frame area
+        self.tall_ratio, self.track = load_shape(range_file)
+
+    # low/high = the active range, so single-range callers keep working.
+    @property
+    def low(self) -> tuple:
+        return self.ranges[self.active]["low"]
+
+    @low.setter
+    def low(self, value) -> None:
+        self.ranges[self.active]["low"] = tuple(int(v) for v in value)
+
+    @property
+    def high(self) -> tuple:
+        return self.ranges[self.active]["high"]
+
+    @high.setter
+    def high(self, value) -> None:
+        self.ranges[self.active]["high"] = tuple(int(v) for v in value)
+
+    def range_mask(self, hsv: np.ndarray) -> np.ndarray:
+        """OR of every range that is on (already-HSV image)."""
+        mask = None
+        for r in list(self.ranges):
+            if r["on"]:
+                part = cv2.inRange(hsv, r["low"], r["high"])
+                mask = part if mask is None else cv2.bitwise_or(mask, part)
+        return mask if mask is not None else np.zeros(hsv.shape[:2], np.uint8)
 
     def _hsv(self, image: np.ndarray) -> np.ndarray:
-        return cv2.inRange(cv2.cvtColor(image, cv2.COLOR_BGR2HSV), self.low, self.high)
+        return self.range_mask(cv2.cvtColor(image, cv2.COLOR_BGR2HSV))
 
     def mask(self, frame: np.ndarray, small: np.ndarray | None = None) -> np.ndarray:
         """Full-frame HSV mask, computed only around small-frame proposals."""
@@ -128,25 +210,32 @@ class TowerDetector:
         contours, _ = cv2.findContours(self.mask(frame, small), cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
         min_area, max_area = self.min_area * width * height, self.max_area * width * height
-        tall = []
+        tall, rejected = [], []
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < min_area or area > max_area:
+            if area < min_area:
+                if area >= min_area / 4 and len(rejected) < 12:   # skip specks, keep near misses
+                    rejected.append((cv2.boundingRect(contour), "small"))
                 continue
             x, y, w, h = cv2.boundingRect(contour)
+            if area > max_area:
+                rejected.append(((x, y, w, h), "big"))
+                continue
             edge = x <= 0 or y <= 0 or x + w >= width or y + h >= height
-            if h < TALL_RATIO * w and not edge:
+            if h < self.tall_ratio * w and not edge:
+                rejected.append(((x, y, w, h), "flat"))
                 continue
             m = cv2.moments(contour)
             tall.append({"bbox": (x, y, w, h), "area": area,
                          "centroid": (m["m10"] / m["m00"], m["m01"] / m["m00"])})
         tall.sort(key=lambda c: c["area"], reverse=True)
+        self.rejected = rejected
         if not tall:
             self.missed += 1
             if self.missed > TRACK_FRAMES:
                 self.last_center = None
             return Result()
-        if self.last_center is not None:
+        if self.track and self.last_center is not None:
             lx, ly = self.last_center
             big = [c for c in tall if c["area"] >= TRACK_MIN_SHARE * tall[0]["area"]]
             near = min(big, key=lambda c: (c["centroid"][0] - lx) ** 2 + (c["centroid"][1] - ly) ** 2)

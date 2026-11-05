@@ -1,7 +1,7 @@
 #!/bin/bash
-# Desktop launcher (C_ROBOT 카메라 보기): live camera window with the tower box.
+# Desktop launcher (C_ROBOT 타워 설정): the tower settings app with the live view.
 # The boot-time sender (c-robot-vision) holds the camera, so it is stopped here
-# and started again when this ends (q in the window, Ctrl+C, or closing the
+# and started again when this ends (closing the window, Ctrl+C, or closing the
 # terminal). Packets keep going to the ESP32 while the window is open.
 #
 # 11/04: closing the terminal used to restart the service while the preview
@@ -10,7 +10,7 @@
 # before the service starts again.
 cd "$(dirname "$0")/.." || exit 1
 sudo -n systemctl stop c-robot-vision
-python3 scripts/pi_vision_sender.py --preview --detector hsv &
+python3 scripts/pi_vision_sender.py "${1:---preview}" --detector hsv &   # --preview-simple = earlier window
 pid=$!
 # TERM, not INT: bash starts background jobs with SIGINT ignored.
 trap 'kill -TERM "$pid" 2>/dev/null' HUP INT TERM

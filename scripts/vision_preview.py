@@ -16,7 +16,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from tower_detector_hsv import TowerDetector, load_range, load_sizes, save_range
+from tower_detector_hsv import TowerDetector, load_range, load_sizes, save_settings
 
 WINDOW = "C_ROBOT vision"
 SIZE = (640, 360)
@@ -119,7 +119,7 @@ class Preview:
         if key == ord("q"):
             raise KeyboardInterrupt  # same clean exit as Ctrl+C
         if key == ord("s"):
-            save_range(low, high, min_area=min_area, max_area=max_area)
+            save_settings(self.detector)   # keeps the settings app's other ranges
             self.message = "saved"
         elif key == ord("r"):
             self._set_bars(*load_range())
