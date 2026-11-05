@@ -17,6 +17,7 @@
 #include "sensors/sensor_config.hpp"
 #include "sensors/sensor_manager.hpp"
 #include "system/battery_monitor.hpp"
+#include "system/battery_setting.hpp"
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
@@ -304,7 +305,49 @@ void testFsm() {
   RobotFsm::update(UINT32_MAX-10,sensors,target(1,UINT32_MAX-10),running());
   RobotFsm::update(0,sensors,target(2,0),running());
   RobotFsm::update(20,sensors,missing,running()); CHECK(RobotFsm::state()==RobotState::LostTarget);
-  RobotFsm::update(260,sensors,missing,running()); CHECK(RobotFsm::state()==RobotState::Search);
+  RobotFsm::update(config::control::LOST_TARGET_HOLD_MS-1,sensors,missing,running());
+  CHECK(RobotFsm::state()==RobotState::LostTarget);
+  RobotFsm::update(config::control::LOST_TARGET_HOLD_MS,sensors,missing,running());
+  CHECK(RobotFsm::state()==RobotState::Search);
+  // A sensor that read red and is then blinded by floor contact (invalid sample)
+  // still counts as a hazard for HAZARD_CONTACT_HOLD_MS; a never-sampled one does not.
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  sensors.colorRaw[0].sequence=5; sensors.colorRaw[0].valid=true;
+  CHECK(RobotFsm::update(10,sensors,missing,running()).type==DriveIntentType::Reverse);
+  sensors.floorColor[0]=FloorColorResult{}; sensors.colorRaw[0].sequence=6; sensors.colorRaw[0].valid=false;
+  sensors.floorColor[2].color=FloorColor::Blue; sensors.floorColor[2].reliable=true;
+  CHECK(RobotFsm::update(20,sensors,missing,running()).type==DriveIntentType::Brake);   // both ends = groove
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  sensors.colorRaw[0].sequence=5; sensors.colorRaw[0].valid=true;
+  RobotFsm::update(10,sensors,missing,running());
+  sensors.floorColor[0]=FloorColorResult{}; sensors.colorRaw[0].valid=false;
+  RobotFsm::update(10+config::control::HAZARD_CONTACT_HOLD_MS-1,sensors,missing,running());
+  CHECK(RobotFsm::state()==RobotState::ZoneEscape);
+  sensors.colorRaw[0].valid=true;   // contact over: a valid non-hazard reading ends the hold at once
+  RobotFsm::update(10+config::control::ZONE_ESCAPE_REVERSE_MS+config::control::ZONE_ESCAPE_TURN_MS+1,
+                   sensors,missing,running());
+  CHECK(RobotFsm::state()==RobotState::Search);
+  sensors=SensorSnapshot{};
+  // Lost on the right: spin right, and the search afterwards also starts right.
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  RobotFsm::update(10,sensors,target(1,10,1500),running());
+  CHECK(RobotFsm::update(20,sensors,missing,running()).type==DriveIntentType::SearchRight);
+  const uint32_t searchAt=10+config::control::LOST_TARGET_HOLD_MS;
+  CHECK(RobotFsm::update(searchAt,sensors,missing,running()).type==DriveIntentType::SearchRight);
+  CHECK(RobotFsm::update(searchAt+config::control::SEARCH_DIRECTION_PERIOD_MS,sensors,missing,
+                         running()).type==DriveIntentType::SearchLeft);
+  // Align spin ramps: slow just outside the window, fastest far off, never below the floor.
+  RobotFsm::begin();
+  RobotFsm::update(10,sensors,target(1,10,1900),running());
+  RobotFsm::update(20,sensors,target(2,20,1900),running());
+  auto far=RobotFsm::update(30,sensors,target(3,30,1900),running());
+  CHECK(far.type==DriveIntentType::AlignRight && far.requestedDuty==config::control::ALIGN_MAX_DUTY);
+  auto near=RobotFsm::update(40,sensors,target(4,40,960+config::control::TARGET_CENTER_DEADBAND+1),running());
+  CHECK(near.type==DriveIntentType::AlignRight && near.requestedDuty==config::control::ALIGN_MIN_DUTY);
+  CHECK(RobotFsm::update(50,sensors,target(5,50,960+config::control::TARGET_CENTER_DEADBAND),
+                         running()).type==DriveIntentType::Approach);
 }
 
 void testColorsAndErrors() {
@@ -568,6 +611,15 @@ void testBattery() {
   fake::adcMillivolts[pins::BATTERY_ADC] = 0;
   for (int i = 0; i < 50; ++i) { BatteryMonitor::update(millis()); fake::advance(20); }
   CHECK(BatteryMonitor::status().result == BatteryCheckResult::Ok);
+  // Check switched off in NVS (set on the bench): no pack at all still starts.
+  fixture(); SystemManager::update(millis());
+  CHECK(BatterySetting::setCheckEnabled(false));
+  BatteryMonitor::begin(millis());
+  for (int i = 0; i < 400; ++i) { BatteryMonitor::update(millis()); SystemManager::update(millis()); fake::advance(10); }
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Disabled);
+  CHECK(SystemManager::status().applicationHealthy);
+  pressStart(); CHECK(SystemManager::motorAllowed());
+  CHECK(BatterySetting::setCheckEnabled(true));
 #else
   // V1 has no battery input: the check is skipped and start is unaffected.
   fixture(); BatteryMonitor::begin(millis());
