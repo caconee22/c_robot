@@ -1,315 +1,274 @@
-# C_ROBOT — IRC 씨름 로봇
+# C_ROBOT — 2026 IRC 씨름 로봇
 
-ESP32-S3 주행 제어, 라즈베리파이 영상 처리, 회로 설계를 관리하는 저장소다.
-현재 주행 펌웨어는 **V1 하드웨어**를 대상으로 한다.
+2026 IRC 씨름 로봇 대회(11/13)에 나가는 자율주행 로봇의 통합 저장소다.
+ESP32-S3 주행 펌웨어, 라즈베리파이 영상 처리, 회로·PCB, 기구 설계, 팀 일정 페이지를 한곳에서 관리한다.
 
-처음 사용하는 사람은 [펌웨어 구조·사용법 전체 설명](ESP_MAIN/README.md)을 먼저 읽는다.
-파일별 책임, 실제 FSM/안전 흐름, 센서 설정·교정, UART 규격, 모터 API, 주기와 실물 시험 순서를 설명한다.
-별도 벤치의 콘솔/CSV는 [BENCH_TESTS.md](ESP_MAIN/BENCH_TESTS.md), 검토 근거는
-[VERIFICATION.md](ESP_MAIN/VERIFICATION.md)에 있다. 아래는 저장소 전체와 영상 프로그램 안내다.
+> **2026-11-08 기준.** 지금 기체는 **V2 기판**이고, 쓰는 펌웨어는 경기용 `yd_esp32_s3_v2`와
+> 벤치·색 교정용 `robot_bench_v2_manual` 두 개뿐이다. 이 문서 아래쪽 "기체 설계와 기동 전략"은
+> 10/10 설계 단계의 기록이며 지금 펌웨어가 그 기동을 모두 구현했다는 뜻이 아니다.
 
-## 현재 진행 상황
+처음 보는 사람이 읽는 순서:
 
-2026-10-05 기준, ESP32 펌웨어는 부팅부터 센서·통신·안전·FSM·모터 출력까지 연결했다.
-하드웨어 없는 자동 시험과 ESP32용 빌드를 통과했으며, 실제 기체 시험과 튜닝은 남아 있다.
-컴파일/PC 시험 통과를 실제 차량의 완전한 동작 보증으로 해석하면 안 된다.
+1. 이 문서: 저장소 전체, 현재 상태, 빌드·업로드, 라즈베리파이 쪽
+2. [`ESP_MAIN/README.md`](ESP_MAIN/README.md): 펌웨어 동작·안전·FSM·센서·교정·통신 상세
+3. [`ESP_MAIN/MAP.md`](ESP_MAIN/MAP.md): 작업별로 열어 볼 파일과 값의 원본 위치
+4. [`ESP_MAIN/TEAM_GUIDE.md`](ESP_MAIN/TEAM_GUIDE.md): 코딩을 모르는 현장 팀원용 쉬운 안내
+5. 규칙: [`AGENTS.md`](AGENTS.md)(저장소), [`ESP_MAIN/AGENTS.md`](ESP_MAIN/AGENTS.md)(펌웨어)
 
-| 항목 | 진행 상태 |
+## 1. 로봇 한눈에 보기
+
+```text
+           [라즈베리파이 5 + 카메라]  타워 좌표 50Hz (UART1, 14바이트)
+                       │
+  [바닥 센서 AS7341 ×4] ─ I2C(TCA9548A) ─┐
+  [IMU MPU6050] ──────── I2C ────────────┼─ [ESP32-S3 (YD-ESP32-S3), V2 기판]
+  [SW1 비상정지 · SW2 출발] ──────────────┘          │
+                                         BTS7960 ×2 → 좌우 모터 → 벨트 → 바퀴 4개
+```
+
+| 구성 | 내용 |
 |---|---|
-| PlatformIO / Arduino / ESP32-S3 프로젝트 | 구성 완료 |
-| V1 핀 정의 및 초기 안전 출력 | 구현 완료, V2 핀 배치는 미적용 |
-| 부팅·리셋 원인·시작 대기 | 구현 완료 |
-| SW1 인터럽트 비상정지 | 영구 래치, 브레이크 요청, 재부팅 전까지 구동 금지 |
-| SW2 인터럽트 시작 버튼 | 정상 눌림·해제 각각 40ms 확인 후 한 번 시작 |
-| BTS7960 좌우 모터 공용 API | 출력 제한, 정지/브레이크, 방향 설정, 상태 조회 구현 |
-| 모터 명령 만료 감시 | 공용 API 기본 100ms, FSM 80ms, 별도 5ms 감시 |
-| AS7341 / TCS34725 네 모서리 센서 | 빌드 시 한 종류 선택, TCA9548A 경유 읽기 구현 |
-| 바닥색 판별 | 빨강·노랑·파랑·검정, 새 측정의 동일 색 3회 확인 |
-| 컬러 캘리브레이션 | UART 안내식 48단계, 자세별 3초 측정, NVS 저장 구현 |
-| 라즈 UART1 | 115200bps, 14바이트, CRC 없음, sequence/신선도 검사 구현 |
-| 이벤트 로그 / WS2812 LED | 변경 감지·중복 억제·우선순위 표시 구현 |
-| 공격 FSM | 탐색·목표 확인·정렬·접근·돌진·급정거·삽입·밀기·회피 연결 |
-| PC 자동 검증 | 두 센서 구성 각각 12개 시험 그룹 통과 |
-| ESP32 빌드 | 생산/센서 전용/벤치 × 두 센서 구성, 여섯 환경 통과 |
-| 별도 실물 시험 펌웨어 | 모터/UART 수동/데이터/회전 정렬/추적/바닥 회피 구현, 두 센서 구성 빌드·PC 검사 통과 |
-| 실물 성능·브레이크·색 임계값·전략 튜닝 | 미완료, 하드웨어 확보 후 진행 |
+| 제어기 | YD-ESP32-S3, V2 기판 (`ESP_MAIN/include/pins_v2.hpp`) |
+| 구동 | BTS7960 두 개로 좌우 모터, 한쪽마다 HTD5M 벨트로 앞뒤 바퀴 연결, 휠베이스 129mm |
+| 바퀴 | 실리콘 주조. 지금 바퀴 + 여분 65mm 설계(턱에서 걸릴 때만 교체, 11/8 결정) |
+| 바닥 판별 | 네 모서리 AS7341 컬러 센서 (1 전방 왼쪽, 2 전방 오른쪽, 3 후방 왼쪽, 4 후방 오른쪽) |
+| 자세 | MPU6050 IMU. 경기용에서는 뒤집힘 비상정지에만 사용 (11/07) |
+| 영상 | 라즈베리파이 5 + Camera Module 3 Wide, 녹색 컬러 타워 검출 → 좌표만 ESP32로 |
+| 스위치 | SW1 = 0.5초 누르면 영구 비상정지, SW2 = 0.5초 눌렀다 떼면 출발 |
+| 배터리 | 3S·4S 둘 다 사용, 전원 투입 3초 동안만 판정 (판정은 NVS에서 켜고 끌 수 있음) |
+| 무게 | 11/4 실측 4,150g (일부 부품 빠짐), 규정 상한 4,545g (허용 오차 포함) |
 
-V1에는 IR, 거리센서, IMU, 전류센서, 엔코더, 배터리 ADC를 사용하지 않는다.
-V2 회로 확장 논의와 V1 펌웨어를 혼동하지 않는다.
+**V1·V2 공통 금지:** ESP32의 Wi-Fi, PSRAM·외부 플래시, 네이티브 USB. 업로드와 로그는 UART0만 쓴다
+(V2는 ADC2·USB 핀을 측정에 쓰고, GPIO35가 PSRAM 핀과 겹친다). 이유는 [`AGENTS.md`](AGENTS.md).
 
-### 바닥 센서 최적화와 고정 기체 조건
+## 2. 현재 상태 (2026-11-08)
 
-AS7341을 약 5ms 단일 수광(F2/F3/F5/F6/F7/Clear) 연속 측정으로 변경했다.
-새 측정 3회 확인은 유지한다. 수광·게인·센서별 LED·검정 임계값·비율/밝기 판별 허용 범위를
-`ESP_MAIN/include/sensors/sensor_config.hpp`에 모았다. 실물 성능은 아직 검증되지 않았다.
-기체는 추가 가림막 없이 자체 LED를 사용하며 10mm 단차에서 센서-바닥 간격이 3/10/20mm로 변한다.
-근접 포화, 먼 거리에서 검정 오인, 색 경계 혼합을 반드시 고려한다.
-교정 높이 안내와 튜닝 방법은 [센서 조정 안내](ESP_MAIN/README.md#바닥센서-조정--2026-10-05)를 읽는다.
+| 영역 | 상태 | 실물 확인 |
+|---|---|---|
+| V2 기판, 모터 방향·좌우 출력 | 11/4 드라이버 교체 뒤 동작 | 확인 |
+| SW1·SW2 0.5초 유지 | 구현 | 확인 (11/4) |
+| 바닥 센서 4개 읽기 | 동작. 4번 센서는 어둡게 읽혀 11/8 교체 | 교체 후 교정 필요 |
+| 12단계 색 교정 (벤치 GUI) | 구현, 11/7 시험 성공 | 11/9 다시 교정 |
+| 라즈 → ESP32 UART | 50Hz 송신, ESP32 수신 확인 (11/4) | 확인 |
+| 라즈 타워 검출·설정 앱 | HSV 검출기, 720p 60fps, 셔터 1ms | 실내 확인, 경기장 조명은 미확인 |
+| 경기용 FSM | 탐색·확인·정렬·접근·돌진·브레이크·삽입·밀기·후진·홈 탈출·무작위 순회 | **보드에 올려 주행한 적 없음** |
+| 뒤집힘 비상정지 (IMU 80°, 3초) | 구현 (11/07) | 미확인 |
+| 센서 통신 끊김 재시도 (최대 3번, 1초 간격) | 구현 (11/08) | 미확인 |
+| 출력 상한 710 (밀기 650 + 조향 60) | 구현 (11/08) | 발열 미확인 |
+| PC 회귀 시험·빌드 | 통과 (11/08) | 실물 보증 아님 |
 
-## 저장소 안내
+**남은 것 (11/9 현장):** 기구 마무리 → 규정 실측(바닥 간격 10mm 이상, 무게, 크기) → 턱 시험물로 바퀴 결정
+→ 12단계 색 교정 → 경기 펌웨어 첫 업로드(바퀴 띄우고) → 홈 회피·탐색·밀기 → 리허설.
+날짜별 계획은 일정 페이지(`schedule/`)에 있다.
 
-- [`ESP_MAIN/`](ESP_MAIN/): 주행 펌웨어와 하드웨어 없는 자동 시험.
-- [`ESP_MAIN/README.md`](ESP_MAIN/README.md): 펌웨어의 의도·파일별 역할·안전/FSM·센서·통신·사용법 전체 설명.
-- [`ESP_MAIN/BENCH_TESTS.md`](ESP_MAIN/BENCH_TESTS.md): 별도 시험 펌웨어의 모터/수동 UART/데이터/회전 정렬/추적/구역 회피 모드.
-- [`ESP_MAIN/VERIFICATION.md`](ESP_MAIN/VERIFICATION.md): 요구사항 대응, 실행 흐름, 수정 내역, 시험 범위와 한계.
-- [`ESP_MAIN/AGENTS.md`](ESP_MAIN/AGENTS.md): 사용자 요구사항과 다른 AI/개발자를 위한 작업 기준.
-- [`scripts/`](scripts/): 영상 처리·시험 영상 준비 등의 파이썬 코드.
-- [`COLOR_DETECTOR.md`](COLOR_DETECTOR.md): 기존 영상 검출기 실행·튜닝 안내.
-- [`PCB/`](PCB/): 회로 설계 자료. 펌웨어 핀의 기준은 `ESP_MAIN/include/pins.hpp`다.
-- [`PCBV2/`](PCBV2/): V2 회로/PCB, 프로젝트 라이브러리, 3D 모델, 제작 자료와 설계 백업.
-  V2 자료를 보관하지만 ESP32 펌웨어는 여전히 V1 핀 배치다.
+PC 시험·빌드 통과를 실제 차량 동작의 보증으로 읽지 않는다. 표의 "미확인"은 실물에서 확인되지 않은 것이다.
 
-영상 처리 파이썬 코드의 존재와 현재 ESP32 패킷 규격의 종단간 호환성 검증은 별개다.
-실제 라즈 송신기와 UART 연결 시험은 남아 있다.
+## 3. 폴더 안내
 
-## 펌웨어 구조
+| 폴더 / 파일 | 내용 |
+|---|---|
+| [`ESP_MAIN/`](ESP_MAIN/) | ESP32-S3 펌웨어 (PlatformIO), PC 회귀 시험, 벤치 GUI (`tools/bench_gui.py`) |
+| [`ESP_MAIN/archive/`](ESP_MAIN/archive/) | 10/31에 은퇴시킨 펌웨어 환경(V1, TCS34725, 예전 벤치·교정). 빌드되지 않음 |
+| [`scripts/`](scripts/) | 라즈베리파이 영상 검출·UART 송신·설정 앱·시스템 서비스, 예전 영상 실험 코드 |
+| [`config/`](config/) | 예전 검출기 설정 JSON. 지금 쓰는 `tower_hsv.json`, `camera.json`은 **라즈에만 있음**(Git 밖) |
+| [`tests/`](tests/) | 라즈 쪽 파이썬 시험 (패킷, 검출기, Wi-Fi 복구) |
+| [`cv_tests/`](cv_tests/) | 10/06 색 필터 비교 실험. 지금 검출기(`tower_detector_hsv.py`)의 근거 |
+| [`fsm_sim/`](fsm_sim/) | 브라우저 2D FSM 시뮬레이터 (10/18–19). 펌웨어와 별개 |
+| [`mechanical/belt/`](mechanical/belt/) | 벨트 구동계 계산·DXF·STEP 검토본 (10/10) |
+| [`PCB/`](PCB/), [`PCBV2/`](PCBV2/) | V1·V2 회로와 PCB 자료. 펌웨어 핀의 원본은 `pins.hpp`·`pins_v2.hpp`이지 이 폴더가 아님 |
+| [`schedule/`](schedule/) | 팀 일정 페이지 (일정, 인수인계, 규정 점검, 로봇 설명 탭) |
+| `2026년 IRC 씨름 로봇 규정-20260511.pdf` | 대회 규정 원본 |
+| `dataset/`, `img/`, `samples/` | 영상 검출용 원본 자료. 수정하지 않고 보존 |
+| `COLOR_DETECTOR.md` | 예전 영상 검출기(4필터) 튜닝 안내 |
+| `robot-cg-simulator.html` | 무게중심 계산 도구 |
 
-```text
-ESP_MAIN/
-  include/
-    pins.hpp             V1 GPIO
-    config.hpp           UART/공통 주기
-    motor/motor_config.hpp
-    sensors/sensor_config.hpp
-    control/control_config.hpp
-  src/
-    main.cpp             전체 실행 연결
-    app/                 부팅
-    hardware/            초기 핀 상태/리셋 원인
-    interrupts/          안전/시작 버튼
-    sensors/             측정/색 판별/캘리브레이션
-    communication/       라즈 UART 패킷
-    system/              안전관리/로그/LED
-    control/             FSM/좌우 구동 변환
-    motor/               공용 제어/BTS7960 출력
-    sensor_serial_test.cpp
-  tests/                 생산 소스를 사용하는 PC 자동 검증
-```
+## 4. 펌웨어 요약
 
-기본 실행은 메인 루프이며, 모터 명령 만료만 작은 FreeRTOS 태스크로 별도 감시한다.
-일반 제어 루프에서 수광 시간 전체를 기다리지 않고 센서 읽기를 짧은 단계로 진행한다.
-LED와 이벤트 로그는 제어 뒤에 처리한다.
+자세한 설명은 [`ESP_MAIN/README.md`](ESP_MAIN/README.md). 여기는 큰 흐름만 적는다.
 
 ```text
-부팅 → 시작 대기 → SW2 눌림·해제 → 탐색
-  → 목표 프레임 2회 확인 → 정렬/접근
-  → 돌진 220ms → 브레이크 90ms → 스포크 삽입 350ms → 밀기
-  → 목표 상실 시 제한된 시간만 밀기 → 후진 260ms → 탐색
+전원 → 핀 안전(PWM/EN LOW) → 모터·감시 태스크 → 버튼 → 센서·교정값(NVS) → 라즈 UART → 배터리·IMU
+     → 대기 (LED 초록 깜빡) → SW2 0.5초 눌렀다 떼기 → 출발
 
-위험색 확인 → 공격보다 먼저 위험구역 회피
-SW1 입력   → 일반 실행 종료 → ESTOP만 3초마다 출력 → 재부팅 필요
+loop() 한 바퀴 (약 1~2ms)
+  ① 안전 확인 → ② 라즈 좌표 → ③ 바닥 색 → ④ 배터리·IMU(뒤집힘) → ⑤ 안전 재확인
+  → ⑥ FSM 판단 → ⑦ 좌우 출력 계산 → ⑧ 모터 (상한 710, 80ms 만료) → ⑨ LED·로그
+
+루프 밖: 모터 만료 감시 태스크 (5ms마다, 명령 끊기면 브레이크, SW1 0.5초 판정)
 ```
 
-기동 시간과 출력은 실측 전의 초기값이다. 실제 접촉이나 스포크 삽입 성공을 측정하는 제어는 아니다.
+FSM의 큰 줄기:
 
-## 빌드와 업로드
+```text
+WaitStart → Search(제자리 회전) → TargetConfirm(새 프레임 2장) → TrackAlign / Approach
+  → DiveReady(돌진 650, 0.22초) → DiveBrake(0.09초) → SpokeEngaged(480, 0.35초) → Push(650 + 조향)
+  → 타워를 놓치면 LostTarget(마지막 쪽 1.5초) 또는 Backoff(후진 0.26초) → Search
+라즈가 1초 넘게 끊김 → Wander (무작위 회전·전진 호)
+어느 상태든: 빨강·파랑 바닥 → ZoneEscape 먼저 (노랑은 단차일 뿐 피하지 않음)
+어느 상태든: SW1 0.5초 / 구동 중 SW2 0.5초 / 뒤집힘 80° 3초 → 영구 정지 (재부팅해야 풀림)
+```
 
-PlatformIO가 설치된 터미널에서 실행한다.
-현재 보드 설정은 `esp32-s3-devkitc-1`의 8MB 플래시이며 PSRAM은 사용하지 않는다.
-실제 YD-ESP32-S3 사양과 업로드 포트는 실물에서 확인해야 한다.
+숫자는 모두 실물 미확인 시작값이며 원본은 `ESP_MAIN/include/control/control_config.hpp`다.
+
+바닥 센서는 추가 가림막 없이 자체 백색 LED로 비추고, 10mm 홈 단차 때문에 센서-바닥 간격이
+3mm(밀착)·10mm(평평)·20mm(단차 걸침)로 변한다. 근접 포화, 20mm에서 유색을 검정으로 오인, 색 경계 혼합을
+항상 고려한다. 수광 약 5ms, 게인 X16, LED 20mA는 시작값이다.
+
+## 5. 빌드와 업로드
+
+PlatformIO(espressif32 6.11.0, Arduino core 2.0.17)가 필요하다. 보드 설정은 `esp32-s3-devkitc-1`,
+메모리 타입 `qio_qspi`(PSRAM 금지 때문에 고정), USB CDC 끔.
 
 ```powershell
 cd D:\C_ROBOT\ESP_MAIN
-pio run -e yd_esp32_s3
+pio run -e yd_esp32_s3_v2 -t upload          # 경기용
+pio run -e robot_bench_v2_manual -t upload   # 벤치 + 색 교정
+pio device monitor -b 57600                  # UART0 로그
 ```
 
-| 환경 | 용도 | UART0 모니터 |
-|---|---|---:|
-| `yd_esp32_s3` | 설정 파일에서 선택한 센서의 생산 펌웨어 | 57600 |
-| `yd_esp32_s3_tcs34725` | TCS34725를 지정한 생산 펌웨어 | 57600 |
-| `sensor_serial_test` | 설정 파일에서 선택한 센서 전용 점검 | 115200 |
-| `sensor_serial_test_tcs34725` | TCS34725 센서 전용 점검 | 115200 |
-| `robot_bench` | 설정 파일의 센서로 저출력 단계별 실물 시험 | 57600 |
-| `robot_bench_tcs34725` | TCS34725 실물 시험 | 57600 |
+| 환경 | 용도 | 주의 |
+|---|---|---|
+| `yd_esp32_s3_v2` | 경기용 FSM (기본 환경) | 첫 업로드는 바퀴를 띄우고 SW1에 손이 닿게 |
+| `robot_bench_v2_manual` | 저출력(최대 40%) 시험, 진단, 12단계 색 교정 | PC 쪽은 `tools/bench_gui.py` |
+| `i2c_scanner_v2` | I2C 주소 진단 (모터 꺼짐) | 임시 진단용 |
+| `raw_motor_v2` | 두 모터를 20%로 **자동** 구동 | 안전 기능 없음. 바퀴 띄우고, 모터 전원을 뽑아 멈춤 |
 
-업로드와 생산 펌웨어 모니터:
+한 보드에는 한 환경만 올린다. 교정값은 NVS에 저장돼 벤치와 경기용이 같이 쓰므로, 벤치에서 교정하고
+경기용을 올려도 교정값은 남는다.
 
-```powershell
-pio run -e yd_esp32_s3 -t upload
-pio device monitor -b 57600
-```
+**벤치 GUI (`ESP_MAIN/tools/bench_gui.py`)** 탭: "시험"(모터·센서·IMU·핀 상태, 주행 준비, 배터리 판정 켜기/끄기),
+"색 교정"(12단계 안내, 센서별 스펙트럼 막대), "라즈 카메라". Windows는 `tools/run_bench_gui.cmd`,
+라즈는 바탕화면 "C_ROBOT 벤치 GUI".
 
-센서 전용 점검은 모터 핀을 초기화하거나 변경하지 않고 약 100ms마다 버튼/컬러 원시값을 출력한다.
-**이 환경을 사용할 때는 모터 전원을 분리한다.** 생산 펌웨어의 안전 제어가 실행되는 환경이 아니다.
+**원격 업로드:** ESP32를 라즈 USB에 꽂아 두면 PC에서 빌드한 `.bin` 네 개를 라즈로 보내
+`bash ESP_MAIN/tools/flash_from_pi.sh ~/fw [/dev/ttyACM0]`로 올릴 수 있다 (Tailscale 원격).
 
-## 설정 변경 위치
+## 6. 라즈베리파이 (영상 → ESP32)
 
-| 수정할 내용 | 파일 |
-|---|---|
-| V1 GPIO 배치 | `ESP_MAIN/include/pins.hpp` |
-| UART/로그/버튼 주기 | `ESP_MAIN/include/config.hpp` |
-| PWM, 출력 상한, 모터 방향, 브레이크 조합 | `ESP_MAIN/include/motor/motor_config.hpp` |
-| 센서 종류, TCA 채널, 수광 시간, 게인, 임시 색 임계값 | `ESP_MAIN/include/sensors/sensor_config.hpp` |
-| 탐색·공격·회피 출력/시간, 목표 박스 기준 | `ESP_MAIN/include/control/control_config.hpp` |
-
-기본 환경의 센서 종류는 `sensor_config.hpp`의 다음 한 줄로 선택한다.
-
-```cpp
-#define COLOR_SENSOR_MODEL COLOR_SENSOR_AS7341
-// TCS34725 차량: 위 값을 COLOR_SENSOR_TCS34725로 변경
-```
-
-TCS34725 전용 환경은 빌드 옵션으로 종류를 지정한다.
-종류·수광·게인·채널 설정을 바꾸면 이전 교정 데이터가 호환되지 않아 임시 임계값으로 동작한다.
-센서 위치는 전방 기준 1=왼쪽 위, 2=오른쪽 위, 3=왼쪽 아래, 4=오른쪽 아래다.
-
-## 교정과 오류 처리
-
-시작 대기 중 UART0에 `CAL START`를 입력한다.
-센서 네 개 × 바닥색 네 개 × 평행/들림/눌림 세 자세를 각각 안내받아 측정한다.
-`READY` 후 3초 카운트다운과 3초 측정, `ACCEPT`로 다음 단계, 완료 후 `CAL SAVE`로 저장한다.
-`RETRY`, `BACK`, `ABORT`, `STATUS`, `CAL ERASE`, `CAL MARGIN <색비율%> <밝기%>`도 지원한다.
-교정 중에는 모터가 정지하며, SW2로 중단하면 새로운 눌림·해제 없이 출발하지 않는다.
-
-- 라즈가 없거나 끊겨도 시스템 고장으로 만들지 않고 탐색 등 비전 없는 동작으로 전환한다.
-- 센서 부팅 실패는 부팅을 막지 않는다. 실패 채널은 Unknown으로 남긴다.
-- 센서 I2C/수광 타임아웃은 채널을 제외하고 오류를 기록한다. 자동 재초기화하지 않는다.
-- 모터/애플리케이션 고장은 즉시 정지한다. 오류가 해제되었다고 자동 출발하지 않는다.
-- SW1은 영구 구동 금지다. 스위치 해제나 일반 래치 해제 API로 복구할 수 없다.
-
-## 검증 결과와 재실행
-
-2026-10-05 코드 검토 후 결과:
-
-| 검증 | 결과 |
-|---|---|
-| AS7341 PC 생산 시험 | 12그룹, assert 4,994회 통과 |
-| TCS34725 PC 생산 시험 | 12그룹, assert 4,555회 통과 |
-| PC 벤치 시험 | 두 센서 구성 각각 67회 통과 |
-| ESP32 여섯 환경 빌드 | 모두 성공 |
-| Python 핵심 시험 | 가상 이미지 기반 5개 테스트 통과 |
-| 두 Pi 추적기 | 로컬 영상 각각 20프레임, 화면 없이 실행·종료 확인 |
-
-assert 횟수에는 반복 측정 확인이 포함되며 서로 다른 시나리오 개수는 아니다.
-실제 생산 소스와 `setup()/loop()`를 가짜 GPIO/UART/I2C/NVS에 연결해 검증한다.
-네이티브 g++가 필요하며 PATH 또는 PlatformIO의 `toolchain-gccmingw32`를 사용한다.
-
-```powershell
-cd D:\C_ROBOT\ESP_MAIN
-.\tests\run_host_tests.ps1
-.\tests\run_host_tests.ps1 -Demo
-.\tests\run_host_tests.ps1 -Bench
-```
-
-`-Demo`는 공격 상태와 좌우 출력을 가상 입력으로 보여주는 텍스트 데모다.
-시험 상세와 수정한 오류는 [검증 기록](ESP_MAIN/VERIFICATION.md)에 정리했다.
-
-## 영상 코드의 구성과 의도
-
-바닥의 네 색 판별은 ESP32의 광학 센서 코드다. 아래 Python 코드의 녹색 타워 검출과
-교정 데이터를 공유하지 않는다. 라즈는 영상만 처리하고, 주행 판단/안전은 ESP32에서 수행하는 구조다.
+라즈는 타워를 찾아 좌표만 보낸다. 주행 판단과 안전은 전부 ESP32가 한다. 라즈가 꺼지거나 끊겨도
+ESP32는 120ms 뒤 링크를 끊고 영상 없이 달린다(1초 넘으면 무작위 순회). 라즈는 주행 필수 장치가 아니다.
 
 ```text
-카메라 또는 영상 파일
-  → 저해상도 BGR/ExG 후보 → 후보 ROI 확대 → 원본 해상도 BGR/ExG/HSV/Lab 검증
-  → 마스크 정리 → 연결 성분 / 후보 선택(최대2개) → 전역 좌표
-  → 텍스트 / JSON / 화면 / 성능 보고서
-  → [미구현: 14바이트 UART 패킷 송신] → ESP32 RaspberryLink → FSM → 모터
+Camera Module 3 Wide (720p 60fps, 셔터 1ms)
+  → tower_detector_hsv.py (작은 화면에서 후보 → 원본에서 HSV 확인 → 납작한 것·크기 밖 제외 → 타워 고르기)
+  → vision_packet.py (14바이트 패킷 V1, 1920×1080 좌표로 환산)
+  → pi_vision_sender.py (최신 결과를 20ms마다 = 50Hz, 새 프레임일 때만 sequence 증가)
+  → /dev/ttyAMA0 (GPIO14 TX) → ESP32 UART1 (115200bps, CRC 없음은 의도)
 ```
 
-`pi_green_tracker.py`는 UART 송신을 하지 않는다(`--json`은 표준출력). ESP32 송신은 `scripts/pi_vision_sender.py`가 한다:
-같은 검출기로 처리한 최신 결과를 `/dev/ttyAMA0`(GPIO14 TX/15 RX)에 50Hz로 보내고, 새 프레임을 처리했을 때만 sequence를 올린다.
-2026-11-04 Pi 5 + Camera Module 3 Wide 실측: 타워가 보일 때 검출 약22fps, 송신 50Hz, 누락0 (ESP32 연결 전, 수신 미검증).
-2026-11-05 갱신: 기본 감지기는 `scripts/tower_detector_hsv.py`(여러 색 범위 합치기), 720p 60fps, 셔터 1ms 고정(`scripts/camera_settings.py`).
-라즈 실측 감지 약 50~60fps·4ms·영상 지연 약 16ms, ESP32 수신 확인(LINK 60/60). 설정은 `scripts/tower_settings_app.py`.
-그 JSON에는 현재 박스 폭/높이 등 ESP 패킷 필드가 전부 들어 있지도 않다.
-실물 ALIGN/FOLLOW/AVOID에는 규격 송신기가 필요하며, JSON을 그대로 UART1에 보내면 안 된다.
-50fps 카메라 설정도 실제 처리/송신 50Hz를 증명하지 않는다.
+### 부팅 때 자동으로 도는 것 (systemd)
 
-| 파일 | 역할과 사용 의도 |
+| 서비스 | 하는 일 |
 |---|---|
-| `scripts/color_detection_core.py` | 원본 전체 프레임 검출 기준. BGR/ExG/HSV/Lab, 융합, 모폴로지, 연결 성분, 후보 자료형 |
-| `scripts/color_detection_lightweight.py` | 작은 후보 영상에서 ROI를 찾고 원본 ROI만 정밀 검증. 전역 bbox/centroid/contour 변환으로 계산량 감소 |
-| `scripts/pi_green_tracker.py` | 공유 검출기를 파일/USB카메라/Picamera2에 연결. JSON/미리보기/파일 반복/측정/내보내기 UI |
-| `raspberry_pi_green_tracker_single.py` | 복사하기 쉬운 단일 파일 Pi 검출기. 상단 고정 녹색 임계값과 미소 타워의 엄격한 필터 |
-| `scripts/color_detector_ui.py` | 실행 입구. 기본 단계별 wizard, --advanced-ui 전체 설정 UI, --benchmark 화면 없는 측정 |
-| `scripts/color_detector_wizard.py` | 순서대로 BGR→ExG→HSV→Lab→융합→후처리 튜닝, ROI 자동 조정, 설정/스냅샷/내보내기 |
-| `scripts/benchmark_lightweight_compare.py` | 동일 영상의 전체 프레임/ROI 검출 시간·마스크·후보 비교. 실행 순서를 번갈아 편향 완화 |
-| `scripts/color_detector_export.py` | 기준 검출기의 원본/결과/각 마스크를 분석 영상으로 저장 |
-| `scripts/export_lightweight_full_video.py` | ROI 검출기의 전체 분석 영상 저장. 실제 제어 루프에서 인코딩하지 않고 별도 실행 |
-| `scripts/prepare_test_video.py` | 시험 영상을1920×1080/50fps로 리사이즈·시간 기반 프레임 반복, 메타데이터 검증 |
-| `scripts/green_cylinder_video_live.py` | 초기 녹색 검출기 재생/슬라이더/마스크/샘플 저장. 현재 공유 검출기와 별도 실험 구현 |
-| `scripts/green_cylinder_image_batch.py` | img 이미지의 초기 녹색 후보를 일괄 검출해 주석 이미지/CSV 생성 |
-| `scripts/preprocess_green_images.py` | 초기 영상 검출기 기본 설정으로 이미지·마스크·검출 데이터를 준비 |
-| `scripts/opencv_green_cylinder_demo.py` | 합성 도형으로 OpenCV 검출/마스크 저장의 간단한 설치 점검 |
-| `scripts/face_tracking_demo.py` | Haar 얼굴 검출 설치 점검. 경기 타워 검출이나 FSM에 사용하지 않음 |
-| `cv_live_view.py` | 별도 합성 영상 data/synthetic.avi의 루프 표시 예제. 그 입력 파일이 있어야 하며 주요 Pi 실행 입구가 아님 |
-| `scripts/generate_htd5m_20t_pulley.py` | CadQuery/DXF 기반 기구 STEP/STL 생성. 주행/CV와 무관, 별도 CadQuery 환경 필요 |
-| `scripts/vision_packet.py` | 패킷 V1 인코더. ESP32 파서와 같은 규칙으로 잘못된 패킷은 만들지 않음 |
-| `scripts/pi_vision_sender.py` | 카메라 검출 → 패킷 V1을 UART로 50Hz 송신. `--dry-run`은 UART 없이 출력만 |
-| `tests/test_vision_packet.py` | README 예시 바이트, 무목표 0x30, 거부 규칙, 축척·플래그 검증 |
-| `tests/test_vision.py` | 가상 대상/비대상색·좌표·ROI 병합·경계·마스크 형식 검증. 실제 카메라 성능 시험은 아님 |
-| `setup_raspberry_pi.sh` | Raspberry Pi OS의 OpenCV/NumPy/Picamera2 시스템 패키지 설치 |
-| `run_pi_tracker.sh` | 저장소 위치로 이동 후 Pi 카메라 입력50fps로 공유 추적기 실행 |
+| `c-robot-vision.service` | `pi_vision_sender.py --quiet` 자동 실행. 카메라·검출이 실패하면 끝나고 자동 재시작하지 않음 |
+| `c-robot-netfix.service` | NetworkManager 전에 비어 버린 Wi-Fi 설정 파일 복구 (11/4 전원 차단으로 0바이트가 된 사고) |
+| `c-robot-netsave.service` | 네트워크가 올라오면 Wi-Fi 설정 백업 |
+| `c-robot-wifi-prefer.timer` | 30초마다 caconee22가 보이면 그쪽으로 옮김 (없으면 307) |
 
-공유 검출기는 `config/color_detector_last.json`을 기본값 위에 덮어쓴다.
-단일 파일 추적기는 이 JSON을 읽지 않는다. 따라서 UI 설정을 저장했다고 두 추적기 임계값이
-동시에 바뀌지는 않는다. 단일 파일은 상단 상수를 조정해야 한다.
-예를 들어 순수(0,255,0) 녹색도 단일 파일의 좁은 HSV/Lab 범위 밖이면 거부될 수 있다.
-저해상도 후보를 놓친 대상은 ROI 정밀 검증에 들어오지 않는다. 두 방식의 검출 결과가 항상 같지는 않다.
+### 바탕화면 아이콘
 
-### 로컬 Windows에서 실행
+| 아이콘 | 하는 일 |
+|---|---|
+| C_ROBOT 타워 설정 | 자동 송신 서비스를 잠시 멈추고 `tower_settings_app.py` 실행. 드래그로 타워 색 잡기, 크기·모양·카메라 설정, 저장. 창을 닫으면 서비스 다시 시작. 열려 있는 동안에도 ESP32로 송신은 계속됨 |
+| C_ROBOT 벤치 GUI | `ESP_MAIN/tools/bench_gui.py` |
+| C_ROBOT 카메라 보기 (이전) | 예전 단순 미리보기 |
 
-프로젝트 루트에서 가상환경 Python을 사용한다. 기존 `.venv`가 없다면 생성 후 의존성을 준비한다.
-핵심 CV 실행에는 OpenCV/NumPy가 필요하고 저장소 전체 `requirements.txt`는 다른 실험용 패키지도 포함한다.
+### 라즈 쪽 파일
+
+| 파일 | 역할 |
+|---|---|
+| `scripts/pi_vision_sender.py` | 카메라 → 검출 → 패킷 50Hz 송신. `--dry-run`(UART 없이 출력), `--preview`(설정 앱), `--detector legacy` |
+| `scripts/tower_detector_hsv.py` | 지금 쓰는 검출기. 색 범위 여러 개 합치기, 납작한 녹색 매트 제외, 최근 위치 추적 |
+| `scripts/tower_settings_app.py` | 타워 설정 앱 (색 / 크기·모양 / 카메라 / 프리셋·도구 탭) |
+| `scripts/vision_preview.py`, `vision_preview.sh` | 예전 미리보기 창과 아이콘 실행 스크립트 |
+| `scripts/camera_settings.py` | `config/camera.json` 읽기·쓰기. 기본 720p 60fps, 셔터 1ms(회전 중 번짐), 게인 자동 |
+| `scripts/vision_packet.py` | 패킷 V1 인코더. ESP32 파서와 같은 규칙, 잘못된 패킷은 만들지 않음 |
+| `scripts/pi_netfix.py`, `pi_wifi_prefer.sh` | Wi-Fi 설정 복구·백업, 선호 Wi-Fi로 복귀 |
+| `scripts/*.service`, `*.timer`, `*.desktop` | 위 서비스·아이콘 정의 |
+| `setup_raspberry_pi.sh` | OpenCV·NumPy·Picamera2 시스템 패키지 설치 |
+
+**라즈에만 있는 설정 (Git에 없음):** `config/tower_hsv.json`(타워 색 범위), `config/camera.json`(카메라 설정).
+SD 카드가 망가지면 다시 맞춰야 하므로 대회 전 저장소에 백업해 두는 것이 좋다(아직 안 함).
+
+### 라즈 사용 주의
+
+- 끌 때는 전원 버튼 한 번(정상 종료, 약 10초). 켜다 꺼지기를 반복하면 SD 카드가 상할 수 있다.
+- 전원은 USB-C PD 모듈로만. 예전 XL 벅으로 GPIO 5V에 넣으면 부팅 부하에서 전압이 무너져 꺼진다(11/4).
+- 카메라는 한 프로그램만 열 수 있다. 설정 앱은 아이콘으로 열어야 서비스를 알아서 멈추고 다시 켠다.
+
+### 라즈 시험 (PC에서도 실행 가능)
 
 ```powershell
 cd D:\C_ROBOT
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install opencv-python==4.12.0.88 numpy
-# 기존 환경을 쓰면 위 생성/설치는 생략
-.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --source dataset/videos/irc_highlight_1080p50.mp4 --preview --realtime
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Q 종료, M 마스크 표시, E 전체 파일 내보내기. `--realtime`은 파일 원래 FPS에 맞춰 기다리므로
-순수 처리 성능 시험에서는 빼야 한다. `--loop`는 파일을 반복한다.
-GUI는 실제 데스크톱 세션이 필요하다. 파일/카메라 해상도와 처리 시간은 별도 확인한다.
+`test_vision_packet.py`(패킷 바이트·거부 규칙), `test_tower_detector.py`(검출기), `test_pi_netfix.py`(Wi-Fi 복구),
+`test_vision.py`(예전 검출기). 실제 카메라 성능이나 경기장 조명은 이 시험으로 확인되지 않는다.
 
-화면 유무 비교와 좌표 출력:
+## 7. 시험
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --quiet --benchmark --max-frames 300
-.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --quiet --benchmark --max-frames 300 --preview
-.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --json --max-frames 20
-.\.venv\Scripts\python.exe raspberry_pi_green_tracker_single.py --source dataset/videos/irc_highlight_1080p50.mp4 --preview
+cd D:\C_ROBOT\ESP_MAIN
+powershell -ExecutionPolicy Bypass -File tests/run_host_tests.ps1 -V2      # 경기용 V2 회귀 시험
+powershell -ExecutionPolicy Bypass -File tests/run_host_tests.ps1 -Bench   # 벤치 회귀 시험
+powershell -ExecutionPolicy Bypass -File tests/run_host_tests.ps1          # V1 핀으로도 컴파일 확인
+python tools/test_bench_gui.py                                             # 벤치 GUI 파서 시험
+pio run -e yd_esp32_s3_v2
+pio run -e robot_bench_v2_manual
+```
+
+PC 시험은 실제 `setup()/loop()`와 생산 모듈을 가짜 GPIO·UART·I2C·NVS·시간에 연결해 돌린다.
+11/08 결과: V2 18,516·18,051회 검사, V1 18,490회, 벤치 1,026 + 4회, 두 환경 빌드 성공.
+검사 횟수는 반복 assert를 포함하며 서로 다른 시나리오 개수가 아니다.
+전기적 브레이크, 실제 수광, 스케줄링, 광학 성능은 이 시험으로 증명되지 않는다.
+
+## 8. 일정 페이지
+
+[`schedule/index.html`](schedule/index.html)이 원본이다. 로컬 미리보기는 저장소 루트에서:
+
+```powershell
+python -m http.server 8765 --bind 127.0.0.1 --directory schedule
+```
+
+http://127.0.0.1:8765 에서 연다. 탭: 일정, 인수인계·작업 안내, 규정 점검(실격·실점 위험과 11/9 확인표),
+로봇 설명(메인 워크플로, FSM 상태도, LED 색 읽는 법, 증상별 고칠 곳). 팀원용 사본은 claude.ai 페이지로 올린다
+(자세한 내용은 [`schedule/README.md`](schedule/README.md)).
+
+## 9. 예전 영상 코드 (보존용)
+
+10월 초에 만든 4필터(BGR/ExG/HSV/Lab) 검출기와 실험 도구다. 지금 경기용 송신은 위 6절의 HSV 검출기를 쓴다.
+비교와 재현을 위해 지우지 않는다. `pi_vision_sender.py --detector legacy`로 예전 검출기를 쓸 수 있다.
+
+| 파일 | 역할 |
+|---|---|
+| `scripts/color_detection_core.py` | 원본 프레임 검출 기준: BGR/ExG/HSV/Lab, 융합, 모폴로지, 연결 성분 |
+| `scripts/color_detection_lightweight.py` | 작은 영상에서 후보 ROI를 찾고 원본 ROI만 정밀 검증 |
+| `scripts/pi_green_tracker.py` | 공유 검출기를 파일·USB 카메라·Picamera2에 연결. JSON 표준출력, 미리보기 (UART 송신 없음) |
+| `raspberry_pi_green_tracker_single.py` | 복사하기 쉬운 단일 파일 검출기. `config/*.json`을 읽지 않음 |
+| `scripts/color_detector_ui.py`, `color_detector_wizard.py` | 단계별 튜닝 UI (`config/color_detector_last.json` 저장) |
+| `scripts/benchmark_lightweight_compare.py`, `color_detector_export.py`, `export_lightweight_full_video.py` | 속도 비교, 분석 영상 저장 |
+| `scripts/prepare_test_video.py` | 시험 영상을 1920×1080/50fps로 변환 |
+| `scripts/green_cylinder_*.py`, `preprocess_green_images.py`, `opencv_green_cylinder_demo.py`, `face_tracking_demo.py` | 초기 실험·설치 점검 |
+| `scripts/generate_htd5m_20t_pulley.py` | CadQuery로 풀리 STEP/STL 생성 (영상과 무관) |
+| `cv_live_view.py`, `test_hsv_tower.py`, `run_pi_tracker.sh` | 단독 예제·시험, 예전 추적기 실행 래퍼 |
+
+예전 검출기 실행 예 (Windows):
+
+```powershell
+cd D:\C_ROBOT
+.\.venv\Scripts\python.exe scripts/pi_green_tracker.py --source dataset/videos/irc_highlight_1080p50.mp4 --preview --realtime
 .\.venv\Scripts\python.exe scripts/color_detector_ui.py
 ```
 
-벤치 보고서는 `output/color_detector/benchmarks`에 저장된다. 기본10프레임 예열은 통계에서 제외한다.
-검출 시간과 입력/표시/대기 포함 loop 시간을 구분한다. 일반 실행의 FPS 이력은60프레임으로 제한하고,
-명시적 --benchmark는 전체 통계를 위한 목록을 보관하므로 장시간 운전 옵션이 아니라 유한 시험용으로 쓴다.
-전체 프레임/ROI 비교가 필요하면 benchmark_lightweight_compare.py를 실행한다.
-각 보조 도구의 옵션은 `--help`, 튜닝·GUI·내보내기의 상세 키는 [COLOR_DETECTOR.md](COLOR_DETECTOR.md).
+튜닝 키와 옵션은 [`COLOR_DETECTOR.md`](COLOR_DETECTOR.md)와 각 스크립트의 `--help`. 영상·출력·가상환경은
+`.gitignore`로 제외되므로 새 clone에는 시험 영상이 없을 수 있다.
 
-### 라즈베리파이에서 실행
+## 10. 기체 설계와 기동 전략 — 2026-10-10 기록
 
-Raspberry Pi OS의 Picamera2는 시스템 패키지와 카메라 드라이버가 필요하다.
-일반 PC에 pip로 설치한 OpenCV만으로 카메라 입력이 되지는 않는다.
-
-```bash
-bash setup_raspberry_pi.sh
-python3 -m venv --system-site-packages .venv
-.venv/bin/python scripts/pi_green_tracker.py --source camera --fps 50 --preview
-# 또는 시스템 Python 실행 래퍼:
-bash run_pi_tracker.sh --preview
-```
-
-이미 설정한 환경이라면 설치를 반복할 필요 없다. 현재 Windows 검토는 라즈에 원격 접속하거나
-패키지를 변경하지 않았다. 실행 중인 카메라/GUI/50Hz UART의 실측과 종단간 검증은 남아 있다.
-
-### Python 검증 재실행
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall -q scripts tests cv_live_view.py raspberry_pi_green_tracker_single.py
-```
-
-이 검증은 주요 공유/단일 검출기의 오프라인 논리를 검사한다. 모든 GUI/내보내기/CAD 경로,
-실제 영상의 정답 정확도, 카메라 성능과 UART 송신까지 보증하는 시험은 아니다.
-영상·출력·가상환경·빌드 결과물은 Git에 올리지 않으므로 새 clone에는 기본 시험 영상이 없을 수 있다.
-영상이 없으면 별도로 준비하거나 --source로 실제 파일을 지정한다.
-
-## 기체 설계와 기동 전략 — 2026-10-10
+> 설계 단계의 기록이다. 그 뒤 바뀐 것: V2 기판에 IMU(MPU6050)가 생겼지만 경기용은 뒤집힘 정지에만 쓴다.
+> 리어리프트 공격·턴, 스타트 정렬, 외부 서버 영상처리는 **구현하지 않았다.** 지금 기동은 4절과
+> `ESP_MAIN/README.md` §6이 기준이다.
 
 이 절은 제작 전 기구 설계와 경기 전략의 기준을 기록한다. 사진으로 분석한 다른 팀 로봇의 치수는
 공개 도면이 아닌 원근 보정 기반 추정값이며, 아래 기동 시간·거리·출력은 실물 시험 전에는 확정값으로
@@ -633,15 +592,12 @@ ESP32 영상 신선도와 같은 120ms를 초기 폴백 기준으로 사용한�
 기동 시작 조건에 필요한 영상 정보만 제공하고, 일단 시작한 시간 기반 기동은 ESP32가 로컬에서 끝낸다.
 대회에서 외부 컴퓨터와 무선 통신을 허용하는지는 실제 적용 전에 해당 연도 규정으로 별도 확인한다.
 
-## 다음 단계
+## 11. 하지 않기로 한 것
 
-1. 모터 전원을 분리하고 센서 종류·TCA 채널·원시값부터 확인한다.
-2. 출력 상한을 낮추고 바퀴를 띄워 모터 방향, SW1 브레이크, SW2 시작을 확인한다.
-3. 실제 바닥색과 자세별로 수광·게인·임계값을 교정한다.
-4. 라즈 UART 송신·분리·재부팅을 종단간 시험한다.
-5. 위험색 회피를 먼저 시험한 뒤 공격 출력을 올리고 기동 시간을 튜닝한다.
+- 통신 규격 변경, CRC·ACK 추가 (고정 배선이라 의도적으로 없음)
+- 안전 구조 재작성, 핀 변경 (하드웨어 버전이 바뀔 때만)
+- ESP32 Wi-Fi·OTA·PSRAM·네이티브 USB
+- 추가 가림막·조리개·거리센서 같은 새 기구물이나 센서
+- 자동 재부팅, 반복 재접속 같은 자동 복구 (센서 채널 3회 재시도만 예외)
 
-센서 100Hz는 목표이지 현재 실측 달성 결과가 아니다. AS7341 전체 스펙트럼은 두 번의 수광이 필요하다.
-실제 브레이크 효과, 시간 기반 기동의 기체 안정성, 바닥과 상대 로봇 표면 구분은 실물 검증이 필요하다.
-영상·가상환경·빌드 산출물은 `.gitignore`에 따라 제외한다.
-2026-10-05 추가 작업 반영에는 남은 PCBV2 자료와 파이썬 코드, PNG 실행 화면도 함께 포함했다.
+규칙의 원본은 [`AGENTS.md`](AGENTS.md)다.

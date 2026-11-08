@@ -1,24 +1,35 @@
-# ESP_MAIN — V1 펌웨어 구조와 사용법
+# ESP_MAIN — 펌웨어 구조와 사용법
 
-> **2026-10-31 정리:** 지금 쓰는 펌웨어는 `yd_esp32_s3_v2`(경기용)와 `robot_bench_v2_manual`(벤치 + 색 교정) 두 개뿐이다. 아래에 나오는 V1·TCS34725·`robot_bench`·`robot_bench_v2`·`sensor_serial_test`·`color_calibration` 환경과 `bench_console.py`는 `archive/`로 보관했다 (`archive/README.md`). 색 교정은 `tools/bench_gui.py`의 "색 교정" 탭.
-
-ESP32-S3 / Arduino / PlatformIO 기반 씨름 로봇 제어 코드다.
+ESP32-S3 / Arduino / PlatformIO 기반 씨름 로봇 펌웨어다.
 이 문서는 작업 이력이 아니라 **모듈을 나눈 의도, 실행 순서, 설정 방법과 사용법**을 설명한다.
-최신 검토 기준은 2026-10-05다. 부팅·버튼·센서·교정·비전 수신·안전관리·FSM·모터가 연결돼 있다.
-생산/벤치 코드의 PC 시험과 여섯 ESP32 빌드는 통과했지만 실제 수광·브레이크·제동거리·
-색 임계값·공격 전략은 미검증이다. 빌드 성공을 실제 차량의 완전한 동작 보증으로 해석하지 않는다.
+**2026-11-08 기준**으로 고쳤다.
 
-중요한 연결 공백: 저장소의 라즈 영상 프로그램은 현재 화면/텍스트/JSON 출력만 한다.
-**ESP32용 14바이트 UART 송신기는 아직 연결되지 않았다.** ESP32 수신부 구현과
-카메라부터 모터까지의 종단간 동작 완료는 다르다.
+- 지금 쓰는 펌웨어는 두 개다: 경기용 `yd_esp32_s3_v2`, 벤치·색 교정 `robot_bench_v2_manual`. 둘 다 V2 기판용이다.
+- V1·TCS34725·예전 벤치·센서 점검·단독 교정 환경은 10/31에 `archive/`로 보관했다 ([archive/README.md](archive/README.md)).
+  공용 모듈 안의 V1 핀(`pins.hpp`)과 TCS34725 코드는 그대로 있고, PC 시험은 V1 핀으로도 컴파일한다.
+- 부팅·버튼·센서·교정·라즈 수신·안전관리·IMU 뒤집힘·FSM·모터가 연결돼 있고, PC 회귀 시험과 두 환경 빌드는 통과했다.
+- 라즈 → ESP32 패킷 수신은 11/4 실물에서 확인했다(초당 50패킷, 오류 0).
+- **경기용 펌웨어는 아직 보드에 올려 주행하지 않았다.** 수광·브레이크·제동거리·색 임계값·공격 전략은 미검증이다.
+  빌드 성공을 실제 차량의 동작 보증으로 해석하지 않는다.
+
+먼저 읽을 것: 구조 요약 [MAP.md](MAP.md), 규칙 [AGENTS.md](AGENTS.md), 현장 팀원용 [TEAM_GUIDE.md](TEAM_GUIDE.md),
+실물 시험 [BENCH_TESTS.md](BENCH_TESTS.md), 검증 기록 [VERIFICATION.md](VERIFICATION.md).
 
 ## 1. 하드웨어 범위
 
-현재 코드는 **V1**이다. PCBV2 핀을 적용하지 않는다. V2는 브랜치 `v2/firmware-prep`에서 준비한다.
+지금 기체는 **V2 기판**이다. 빌드 플래그 `-D HW_VERSION=2`가 있으면 `include/pins.hpp`가 `include/pins_v2.hpp`를 불러오고,
+없으면 V1 핀이다. 같은 하드웨어 버전 안에서 핀은 바꾸지 않는다.
 **Wi-Fi, 외부 플래시·PSRAM, 네이티브 USB는 V1·V2 모두 사용 금지다.** 업로드와 로그는 UART0만 쓴다.
-네 모서리 컬러 센서만 사용하며 IR·IMU·전류·엔코더·배터리 ADC는 없다.
-한 차량에 AS7341 네 개 또는 TCS34725 네 개를 사용한다. 두 종류를 동시에 섞는 구성은 아니다.
-모터 1은 왼쪽, 2는 오른쪽이며 엔코더 속도/PID가 아닌 PWM 명령으로 구동한다.
+
+| 장치 | V2 경기용에서 쓰는 방식 |
+|---|---|
+| 바닥 컬러 센서 AS7341 ×4 | TCA9548A 채널 0~3, 바닥 색 판별 |
+| IMU MPU6050 | I2C 본선 직결. 경기용은 뒤집힘 비상정지(TiltGuard)에만 사용 |
+| 배터리 분압(×11) | 전원 투입 3초 동안 3S·4S 판정 (NVS로 켜고 끔) |
+| BTS7960 ×2 | 모터 1 = 왼쪽, 2 = 오른쪽. PWM 명령 구동(엔코더·PID 없음), 모터당 EN 하나 |
+| 전류 감지(IS), IR 입력 6개 | 핀만 있음, 경기용에서 쓰지 않음 (벤치 GUI 핀 상태 판에만 표시) |
+| 엔코더 핀 | 사용 안 함, 초기화도 하지 않음 |
+| WS2812 | 내장 LED 하나(GPIO48). V2에는 외부 LED가 없다 (GPIO13은 IR6) |
 
 ```text
              기체 전방 / 카메라
@@ -27,44 +38,39 @@ ESP32-S3 / Arduino / PlatformIO 기반 씨름 로봇 제어 코드다.
            S3(RL)       S4(RR)
 ```
 
-S1..S4는 사용자 표시 번호다. 배열 인덱스와 TCA 기본 채널은 0..3이다.
+S1..S4는 사용자 표시 번호다. 배열 인덱스와 TCA 채널은 0..3이다.
 동일 주소 센서의 충돌을 막기 위해 매 거래 전에 TCA 채널 하나만 선택한다.
 
-| 신호 | GPIO | 의미 |
+| 신호 | V2 GPIO | 의미 |
 |---|---:|---|
 | SW1 / SW2 | 15 / 16 | GND 연결 능동 LOW, 내부 풀업 |
-| UART0 TX / RX | 43 / 44 | 이벤트 로그, 벤치 콘솔 또는 교정 콘솔, COM/SiK 공유 |
-| UART1 TX / RX | 17 / 18 | 라즈 UART, 상대 TX→ESP RX, 공통 GND |
-| I2C SDA / SCL | 11 / 12 | TCA9548A 기본 0x70 |
-| 내장 / 외부 WS2812 | 48 / 13 | 각각 1개 |
-| 왼쪽 LPWM / RPWM | 42 / 41 | BTS7960 Motor 1 |
-| 왼쪽 LEN / REN | 40 / 39 | V1 독립 EN 핀 |
-| 오른쪽 LPWM / RPWM | 38 / 47 | BTS7960 Motor 2 |
-| 오른쪽 LEN / REN | 21 / 14 | V1 독립 EN 핀 |
+| UART0 TX / RX | 43 / 44 | 업로드, 이벤트 로그(57600), 벤치 콘솔 |
+| UART1 TX / RX | 17 / 18 | 라즈 UART (115200), 상대 TX→ESP RX, 공통 GND |
+| I2C SDA / SCL | 11 / 12 | TCA9548A(0x70), MPU6050(0x68) |
+| 왼쪽 LPWM / RPWM / EN | 42 / 41 / 40 | BTS7960 모터 1 |
+| 오른쪽 LPWM / RPWM / EN | 47 / 21 / 35 | BTS7960 모터 2 |
+| 배터리 ADC | 14 | 분압 ×11 |
 
-`include/pins.hpp`는 커넥터 순번이 아니라 Arduino에 직접 넣는 GPIO 번호다.
-UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC 대신 GPIO UART0를 사용한다.
+원본은 `include/pins_v2.hpp`이며 표와 다르면 코드가 맞다. 오른쪽 EN(GPIO35)은 PSRAM 핀과 겹칠 수 있어서
+메모리 타입을 `qio_qspi`로 고정했다. 전원 투입 때 튀는지 확인하는 방법과 대체 핀은 [AGENTS.md](AGENTS.md) "V2 오른쪽 모터 EN".
+V1 핀(`include/pins.hpp`)은 보관된 V1 환경과 PC 시험용으로 남아 있다.
 
-## 2. 세 종류의 펌웨어를 분리한 이유
+## 2. 펌웨어 환경
 
 보드에는 아래 중 하나만 업로드한다. 여러 `setup()/loop()`를 같이 실행하지 않는다.
+`platformio.ini`의 `build_src_filter`가 진입점을 나누며 공용 센서·모터 코드를 복제하지 않는다.
 
-| PlatformIO 환경 | 진입 파일 | 용도 | UART0 |
+| 환경 | 진입 파일 | 용도 | UART0 |
 |---|---|---|---:|
-| `yd_esp32_s3` | `src/main.cpp` | 설정 파일의 센서로 생산 FSM | 57600 |
-| `yd_esp32_s3_tcs34725` | 같은 파일 | TCS34725 강제 지정 생산 FSM | 57600 |
-| `robot_bench` | `src/bench_main.cpp` | 저출력 모터·수동·데이터·비전 시험 | 57600 |
-| `robot_bench_tcs34725` | 같은 파일 | TCS34725 벤치 | 57600 |
-| `sensor_serial_test` | `src/sensor_serial_test.cpp` | 설정 파일의 센서 원시값만 확인 | 115200 |
-| `sensor_serial_test_tcs34725` | 같은 파일 | TCS34725 원시값만 확인 | 115200 |
-| `color_calibration` | `src/calibration_main.cpp` | 설정 파일의 센서로 48단계 교정, NVS 저장 | 57600 |
-| `color_calibration_tcs34725` | 같은 파일 | TCS34725 교정 | 57600 |
-| `yd_esp32_s3_v2`, `robot_bench_v2`, `sensor_serial_test_v2`, `color_calibration_v2` | 각 진입 파일 | V2 기판용 (`pins_v2.hpp`), 실물 미검증 | 위와 같음 |
+| `yd_esp32_s3_v2` (기본) | `src/main.cpp` | 경기용 FSM | 57600 |
+| `robot_bench_v2_manual` | `src/bench_v2_main.cpp` → `src/bench_v2/` | 저출력(최대 40%) 시험·진단·12단계 색 교정 | 57600 |
+| `i2c_scanner_v2` | `src/i2c_scanner_main.cpp` | I2C 주소·풀업 진단. 모터 출력 LOW 유지 | 57600 |
+| `raw_motor_v2` | `src/raw_motor_main.cpp` | 두 모터를 20%로 **자동** 구동. 안전 기능 없음 | 57600 |
 
-생산 환경은 벤치 컨트롤러를 빌드하지 않는다. 벤치는 생산 FSM 메인을 실행하지 않는다.
-센서 전용과 교정 펌웨어는 모터·버튼 ISR·시스템 안전관리도 실행하지 않는다.
-**센서 전용 시험에서는 모터 전원을 물리적으로 분리한다.**
-`platformio.ini`의 source filter가 진입점을 나누며 공용 센서/모터 코드를 복제하지 않는다.
+- 경기용은 벤치 컨트롤러와 교정 코드를 빌드하지 않는다. 벤치는 경기용 FSM을 실행하지 않는다.
+- 교정값은 NVS에 저장되므로 벤치에서 교정하고 경기용을 올려도 남는다.
+- `raw_motor_v2`는 바퀴를 띄우고 모터 전원을 뽑아서 멈춘다. SW1도 듣지 않는다.
+- `i2c_scanner_v2`와 `raw_motor_v2`는 `upload_port = COM9`가 박혀 있으니 다른 PC에서는 고친다.
 
 ## 3. 파일을 나눈 의도와 책임
 
@@ -75,8 +81,8 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 | 파일 / 모듈 | 만든 이유와 실제 책임 |
 |---|---|
 | `platformio.ini` | 플랫폼/보드/라이브러리 버전 고정, 진입점 선택. 현재 8MB DevKitC, PSRAM 미사용 |
-| `include/pins.hpp` | V1 배선의 유일한 코드 기준. ISR EN 마스크도 이 정의 사용 |
-| `include/config.hpp` | UART 속도·신선도·버튼·LED·로그의 공통 시간/용량 |
+| `include/pins.hpp`, `include/pins_v2.hpp` | 배선의 유일한 코드 기준. `HW_VERSION=2`면 V2. PSRAM·USB CDC 설정이면 빌드 중단. ISR EN 마스크도 이 정의 사용 |
+| `include/config.hpp` | UART 속도·신선도·버튼·LED·로그·배터리 셀 수의 공통 시간/용량 |
 | `include/robot_types.hpp` | 안전·센서·비전 스냅샷, FSM 상태, 주행 의도, 모터 명령 연결 자료형 |
 | `src/main.cpp` | 생산 실행 순서 연결. 레지스터/PWM 계산은 직접 구현하지 않음 |
 | `app/boot_manager` | 초기 핀 안전부터 필수 모듈 초기화까지 순서 보장, 필수 모터 실패 시 구동 금지 |
@@ -85,28 +91,35 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 | `interrupts/button_interrupts` | SW1 영구 래치, SW2 에지·디바운스·해제 이벤트, ESTOP 영구 루프 |
 | `system/system_manager` | SW2 이벤트 단독 소비자. 운전 요청·집계 고장을 합쳐 motorAllowed 결정 |
 | `system/event_logger` | 번호/문자열 고정 큐, 변경·중복 억제, 일반 UART 쓰기 지연 |
-| `system/status_led` | 주체별 요청 보존, 우선순위·TTL로 두 WS2812 표시 결정 |
+| `system/status_led` | 주체별 요청 보존, 우선순위·TTL로 WS2812 표시 결정 (V2는 내장 LED 하나) |
+| `system/battery_monitor` | V2: 전원 투입 3초 동안 3S·4S 판정, 판정 전 SW2 시작 보류, 실패 시 시작 금지 |
+| `system/battery_setting` | 배터리 판정 켜기/끄기 NVS 값 (벤치 `BAT CHECK ON/OFF`) |
+| `sensors/imu_monitor` | V2: MPU6050 원시값 10ms마다 읽기. 융합·위치 추정 없음. 고장 시 FAULT로 멈추고 자동 재시도 없음 |
+| `system/tilt_guard` | V2: 정지 중 중력 방향을 수평 기준으로 학습, 구동 중 80° 넘게 3초면 영구 비상정지 |
 | `sensors/color_sensor_types` | 모델·모서리·색·원시값·교정 기준·판정 결과와 출력 이름 |
 | `include/sensors/sensor_config.hpp` | 모델, 수광·게인·조명, TCA 채널, 확정 횟수, 임시 임계값, 교정 여유 |
-| `sensors/color_sensor_manager` | Wire/TCA/레지스터 담당. 수광 완료 확인과 새 원시 측정 발행 |
+| `sensors/color_sensor_manager` | Wire/TCA/레지스터 담당. 수광 완료 확인과 새 원시 측정 발행. 꺼진 채널은 최대 3번, 1초 간격 재초기화 |
 | `sensors/floor_color_classifier` | 원시값을 네 바닥색/Unknown으로 판별. I2C·UART·모터를 건드리지 않음 |
 | `sensors/calibration_store` | NVS 교정값 읽기·검증·저장·삭제. 생산은 부팅 때 읽기만 함 |
-| `calibration/color_calibration` | 교정 펌웨어 전용 UART 안내식 48단계 교정. 생산에 링크되지 않음 |
-| `src/calibration_main.cpp` | 교정 펌웨어 진입점. 모터 미초기화, 모터 핀 LOW 고정 |
+| `calibration/color_calibration` | UART 안내식 12단계 교정. 벤치 펌웨어에만 링크되고 경기용에는 없음 |
 | `sensors/sensor_manager` | 새 sequence만 판별, 3회 확정, 무효/오래된 판정 폐기, 오류 변경 기록, snapshot |
 | `include/communication/vision_protocol.hpp` | 패킷·상태 비트·범위·오류번호. Pi 송신기와 맞춰야 하는 계약 |
 | `communication/raspberry_link` | UART1 재조립, 헤더 재동기화, 중복 sequence와 영상 신선도 처리 |
 | `include/control/control_config.hpp` | 생산 출력·중심 기준·공격/탈출 시간·위험색 마스크 |
 | `control/robot_fsm` | 안전/바닥/비전으로 무엇을 할지 판단하고 DriveIntent 반환. GPIO 직접 제어 없음 |
+| `control/wander` | 라즈가 1초 넘게 끊겼을 때 무작위 회전·전진 호 (같은 동작 반복 = 고장 판정 실점 회피) |
 | `control/drive_logic` | 의도를 좌우 MotorCommand와 80ms 기한으로 변환 |
 | `include/motor/motor_config.hpp` | PWM·방향 반전·출력 상한·명령 만료·브레이크 전기 조합 |
 | `motor/motor_controller` | 공용 API, 안전 검사, 제한, 뮤텍스, 만료 감시 태스크, 상태 반환 |
 | `motor/bts7960_driver` | BTS7960 하나의 실제 PWM/EN 쓰기, 방향 전환 deadtime, 영구 금지 확인 |
-| `src/bench_main.cpp` | 벤치 콘솔·안전·센서/비전·CSV 연결. 교정은 하지 않고 NVS 값만 사용 |
+| `bench_v2/bench_v2_app` | 벤치 진입. 콘솔·안전·센서/IMU/배터리·라즈·핀 상태 출력·교정 연결 |
+| `bench_v2/software_switches` | 벤치 전용 콘솔 `SW1`/`SW2` (물리 버튼과 같은 규칙, 경기용에는 없음) |
+| `bench_v2/i2c_scan` | 벤치 콘솔 `I2C SCAN` |
 | `bench/bench_controller` | MOTOR/MANUAL/DATA/ALIGN/FOLLOW/AVOID의 시간 기반 명령 생성 |
 | `include/bench/bench_config.hpp` | 시험 출력/유지시간/추적·회피 조건. 생산 전략 설정과 분리 |
-| `src/sensor_serial_test.cpp` | 모터를 건드리지 않고 100ms마다 버튼/센서 원시값 출력 |
-| `tests/run_host_tests.ps1` | 실제 소스를 PC 가짜 하드웨어에 연결해 두 모델 컴파일/실행 |
+| `tools/bench_gui.py` | PC·라즈용 벤치 GUI (시험 / 색 교정 / 라즈 카메라 탭), `tools/test_bench_gui.py`로 시험 |
+| `tools/flash_from_pi.sh` | 라즈에 꽂힌 ESP32에 PC에서 빌드한 `.bin` 올리기 (원격 업로드) |
+| `tests/run_host_tests.ps1` | 실제 소스를 PC 가짜 하드웨어에 연결해 컴파일/실행 (`-V2`, `-Bench`) |
 | `tests/host/test_firmware.cpp` | 생산 모터·안전·FSM·UART·센서·교정·로그·메인 연결 회귀 시험 |
 | `tests/host/test_bench.cpp` | 모드 시간·수동 만료·추적/회피·콘솔·벤치 메인 회귀 시험 |
 | `tests/host/fake_hardware.cpp` 및 shim 헤더 | 가상 시간/GPIO/UART/I2C/NVS/태스크. 생산 알고리즘은 대체하지 않음 |
@@ -119,25 +132,33 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 
 ```text
 전원/리셋
-  → PWM/EN LOW → 리셋 원인 → UART0 → 모터/PWM/만료 감시
-  → 버튼 ISR → LED → 컬러 센서/NVS → UART1 → 시스템 관리자
-  → 시작 대기 → SW2 정상 눌림/해제 → Running
-  (교정은 color_calibration 펌웨어를 따로 업로드해서 진행)
+  → PWM/EN LOW → 리셋 원인 → UART0 → 모터/PWM/만료 감시 태스크
+  → 버튼 ISR → LED → 컬러 센서/NVS 교정값 → UART1 → 시스템 관리자
+  → 배터리 판정 시작(V2, 켜져 있으면 약 3초, LED 흰색 깜빡) → IMU·TiltGuard(V2)
+  → 시작 대기 (LED 초록 깜빡) → SW2 0.5초 눌렀다 떼기 → Running
 
-생산 loop()
-  안전/버튼 → 라즈 수신 → 센서 짧은 I2C 단계 → 안전 재확인
-  → 센서/비전 snapshot → FSM 의도 → 좌우 명령 → 제한/PWM
-  → LED → 이벤트 큐 출력 → delay(1)
+경기용 loop() (src/main.cpp)
+  SystemManager::update      ① 안전/버튼
+  RaspberryLink::poll        ② 라즈 UART1 최대 128바이트
+  SensorManager::update      ③ 센서 짧은 I2C 단계 (꺼진 채널 재시도 한 단계 포함)
+  BatteryMonitor::update     ④ 전원 투입 3초 안에서만 판정
+  ImuMonitor::update + TiltGuard::update   ④ 뒤집힘 3초면 triggerEmergencyStop
+  SystemManager::update      ⑤ 안전 재확인 (의도된 반복)
+  RobotFsm::update           ⑥ 센서·비전 snapshot → DriveIntent
+  DriveLogic::makeCommand    ⑦ 좌우 출력, 80ms 기한
+  MotorController::apply / brake   ⑧ 허용될 때만 출력, 상한 710
+  StatusLed::update, EventLogger::process, delay(1)   ⑨ 낮은 우선순위
 
 독립 경로
-  SW1 0.5초 연속 눌림(루프·만료 태스크 확인) → 영구 구동 금지 + EN LOW
-           → 일반 문맥 브레이크 → ESTOP만 3초마다 → 재부팅 필요
-  모터 만료 태스크 → 마지막 명령 기한 확인 → 만료 시 브레이크
+  SW1: ISR은 에지만 표시 → 메인 루프와 만료 감시 태스크가 0.5초 연속 눌림 확인
+       → 영구 구동 금지 + EN LOW → 일반 문맥 브레이크 → ESTOP만 3초마다 → 재부팅 필요
+  모터 만료 감시 태스크(5ms) → 마지막 명령 기한 확인 → 만료 시 브레이크
 ```
 
-컬러 센서 초기화 실패는 부팅 실패로 만들지 않는다. 라즈도 필수 부팅 장치가 아니다.
-모터 초기화/감시 태스크 생성 실패는 구동을 막는다.
-각 `begin()`은 부팅용이며 운전 중 반복 초기화/자동 복구나 SW1 래치 우회용으로 호출하지 않는다.
+컬러 센서 초기화 실패는 부팅 실패로 만들지 않는다. 라즈와 IMU도 필수 부팅 장치가 아니다.
+모터 초기화/감시 태스크 생성 실패는 구동을 막고(LED 빨강·흰색 교대), `BootFailed`를 한 번 기록한다.
+각 `begin()`은 부팅용이며 운전 중 반복 초기화나 SW1 래치 우회용으로 호출하지 않는다.
+예외는 꺼진 센서 채널의 최대 3번 재초기화뿐이다(11/08 결정).
 
 ## 5. 안전 조건과 의도된 예외
 
@@ -158,7 +179,7 @@ UART0 RX에 COM/SiK의 TX 두 개를 동시에 구동하지 않는다. USB CDC �
 | 라즈 없음/영상 오래됨 | 1초 넘으면 무작위 순회(Wander), 짧은 공격은 지속 가능 | 추적 정지; AVOID 진행 중 탈출은 우선 |
 | 센서 하나/전부 없음 | Unknown, 주행 시작 허용 | AVOID는 정지, 나머지 주행 모드는 가능 |
 | 색 변경 후 3회 확정 중 | Unknown은 위험색이 아님 | AVOID는 Unknown 때문에 정지 |
-| 센서 I2C/변환 고장 | 채널 제외, 재부팅 전 자동 초기화 없음 | 동일 |
+| 센서 I2C/변환 고장 | 채널 제외, 1초 간격 최대 3번 재초기화, 그래도 안 되면 재부팅 전까지 꺼짐 | 동일 |
 | 무수광/포화 | 그 측정 무효, 채널 유지 | 동일 |
 | 모터/애플리케이션 집계 고장 | 즉시 정지·운전 요청/버튼 제스처 폐기 | 동일 |
 | 명령 만료 | 브레이크, 새 유효 명령은 적용 가능 | 동일 |
@@ -294,30 +315,23 @@ TCS 전용 환경은 빌드 옵션 `COLOR_SENSOR_MODEL=2`로 기본값을 덮어
 
 ## 9. 컬러 교정 사용법
 
-교정은 **별도 펌웨어** `color_calibration`(TCS는 `color_calibration_tcs34725`)에서 한다.
-생산·벤치 펌웨어에는 교정 콘솔이 없고 부팅 때 NVS 값만 읽는다.
-교정 펌웨어는 모터를 초기화하지 않고 모터 핀을 LOW로 고정하지만, 모터 전원은 분리한다.
-네 채널 모두 초기화돼야 CAL START를 받는다. LF/CRLF 줄바꿈, 소문자는 대문자로 변환한다.
-
-```powershell
-pio run -e color_calibration -t upload
-pio device monitor -b 57600
-# CAL SAVE 후
-pio run -e yd_esp32_s3 -t upload
-```
+교정은 **벤치 펌웨어** `robot_bench_v2_manual` 안에서 한다. 경기용에는 교정 콘솔이 없고 부팅 때 NVS 값만 읽는다.
+보통은 `tools/bench_gui.py`의 "색 교정" 탭이 아래 명령을 대신 보내고 단계마다 안내한다.
+교정 중에는 모든 콘솔 줄이 교정으로 가고(`MODE`·`DRIVE` 무시), 모터는 매 루프 브레이크, 시험 로그는 멈추며
+250ms마다 `CAL,…` 상태 줄을 낸다. 그래도 모터 전원은 분리하는 것을 권한다. 네 채널 모두 준비돼야 시작한다.
 
 ```text
 CAL START
-READY
-# 준비1초 + 측정1초. 주석은 보내지 않는다.
-ACCEPT
-# 다음 배치 안내에 맞춰 READY→ACCEPT 반복
-CAL SAVE
+READY      ← 배치 안내에 맞춰 놓고 보냄. 카운트다운 1초 + 측정 1초
+ACCEPT     ← 결과 수락, 다음 단계
+...        ← 12단계 반복
+CAL SAVE   ← NVS 저장. SensorManager가 새 값을 바로 씀
 ```
 
-순서는 검정→빨강→파랑, 색마다 평평 10mm(4개 동시)→들림 20mm(4개 동시)→눌림 3mm 앞 1·2→뒤 3·4 (12단계, 카운트다운 1초 + 측정 1초).
-노랑은 교정하지 않는다. 간격 안내10/20/3mm는 사람이 맞춘다. 준비/측정만 최소24초, 배치/응답은 추가다.
-IMU는 사용하지 않는다. 유효한 새 측정으로 평균·표준편차·Clear min/max를 구한다.
+순서는 검정 → 빨강 → 파랑, 색마다 평평 10mm(4개 동시) → 들림 20mm(4개 동시) → 눌림 3mm 앞 1·2 → 뒤 3·4.
+노랑은 교정하지 않는다(단차일 뿐 위험구역이 아님, 11/04 결정). 높이는 측정하지 않고 사람이 맞춘다.
+IMU는 교정에 쓰지 않는다. 유효한 새 측정으로 평균·표준편차·Clear min/max를 구한다.
+GUI "색 교정" 탭의 센서별 스펙트럼 막대로 포화(3mm)와 어두움(20mm)을 눈으로 확인할 수 있다.
 
 | 명령 | 조건 / 의미 |
 |---|---|
@@ -326,16 +340,16 @@ IMU는 사용하지 않는다. 유효한 새 측정으로 평균·표준편차·
 | ACCEPT | 결과 수락, 다음 단계 |
 | RETRY | 현재 결과 폐기, 다시 READY 대기 |
 | BACK | 배치 대기/결과 확인 중 이전 단계 |
-| STATUS / CAL STATUS | 상태·센서·색·자세·샘플 수·여유 표시 |
-| CAL MARGIN 20 40 | 교정 중 비율20% / 밝기40% 여유, 두 정수1..100만 허용 |
+| STATUS / CAL STATUS | 상태·센서·색·자세·샘플 수·여유 표시 (CAL STATUS는 저장 여부만, 모터 안 멈춤) |
+| CAL MARGIN 20 40 | 교정 중 비율 20% / 밝기 40% 여유, 두 정수 1..100만 허용 |
 | ABORT | 작업 중단, 기존 저장 교정 유지 |
 | CAL SAVE | 전체 완료 후 NVS 저장, 실패는 오류 후 수동 재시도 가능 |
 | CAL ERASE | 저장 기준 삭제, 다음 부팅부터 임시 기준 사용 |
 
-3초 내 유효5샘플 미만이면 그 단계를 재안내한다. 긴 수광은 측정 시간도 조정한다.
-NVS color-cal/data 한 블롭의 길이·버전·모델·설정 서명·유한값을 확인한다.
-저장/삭제 실패 시 기존 RAM 기준을 보존한다. SAVE 전 중간 측정은 재부팅하면 사라진다.
-교정 펌웨어에서는 SW1/SW2를 사용하지 않는다. 교정 후 생산 펌웨어를 다시 올려야 주행할 수 있다.
+측정 시간 안에 유효 샘플이 모자라면 그 단계를 다시 안내한다. NVS `color-cal/data` 한 블롭의 길이·버전·모델·
+설정 서명·유한값을 확인한다(노랑 칸은 건너뜀). 저장/삭제 실패 시 기존 RAM 기준을 보존한다.
+SAVE 전 중간 측정은 재부팅하면 사라진다. 수광·게인·LED 전류·채널을 바꾸면 설정 서명이 달라져 이전 교정은
+무효가 되고 임시 임계값으로 동작한다. 바퀴를 바꿔 차체 높이가 달라지거나 센서를 교체하면 다시 교정한다.
 
 ## 10. 라즈 UART 규격과 수신 의미
 
@@ -368,7 +382,8 @@ sequence 차이 크기로 역순/손실을 엄격 판정하지는 않는다.
 
 50Hz는 송신 측 요구다. ESP가 그 주기를 만들거나 재전송을 요청하지 않는다.
 14×50×10bit=7000bit/s로115200bps 대역 안이다. CRC가 없으므로 정상 형식의 비트 손상은
-검출 보장이 없다. 현재 Pi JSON을 UART1에 그대로 넣으면 동작하지 않는다.
+검출 보장이 없다. 송신기는 `scripts/pi_vision_sender.py`(+ `vision_packet.py`)이고 11/4 수신을 확인했다.
+예전 `pi_green_tracker.py --json` 출력은 패킷이 아니므로 UART1에 그대로 넣으면 동작하지 않는다.
 
 ## 11. 공용 모터 API
 
@@ -393,7 +408,7 @@ caller가 임의 Running 안전 스냅샷을 꾸며서 우회하지 않는다.
 
 - 단위 -1000..1000 천분율, 생산 기본±710(11/08, 밀기 650+조향 60), 벤치±400.
 - setOutputLimit 변경은 기존 출력을 정지한다. 새 명령이 필요하다.
-- forward/reverse/rotateLeft/rotateRight, stop/coast/brake, status/outputLimit 제공.
+- setTank/setArcade/forward, apply(FSM 명령), stop/brake, status/outputLimit 제공 (reverse·rotate·coast는 11/08 삭제).
 - timeoutMs=0은 기본100ms. INT32_MAX 초과는 InvalidArgument와 브레이크로 거부한다.
 - FSM/벤치 기한80ms. 직접 기한을 만들면 미래 간격은 INT32_MAX 이하로 사용한다.
   millis 순환으로 기한0이 된 경우도 실제 명시 기한으로 처리한다.
@@ -417,10 +432,10 @@ EV,시간ms,이벤트번호,심각도,소스,value1,value2[,문자열]
 ```
 
 심각도 D/I/W/E/F, 소스 SYS/STATE/SAFE/MOTOR/SENSOR/COM/USER.
-100번대 부팅/시스템,200 상태/모드,300 통신,400 센서,500 모터,600 안전,900 사용자.
-같은 번호·소스·value1·문자열은 기본1초 제한. value2는 반복 키에서 제외한다.
-상태/모드/오류는 변경 API로 바뀔 때만 기록. 큐32개, 한 번 최대2개, 송신 공간 부족은
-다음 루프로 미룬다. 큐가 차면 드롭, status().dropped로 확인하며 주행을 막지 않는다.
+100번대 부팅/시스템, 200 상태/모드, 300 통신, 400 센서, 500 모터, 600 안전, 900 사용자.
+같은 번호·소스·value1·문자열은 기본 1초 제한. value2는 반복 키에서 제외한다.
+상태/모드/오류는 변경 API로 바뀔 때만 기록. 큐 32개, 한 번 최대 2개, 송신 공간 부족은
+다음 루프로 미룬다. 큐가 차면 드롭, `status().dropped`로 확인하며 주행을 막지 않는다.
 
 ```cpp
 #include "system/event_logger.hpp"
@@ -432,22 +447,26 @@ EventLogger::faultChanged(LogSource::Sensor, FaultCode::Range, true, 1);
 StatusLed::setBoth(LedOwner::User, LedState::Tracking, 500);
 ```
 
-LED 요청은 즉시 WS2812를 쓰지 않고 update에서 최소20ms마다 반영한다.
-내장 밝기32/255, 외부64/255, 대상별/주체별 요청 하나씩 유지한다.
-높은 상태 우선순위가 이기고 같은 우선순위는 최신 요청, clear(owner)는 그 주체만 제거한다.
-TTL=0은 계속 유지, 짧은 TTL 만료 후 다른 요청이 다시 표시된다.
+LED 요청은 즉시 WS2812를 쓰지 않고 `update()`에서 최소 20ms마다 반영한다. 주체별로 요청 하나씩 유지하고,
+높은 우선순위가 이기며 같은 우선순위는 최신 요청, `clear(owner)`는 그 주체만 지운다.
+TTL=0은 계속 유지, 짧은 TTL 만료 후 다른 요청이 다시 표시된다. V2는 내장 LED 하나에만 출력한다.
 
-| 우선순위 | 표시 |
-|---:|---|
-| 255/240 | ESTOP 빨강 / 고장(모터·부팅·배터리) 빨강·흰색 교대 |
-| 200 | 홈 탈출: 처음 본 바닥 색으로 빠른 점멸(파랑·빨강), 탈출이 끝날 때까지 유지 |
-| 150/120/100 | 공격 보라 / 타워 잡음 노랑 / 찾는 중 노랑 점멸 |
-| 70/50/40 | 구동 허용 초록 / 대기 초록 점멸 / 준비(부팅·배터리 판정) 흰색 점멸 |
+| 우선순위 | 상태 | 색 · 깜빡임 | 뜻 |
+|---:|---|---|---|
+| 255 | EmergencyStop | 빨강 계속 | SW1 0.5초, 구동 중 SW2 0.5초, 뒤집힘 80° 3초. 재부팅해야 풀림 |
+| 240 | Fault | 빨강↔흰색 교대 (150ms) | 모터 드라이버·부팅 실패, 배터리 판정 실패(켜져 있을 때) |
+| 200 | EscapeBlue / EscapeRed | 파랑 / 빨강 빠른 깜빡 (120ms) | 홈 탈출 중. 처음 본 바닥 색, 탈출이 끝날 때까지 유지 |
+| 150 | Attacking | 보라 계속 | 돌진 → 브레이크 → 삽입 → 밀기 → 후진 |
+| 120 | Tracking | 노랑 계속 | 타워 확인 → 정렬 → 접근 |
+| 100 | Searching | 노랑 깜빡 (400ms) | 탐색, 놓친 직후 회전, 무작위 순회 |
+| 70 | Ready | 초록 계속 | 구동 허용 (경기용은 출발 순간에만 잠깐) |
+| 50 | WaitingForStart | 초록 깜빡 (700ms) | SW2 기다림. 벤치에서 색 교정 중에도 이 색 |
+| 40 | Booting | 흰색 깜빡 (700ms) | 부팅·배터리 판정 중. SW2 무시 |
 
-개별 센서 오류 로그가 자동으로 고장 LED를 만들지는 않는다.
-벤치는 생산 FSM LED 갱신이 없으므로 시스템 대기/Ready 표시가 중심이다.
+LED로 알 수 없는 것: 센서 하나 끊김(그 모서리만 Unknown), 라즈 끊김(찾는 중과 같은 노랑 깜빡),
+IMU 고장(뒤집힘 판정만 꺼짐). 벤치 GUI의 센서·라즈·IMU 칸이나 로그로 확인한다.
 CAL 안내와 벤치 ACK/HELP는 사람이 요청한 동기 콘솔이며 일반 이벤트 큐와 다르다.
-SW1 영구 루프 진입 후 일반 큐를 버리고 ESTOP만3초마다 출력한다.
+SW1 영구 루프 진입 후 일반 큐를 버리고 ESTOP만 3초마다 출력한다.
 
 ## 13. 현재 주기와 스케줄링
 
@@ -463,7 +482,8 @@ SW1 영구 루프 진입 후 일반 큐를 버리고 ESTOP만3초마다 출력�
 | LED | 최소20ms | 최대 갱신 시도50Hz, 변경색만 전송 |
 | 이벤트 | 루프 끝 최대2개 | 사건/변경 시 기록, 낮은 처리 순서 |
 | 벤치 데이터 | 100ms마다5행 시도 | 최대10Hz, 80ms 내 못 보내면 프레임 생략 |
-| 센서 전용 출력 | 약100ms | 약10Hz, 수광 주기와 다름 |
+| IMU 읽기 (V2) | 메인, 10ms마다 | 원시값만, 융합·위치 추정 없음 |
+| 센서 재시도 | 메인, 한 번에 한 단계 | 켜기 → 5ms 뒤 설정, 채널당 1초 간격 최대 3번 |
 
 FreeRTOS는 Arduino 내부에도 사용된다. 직접 분리한 기능 태스크는 모터 만료뿐이다.
 I2C·FSM·UART·로그가 모두 독립 태스크라는 의미는 아니다.
@@ -475,53 +495,53 @@ I2C가 밀리면 만료 감시가 모터를 정지할 수 있고 다음 새 명�
 ## 14. 빌드·업로드·실물 시험 순서
 
 PlatformIO CLI 또는 VS Code PlatformIO가 필요하다. 플랫폼 espressif32 6.11.0,
-Arduino core2.0.17, NeoPixel1.15.5. 실제 보드 플래시/전원/포트는 따로 확인한다.
+Arduino core 2.0.17, NeoPixel 1.15.5. 빌드 폴더는 한글 경로 문제 때문에 `%USERPROFILE%/.platformio/build/c_robot_current`.
 
 ```powershell
 cd D:\C_ROBOT\ESP_MAIN
-pio run -e robot_bench
-pio run -e robot_bench -t upload
-pio device monitor -e robot_bench -b 57600
+pio run -e robot_bench_v2_manual -t upload
+pio run -e yd_esp32_s3_v2 -t upload
+pio device monitor -b 57600
 # 필요하면 upload에 --upload-port COM번호, monitor에 -p COM번호 추가
 ```
 
-1. 모터 전원 분리→sensor_serial_test 업로드→UART0 115200에서 네 센서/SW 원시값 확인.
-2. 바퀴 띄우기→robot_bench 업로드→UART0 57600, 전원 직후 무구동 확인.
-3. MODE MOTOR→SW2→좌/우 정역 각3초(12%), 사이0.5초 정지 확인.
-4. SW1 차단·브레이크·ESTOP·해제 후 미복구 확인. 다음 시험은 재부팅.
-5. MODE MANUAL→SW2→DRIVE 100 100 등을250ms보다 빠르게 반복, STOP/입력 상실 정지 확인.
-6. 수광/게인 조정 후 color_calibration으로 교정 저장, 벤치/생산으로 돌아와 NVS 기준 사용.
-7. 규격 송신기 연결 후 ALIGN→FOLLOW→AVOID. 처음 두 모드는 바닥 보호가 없다.
-8. 낮은 생산 출력으로 회피/비전 분리 시험 후 공격 시간/출력 조정.
+실물 첫 시험 순서 (건너뛰지 않는다):
 
-벤치는 대문자·줄바꿈 필수. MODE는 기존 출발/수동 명령 폐기, DATA는 SW2 없이 무구동 출력.
-HELP는 정지 후 도움말, STATUS는 지속 로그 켜기, LOG OFF로 끈다.
-잘못된/긴/250ms 미완성 줄은 정지 후 줄 끝까지 버린다. 교정 명령은 받지 않는다.
-정확한 명령·CSV·각 모드 조건은 [BENCH_TESTS.md](BENCH_TESTS.md)를 읽는다.
+1. 모터 전원 분리 → 벤치 업로드 → GUI 연결. 배터리 값, 센서 1–4 응답, IMU, 핀 상태 판 확인.
+2. SW1 0.5초 → ESTOP, 놓아도 복구 안 됨 확인. 재부팅.
+3. 바퀴 띄우기 → "주행 준비" → 방향키로 좌우 정역, 저출력부터. 드라이버·커넥터 발열 확인.
+4. 12단계 색 교정 → 저장 → "색 확인하러 가기"로 네 센서 색 확인 (3mm 포화, 20mm 파랑↔검정, 경계 혼합).
+5. 라즈 연결 → `MODE ALIGN`(또는 SW2 3초) → `MODE FOLLOW` → `MODE AVOID`. 앞의 두 모드는 바닥 보호가 없다.
+6. 경기용 업로드 → 바퀴 띄우고 LED 흰색→초록 깜빡, SW2 출발, SW1 정지 확인 → 전원·리셋 때 바퀴가 움찔하지 않는지.
+7. 바닥에서 홈 회피 → 탐색 → 밀기 → 리허설. 출력과 시간은 `control_config.hpp`에서 고친다.
+
+벤치 명령, CSV 형식, 각 모드 조건, GUI 사용법은 [BENCH_TESTS.md](BENCH_TESTS.md)의 "V2 전용 실물 시험" 절.
+문제가 생기면 GUI가 `ESP_MAIN/logs/`에 남긴 세션 로그를 본다.
 
 ## 15. 검증 재실행과 한계
 
 ```powershell
 cd D:\C_ROBOT\ESP_MAIN
-.\tests\run_host_tests.ps1
-.\tests\run_host_tests.ps1 -Bench
-.\tests\run_host_tests.ps1 -Demo
-pio run -e yd_esp32_s3 -e yd_esp32_s3_tcs34725 -e sensor_serial_test -e sensor_serial_test_tcs34725 -e robot_bench -e robot_bench_tcs34725 -e color_calibration -e color_calibration_tcs34725 -e yd_esp32_s3_v2 -e robot_bench_v2 -e sensor_serial_test_v2 -e color_calibration_v2
-.\tests\run_host_tests.ps1 -V2
+powershell -ExecutionPolicy Bypass -File tests/run_host_tests.ps1 -V2
+powershell -ExecutionPolicy Bypass -File tests/run_host_tests.ps1 -Bench
+powershell -ExecutionPolicy Bypass -File tests/run_host_tests.ps1
+powershell -ExecutionPolicy Bypass -File tests/run_host_tests.ps1 -Demo
+python tools/test_bench_gui.py
+pio run -e yd_esp32_s3_v2
+pio run -e robot_bench_v2_manual
 cd D:\C_ROBOT
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 PC 펌웨어 시험은 PATH의 native g++ 또는 PlatformIO toolchain-gccmingw32가 필요하다.
-실제 setup/loop와 모듈을 연결해 시간 순환·채터링·ISR 경합·UART 무작위 입력·센서 고장·
-교정 저장 실패·만료·공격/벤치 콘솔을 시험한다. .pio/host-tests 결과는 Git에서 제외한다.
-이번에는 정지 중 버튼/새 진행 방향 위험/교정 숫자 검사의 실패를 먼저 재현하고 수정했다.
+실제 `setup()/loop()`와 모듈을 연결해 시간 순환·채터링·ISR 경합·UART 무작위 입력·센서 고장과 재시도·
+교정 저장 실패·만료·뒤집힘·무작위 순회·벤치 콘솔을 시험한다. `.pio/host-tests` 결과는 Git에서 제외한다.
+`-Demo`는 공격 상태와 좌우 출력을 가상 입력으로 보여주는 텍스트 데모다.
 
-최신: 생산 AS12그룹/4,994 검사, TCS12그룹/4,555 검사, 벤치 각각67 검사,
-여섯 ESP32 빌드, Python 핵심5테스트 통과. 반복 assert는 독립 시나리오 개수가 아니다.
-라즈 두 추적기는 로컬 파일20프레임씩 실행했다. GUI·실제 카메라·ESP 동시성·광학/전기 성능은
-이 시험으로 증명하지 않는다. 보조 UI/영상 변환/CAD의 전체 경로도 실물 검증 범위 밖이다.
+최신(11/08): V2 18,516·18,051회 검사, V1 18,490회, 벤치 1,026 + 4회, 두 환경 빌드 성공.
+반복 assert는 독립 시나리오 개수가 아니다. GUI·실제 카메라·ESP 동시성·광학/전기 성능은
+이 시험으로 증명하지 않는다.
 
 상세 검토/실물 목록은 [VERIFICATION.md](VERIFICATION.md), 다음 개발 기준은
-[AGENTS.md](AGENTS.md), 영상 코드 설명은 [루트 README](../README.md)를 읽는다.
+[AGENTS.md](AGENTS.md), 라즈 쪽 설명은 [루트 README](../README.md)를 읽는다.
 공격 전략의 세부 루틴은 실제 차량에서 튜닝하는 다음 단계다.
