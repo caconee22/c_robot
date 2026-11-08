@@ -53,22 +53,23 @@ void applyLedState(SystemState state) {
 
   switch (state) {
     case SystemState::Booting:
+    case SystemState::Calibration:
       StatusLed::setBoth(LedOwner::System, LedState::Booting);
       break;
     case SystemState::WaitingForStart:
-      StatusLed::setBoth(LedOwner::System, LedState::WaitingForStart);
+      // While the battery check holds the start, SW2 does nothing: show "preparing".
+      StatusLed::setBoth(LedOwner::System, latestStatus.startHeld
+                                               ? LedState::Booting
+                                               : LedState::WaitingForStart);
       break;
     case SystemState::Running:
       StatusLed::setBoth(LedOwner::System, LedState::Ready);
       break;
-    case SystemState::Calibration:
-      StatusLed::setBoth(LedOwner::System, LedState::Charging);
-      break;
     case SystemState::SensorFault:
-      StatusLed::setBoth(LedOwner::Sensors, LedState::SensorFault);
+      StatusLed::setBoth(LedOwner::Sensors, LedState::Fault);
       break;
     case SystemState::MotorFault:
-      StatusLed::setBoth(LedOwner::Motors, LedState::MotorFault);
+      StatusLed::setBoth(LedOwner::Motors, LedState::Fault);
       break;
     case SystemState::SystemFault:
       StatusLed::setBoth(LedOwner::System, LedState::Fault);
@@ -161,6 +162,8 @@ void SystemManager::begin() {
   applyLedState(SystemState::Booting);
 }
 
+void SystemManager::triggerEmergencyStop() { ButtonInterrupts::triggerEmergencyStop(); }
+
 void SystemManager::update(uint32_t nowMs) {
   ButtonInterrupts::update(nowMs);
   // While driving, every button is an emergency stop (both need the 0.5 s hold).
@@ -246,7 +249,10 @@ void SystemManager::setApplicationHealthy(bool healthy, FaultCode fault,
             applicationFault, applicationFaultDetail, LogSource::System);
 }
 
-void SystemManager::holdStart(bool held) { latestStatus.startHeld = held; }
+void SystemManager::holdStart(bool held) {
+  latestStatus.startHeld = held;
+  applyLedState(latestStatus.state);
+}
 
 SystemStatus SystemManager::status() { return latestStatus; }
 

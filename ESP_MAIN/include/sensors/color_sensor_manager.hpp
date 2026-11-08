@@ -7,8 +7,10 @@
 //   reads in short register steps (no waiting for integration).
 // Called from: SensorManager only. Each Wire transfer is bounded by
 //   config::sensors::I2C_TIMEOUT_MS.
-// Failure: I2C/timeout disables that channel until reboot; saturation or no
-//   light only invalidates that sample. No re-init, no retry loop.
+// Failure: I2C/timeout/init failure disables that channel; it is re-initialized
+//   at most SENSOR_RETRY_LIMIT times, once per SENSOR_RETRY_PERIOD_MS, in two
+//   short steps (power on, configure) so loop() never waits. After that it
+//   stays off until reboot. Saturation or no light only invalidates that sample.
 // Settings: sensor_config.hpp (exposure, gain, LED current are start values).
 class ColorSensorManager {
  public:

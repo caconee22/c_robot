@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bench_gui import BenchState, DemoLink, cal_quality, cal_step_info, drive_command, i2c_summary, imu_freshness, parse_line, requires_drive_permission  # noqa: E402
+from bench_gui import BenchState, DemoLink, led_coach, cal_quality, cal_step_info, drive_command, i2c_summary, imu_freshness, parse_line, requires_drive_permission  # noqa: E402
 
 # Lines in the exact formats bench_main.cpp / bench_v2_app.cpp print.
 state = BenchState()
@@ -99,6 +99,8 @@ assert cal.feed("CAL,1234,1,6,3,RED,PRESSED,0,1") == "cal"
 assert cal.cal == {"ms": 1234, "state": "WaitingForReady", "step": 6, "sensors": [1, 2], "color": "RED",
                    "pose": "PRESSED", "samples": 0, "stored": True}
 assert cal.feed("[CAL][PREVIEW] S1 F2=1 F3=2 F5=3 F6=4 F7=5 C=512") == "cal_preview" and cal.cal_previews[1]["clear"] == 512
+assert cal.cal_previews[1]["channels"] == {"F2": 1, "F3": 2, "F5": 3, "F6": 4, "F7": 5, "C": 512}
+assert cal.feed("[CAL][PREVIEW] S4 F2=9 F3=8 F5=7 F6=6 F7=5 C=40") == "cal_preview" and cal.cal_previews[4]["channels"]["F7"] == 5
 assert cal.feed("[CAL][PREVIEW] S2 NOT_READY") == "cal_preview" and not cal.cal_previews[2]["ready"]
 assert cal.feed("[CAL] Starting in 1...") == "cal_count" and cal.cal_count == 1
 assert cal.feed("[CAL] Measuring for 1000 ms. Do not move.") == "cal_measuring" and cal.cal_measuring
@@ -155,3 +157,11 @@ assert batcheck.feed("BATCHECK,0") == "batcheck" and batcheck.bat_check is False
 assert batcheck.feed("BATCHECK,1") == "batcheck" and batcheck.bat_check is True
 assert batcheck.feed("BAT battery_check_off 0mV 0S") == "bat"
 print("battery check switch parse checks passed")
+
+assert "빨강 계속" in led_coach(True, None, None, False)
+assert "번갈아" in led_coach(False, None, {"result": "battery_missing"}, False)
+assert "번갈아" in led_coach(False, {"state": 5}, None, False)
+assert "흰색" in led_coach(False, {"state": 1}, None, False)
+assert "초록 계속" in led_coach(False, {"state": 2}, {"result": "battery_ok"}, True)
+assert "초록 천천히" in led_coach(False, {"state": 1}, {"result": "battery_check_off"}, False)
+print("led coach checks passed")

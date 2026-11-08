@@ -412,8 +412,9 @@ void updateActiveState(uint32_t nowMs) {
       nowMs - lastPreviewMs >=
           config::sensors::CALIBRATION_PREVIEW_PERIOD_MS) {
     lastPreviewMs = nowMs;
+    // All four, not only this step's sensors, so the GUI can compare corners.
     for (uint8_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
-      if (inStep(sensor)) printRaw(sensor, ColorSensorManager::sample(sensor));
+      printRaw(sensor, ColorSensorManager::sample(sensor));
     }
   }
 

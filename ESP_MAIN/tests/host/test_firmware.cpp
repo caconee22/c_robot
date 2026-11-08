@@ -7,6 +7,7 @@
 #include "control/control_config.hpp"
 #include "control/drive_logic.hpp"
 #include "control/robot_fsm.hpp"
+#include "control/wander.hpp"
 #include "interrupts/button_interrupts.hpp"
 #include "motor/motor_controller.hpp"
 #include "pins.hpp"
@@ -21,6 +22,8 @@
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
+#include "system/tilt_guard.hpp"
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -78,7 +81,7 @@ void testMotor() {
   CHECK(!MotorController::forward(300,running()));
   CHECK(MotorController::clearEmergencyStop(running()));
   CHECK(MotorController::setTank(-32768,32767,running()));
-  auto s=MotorController::status(); CHECK(s.appliedLeftPermille==-650 && s.appliedRightPermille==650);
+  auto s=MotorController::status(); CHECK(s.appliedLeftPermille==-config::motor::DEFAULT_OUTPUT_LIMIT && s.appliedRightPermille==config::motor::DEFAULT_OUTPUT_LIMIT);
   CHECK(!MotorController::setOutputLimit(1001)); CHECK(MotorController::setOutputLimit(500));
   CHECK(!MotorController::status().outputsActive);
   CHECK(MotorController::setArcade(300,80,running()));
@@ -308,7 +311,7 @@ void testFsm() {
   RobotFsm::update(config::control::LOST_TARGET_HOLD_MS-1,sensors,missing,running());
   CHECK(RobotFsm::state()==RobotState::LostTarget);
   RobotFsm::update(config::control::LOST_TARGET_HOLD_MS,sensors,missing,running());
-  CHECK(RobotFsm::state()==RobotState::Search);
+  CHECK(RobotFsm::state()==RobotState::Wander);  // Pi silent past VISION_LOST_MS: no fixed spin
   // A sensor that read red and is then blinded by floor contact (invalid sample)
   // still counts as a hazard for HAZARD_CONTACT_HOLD_MS; a never-sampled one does not.
   RobotFsm::begin(); sensors=SensorSnapshot{};
@@ -330,13 +333,24 @@ void testFsm() {
                    sensors,missing,running());
   CHECK(RobotFsm::state()==RobotState::Search);
   sensors=SensorSnapshot{};
+  // The escape keeps the color that started it, even if another color shows up.
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  sensors.floorColor[1].color=FloorColor::Blue; sensors.floorColor[1].reliable=true;
+  sensors.colorRaw[1].sequence=5; sensors.colorRaw[1].valid=true;
+  RobotFsm::update(10,sensors,missing,running());
+  CHECK(RobotFsm::state()==RobotState::ZoneEscape && RobotFsm::escapeColor()==FloorColor::Blue);
+  sensors.floorColor[1].color=FloorColor::Red;
+  RobotFsm::update(20,sensors,missing,running());
+  CHECK(RobotFsm::escapeColor()==FloorColor::Blue);
+  sensors=SensorSnapshot{};
   // Lost on the right: spin right, and the search afterwards also starts right.
   RobotFsm::begin(); sensors=SensorSnapshot{};
+  VisionSnapshot noTower=target(1,10); noTower.targetValid=false;  // Pi alive, tower gone
   RobotFsm::update(10,sensors,target(1,10,1500),running());
-  CHECK(RobotFsm::update(20,sensors,missing,running()).type==DriveIntentType::SearchRight);
+  CHECK(RobotFsm::update(20,sensors,noTower,running()).type==DriveIntentType::SearchRight);
   const uint32_t searchAt=10+config::control::LOST_TARGET_HOLD_MS;
-  CHECK(RobotFsm::update(searchAt,sensors,missing,running()).type==DriveIntentType::SearchRight);
-  CHECK(RobotFsm::update(searchAt+config::control::SEARCH_DIRECTION_PERIOD_MS,sensors,missing,
+  CHECK(RobotFsm::update(searchAt,sensors,noTower,running()).type==DriveIntentType::SearchRight);
+  CHECK(RobotFsm::update(searchAt+config::control::SEARCH_DIRECTION_PERIOD_MS,sensors,noTower,
                          running()).type==DriveIntentType::SearchLeft);
   // Align spin ramps: slow just outside the window, fastest far off, never below the floor.
   RobotFsm::begin();
@@ -359,7 +373,8 @@ void testColorsAndErrors() {
     CHECK(snapshot.floorColor[i].reliable); CHECK(static_cast<uint8_t>(snapshot.floorColor[i].color)==i);
     CHECK(snapshot.floorColor[i].consecutiveMatches>=3);
   }
-  // Invalid sample clears the old reliable color immediately; no auto reinit.
+  // Invalid sample clears the old reliable color immediately; re-init only after
+  // SENSOR_RETRY_PERIOD_MS, at most SENSOR_RETRY_LIMIT times.
   fake::sensors[0].connected=false; sensorTicks(20,true);
   CHECK(!SensorManager::snapshot().floorColor[0].reliable);
   CHECK(ColorSensorManager::status().error[0]==ColorSensorError::I2c);
@@ -367,6 +382,19 @@ void testColorsAndErrors() {
   fake::sensors[0].connected=true; sensorTicks(200,true);
   CHECK(!ColorSensorManager::available(0)); CHECK(ColorSensorManager::status().failedReads==failures);
   CHECK(SensorManager::snapshot().floorColor[1].reliable);
+  sensorTicks(config::sensors::SENSOR_RETRY_PERIOD_MS,true);
+  CHECK(ColorSensorManager::available(0)); CHECK(ColorSensorManager::status().error[0]==ColorSensorError::None);
+  sensorTicks(300,true); CHECK(SensorManager::snapshot().floorColor[0].reliable);
+  // Still broken: each retry fails, and after the limit it stays off for good.
+  fake::sensors[0].connected=false; sensorTicks(20,true); CHECK(!ColorSensorManager::available(0));
+  sensorTicks(config::sensors::SENSOR_RETRY_PERIOD_MS*(config::sensors::SENSOR_RETRY_LIMIT+1),true);
+  CHECK(!ColorSensorManager::available(0));
+  fake::sensors[0].connected=true; sensorTicks(config::sensors::SENSOR_RETRY_PERIOD_MS*3,true);
+  CHECK(!ColorSensorManager::available(0));   // 1 used above + 2 failed = limit reached
+  // Missing at boot: recovers once plugged in (no delay() in the loop path).
+  fixture(); fake::sensors[2].connected=false; SensorManager::begin();
+  CHECK(!ColorSensorManager::available(2)); fake::sensors[2].connected=true;
+  sensorTicks(config::sensors::SENSOR_RETRY_PERIOD_MS+20,true); CHECK(ColorSensorManager::available(2));
   fixture(); fake::sensors[1].connected=false; SensorManager::begin();
   CHECK(ColorSensorManager::status().error[1]==ColorSensorError::Initialization);
   CHECK(SystemManager::status().sensorsHealthy);
@@ -523,15 +551,20 @@ void testLogsAndLeds() {
   auto before=EventLogger::status(); Serial.capacity=32; EventLogger::process();
   CHECK(EventLogger::status().queued==before.queued);
   Serial.capacity=4096; EventLogger::process(); CHECK(EventLogger::status().written==2);
+  // While the battery check holds SW2, the LED says "preparing", not "press start".
+  SystemManager::holdStart(true); SystemManager::update(millis());
+  fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::Booting);
+  SystemManager::holdStart(false);
+  fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::WaitingForStart);
   StatusLed::begin(); StatusLed::setBoth(LedOwner::Fsm,LedState::Searching);
-  StatusLed::setBoth(LedOwner::Sensors,LedState::SensorFault,40);
-  fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::SensorFault);
+  StatusLed::setBoth(LedOwner::Sensors,LedState::Fault,40);
+  fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::Fault);
   fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::Searching);
   StatusLed::setEmergencyStop(); fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::EmergencyStop);
   fixture(); fake::now=UINT32_MAX-39; StatusLed::begin();
   StatusLed::setBoth(LedOwner::Fsm,LedState::Searching);
-  StatusLed::setBoth(LedOwner::Sensors,LedState::SensorFault,40);
-  fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::SensorFault);
+  StatusLed::setBoth(LedOwner::Sensors,LedState::Fault,40);
+  fake::advance(20); StatusLed::update(millis()); CHECK(StatusLed::state(LedTarget::Both)==LedState::Fault);
   fake::advance(20); StatusLed::update(millis()); CHECK(millis()==0);
   CHECK(StatusLed::state(LedTarget::Both)==LedState::Searching);
 }
@@ -648,12 +681,68 @@ void testMainIntegration() {
   loop(); CHECK(SystemManager::motorAllowed());  // No restart policy for a brief command expiry.
 }
 
+void testWanderAndTilt() {
+  fixture(); RobotFsm::begin(); SensorSnapshot sensors; VisionSnapshot missing;
+  // Pi alive but no tower: the normal spin search.
+  VisionSnapshot empty=target(1,1000); empty.targetValid=false;
+  RobotFsm::update(1000,sensors,empty,running()); CHECK(RobotFsm::state()==RobotState::Search);
+  // Silent shorter than VISION_LOST_MS: still Search; longer: Wander.
+  RobotFsm::update(1000+config::wander::VISION_LOST_MS-1,sensors,missing,running());
+  CHECK(RobotFsm::state()==RobotState::Search);
+  RobotFsm::update(1000+config::wander::VISION_LOST_MS,sensors,missing,running());
+  CHECK(RobotFsm::state()==RobotState::Wander);
+  // Over 20 s it alternates turn / forward with changing lengths and sides.
+  uint32_t t=2000; DriveIntentType last=DriveIntentType::Brake; uint32_t segStart=t;
+  int forwards=0,lefts=0,rights=0; uint32_t minSeg=UINT32_MAX,maxSeg=0; bool consecutiveSame=false;
+  for(;t<22000;t+=10) {
+    const auto d=RobotFsm::update(t,sensors,missing,running());
+    CHECK(RobotFsm::state()==RobotState::Wander);
+    CHECK(d.type==DriveIntentType::Approach||d.type==DriveIntentType::SearchLeft||d.type==DriveIntentType::SearchRight);
+    if(d.type!=last) {
+      const bool lastTurn=last!=DriveIntentType::Approach, nowTurn=d.type!=DriveIntentType::Approach;
+      if(last!=DriveIntentType::Brake && lastTurn==nowTurn) consecutiveSame=true;
+      if(last!=DriveIntentType::Brake) { minSeg=std::min(minSeg,t-segStart); maxSeg=std::max(maxSeg,t-segStart); }
+      if(d.type==DriveIntentType::Approach) { ++forwards; CHECK(d.requestedDuty>=config::wander::FORWARD_DUTY_MIN&&d.requestedDuty<=config::wander::FORWARD_DUTY_MAX); }
+      if(d.type==DriveIntentType::SearchLeft) ++lefts;
+      if(d.type==DriveIntentType::SearchRight) ++rights;
+      last=d.type; segStart=t;
+    }
+  }
+  CHECK(!consecutiveSame && forwards>5 && lefts>0 && rights>0 && maxSeg>minSeg+150);
+  // A floor hazard still wins over wandering.
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  CHECK(RobotFsm::update(t,sensors,missing,running()).type==DriveIntentType::Reverse);
+  CHECK(RobotFsm::state()==RobotState::ZoneEscape);
+
+  // TiltGuard: learn level while stopped, trip only after HOLD_MS past the limit.
+  TiltGuard::begin(); ImuStatus imu; imu.dataFresh=true; ImuSample s; uint32_t ms=0;
+  auto feed=[&](int16_t x,int16_t y,int16_t z,bool run){ ms+=10; s.accel[0]=x; s.accel[1]=y; s.accel[2]=z; s.timestampMs=ms;
+    return TiltGuard::update(ms,run,imu,s); };
+  for(int i=0;i<20;++i) CHECK(!feed(0,0,4096,false));     // level, z up
+  CHECK(!feed(0,2800,2900,true)); CHECK(TiltGuard::lastAngleDeg()<50);
+  bool tripped=false; uint32_t start=ms;
+  while(ms-start<config::tilt::HOLD_MS-20) tripped|=feed(0,0,-4096,true);   // upside down
+  CHECK(!tripped && TiltGuard::lastAngleDeg()>170);
+  for(int i=0;i<5;++i) tripped|=feed(0,0,-4096,true);
+  CHECK(tripped);
+  // Back under the limit restarts the hold; stale IMU never trips.
+  TiltGuard::begin(); for(int i=0;i<20;++i) feed(0,0,4096,false);
+  start=ms; while(ms-start<2000) CHECK(!feed(4096,0,200,true));   // ~87 deg
+  CHECK(!feed(0,0,4096,true));
+  start=ms; while(ms-start<2000) CHECK(!feed(4096,0,200,true));
+  imu.dataFresh=false; start=ms; while(ms-start<5000) CHECK(!feed(0,0,-4096,true));
+  // Mounting does not matter: level learned with x up, then flipped.
+  imu.dataFresh=true; TiltGuard::begin(); for(int i=0;i<20;++i) feed(4096,0,0,false);
+  start=ms; tripped=false; while(ms-start<config::tilt::HOLD_MS+50) tripped|=feed(-4096,0,0,true);
+  CHECK(tripped);
+}
+
 void demo() {
   fixture(); RobotFsm::begin(); SensorSnapshot sensors;
   const char* states[]={"Boot","WaitStart","Search","TargetConfirm","TrackAlign",
     "Approach","ContactCheck","AttackCharge","DiveBrake","SpokeInsert","UndercutDrive",
     "Push","ScoreHold","Backoff","LostTarget","WallEscape","ZoneEscape","StuckRecovery",
-    "EmergencyStop","Stop"};
+    "EmergencyStop","Stop","Wander"};
   std::cout<<"time_ms,state,left,right (permille)\n";
   for(uint32_t time=0;time<=1600;time+=20) {
     VisionSnapshot vision;
@@ -671,7 +760,7 @@ int main(int argc,char** argv) {
     struct Test { const char* name; void (*run)(); };
     const Test tests[]={{"motor limit/watchdog/rollover",testMotor},
       {"buttons/ESTOP/race",testButtonsAndEstop},{"system start/fault",testSystem},
-      {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},
+      {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},{"wander/tilt guard",testWanderAndTilt},
       {"color sampling/errors/no recovery",testColorsAndErrors},{"three independent samples",testThreeSamples},
       {"continuous single-exposure floor mode",testContinuousFloorMode},
       {"12-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},

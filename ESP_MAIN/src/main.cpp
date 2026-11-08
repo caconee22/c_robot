@@ -5,11 +5,13 @@
 #include "control/drive_logic.hpp"
 #include "control/robot_fsm.hpp"
 #include "motor/motor_controller.hpp"
+#include "sensors/imu_monitor.hpp"
 #include "sensors/sensor_manager.hpp"
 #include "system/battery_monitor.hpp"
 #include "system/event_logger.hpp"
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
+#include "system/tilt_guard.hpp"
 
 namespace {
 
@@ -28,31 +30,26 @@ void showRobotState(RobotState state) {
   StatusLed::clear(LedOwner::Fsm);
   switch (state) {
     case RobotState::Search:
+    case RobotState::LostTarget:
+    case RobotState::Wander:
       StatusLed::setBoth(LedOwner::Fsm, LedState::Searching);
       break;
     case RobotState::TargetConfirm:
+    case RobotState::TrackAlign:
+    case RobotState::Approach:
       StatusLed::setBoth(LedOwner::Fsm, LedState::Tracking);
       break;
-    case RobotState::TrackAlign:
-      StatusLed::setBoth(LedOwner::Fsm, LedState::Aligning);
-      break;
-    case RobotState::Approach:
-      StatusLed::setBoth(LedOwner::Fsm, LedState::Approaching);
-      break;
     case RobotState::DiveReady:
-      StatusLed::setBoth(LedOwner::Fsm, LedState::Charging);
-      break;
     case RobotState::DiveBrake:
     case RobotState::SpokeEngaged:
     case RobotState::Push:
-      StatusLed::setBoth(LedOwner::Fsm, LedState::Pushing);
-      break;
     case RobotState::Backoff:
-    case RobotState::ZoneEscape:
-      StatusLed::setBoth(LedOwner::Fsm, LedState::ZoneEscape);
+      StatusLed::setBoth(LedOwner::Fsm, LedState::Attacking);
       break;
-    case RobotState::LostTarget:
-      StatusLed::setBoth(LedOwner::Fsm, LedState::CommunicationLost);
+    case RobotState::ZoneEscape:
+      StatusLed::setBoth(LedOwner::Fsm, RobotFsm::escapeColor() == FloorColor::Blue
+                                            ? LedState::EscapeBlue
+                                            : LedState::EscapeRed);
       break;
     default:
       break;
@@ -67,6 +64,8 @@ void setup() {
 
   RobotFsm::begin();
   BatteryMonitor::begin(millis());
+  ImuMonitor::begin(millis());
+  TiltGuard::begin();
   EventLogger::logText(static_cast<uint16_t>(EventId::Custom),
                        LogSeverity::Info, LogSource::System,
                        "fsm_ready");
@@ -80,6 +79,12 @@ void loop() {
   RaspberryLink::poll();
   SensorManager::update();
   BatteryMonitor::update(millis());
+  ImuMonitor::update(millis());
+  // Upside down (past the tilt limit) for too long: permanent emergency stop.
+  if (TiltGuard::update(millis(), SystemManager::running(), ImuMonitor::status(),
+                        ImuMonitor::latest())) {
+    SystemManager::triggerEmergencyStop();
+  }
   nowMs = millis();
   SystemManager::update(nowMs);
   const SystemStatus system = SystemManager::status();

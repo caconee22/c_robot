@@ -85,9 +85,11 @@ StatusLed::update, EventLogger::process, delay(1)
 | BTS7960 | `motor/bts7960_driver.hpp` | `drive`, `brake`, `latch*DriveInhibit` | MotorController, SW1 ISR | 예 |
 | FSM | `control/robot_fsm.hpp` | `update`, `state` | loop | |
 | 구동 변환 | `control/drive_logic.hpp` | `makeCommand` | loop | |
+| 라즈 없을 때 무작위 순회 | `control/wander.hpp` | `reset`, `intent` | RobotFsm | |
+| 뒤집힘 비상정지 (V2) | `system/tilt_guard.hpp` | `begin`, `update` | setup, loop → `SystemManager::triggerEmergencyStop` | 예 |
 | 라즈 UART | `communication/raspberry_link.hpp` | `poll`, `latest`, `status` | loop | |
 | 센서 판정 | `sensors/sensor_manager.hpp` | `update`, `snapshot` | loop | |
-| 센서 I2C | `sensors/color_sensor_manager.hpp` | `update`, `sample` | SensorManager | |
+| 센서 I2C (꺼진 채널 최대 3번 재초기화) | `sensors/color_sensor_manager.hpp` | `update`, `sample` | SensorManager | |
 | 색 판별 | `sensors/floor_color_classifier.hpp` | `classify` | SensorManager | |
 | 교정값 저장소 | `sensors/calibration_store.hpp` | `load`, `data`, `valid` | SensorManager | |
 | 배터리 확인 (V2) | `system/battery_monitor.hpp` | `begin`, `update`, `status` | setup, loop | |
@@ -141,11 +143,13 @@ pio run -e yd_esp32_s3_v2       # 경기용 펌웨어
 |---|---|
 | V2 벤치 출력·시간 | 기존 `include/bench/bench_config.hpp` (변경 없음) |
 | IMU 주소·대기 시간·판정 시간 | `include/sensors/imu_monitor.hpp`의 `config::imu` |
+| 뒤집힘 각도·유지 시간 | `include/system/tilt_guard.hpp`의 `config::tilt` |
+| 무작위 순회 출력·시간 | `include/control/wander.hpp`의 `config::wander` |
 
 | 모듈 (§4) | 핵심 API | 호출 위치 | 안전 |
 |---|---|---|---|
 | `include/bench_v2/bench_v2_app.hpp` 및 `src/bench_v2/bench_v2_app.cpp` | begin, update | `src/bench_v2_main.cpp`의 setup/loop에서 각각 호출 한 줄 | 기존 안전 API 호출, 안전 모듈 변경 없음 |
-| `include/sensors/imu_monitor.hpp` 및 `src/sensors/imu_monitor.cpp` (V2) | begin, requestReset, update, status, latest | 지금은 `bench_v2_app.cpp`만 호출. 생산 main에는 연결 안 함 | 모터·SystemManager를 건드리지 않음. 오류 시 FAULT로 멈추고 자동 재시도 없음 |
+| `include/sensors/imu_monitor.hpp` 및 `src/sensors/imu_monitor.cpp` (V2) | begin, requestReset, update, status, latest | `bench_v2_app.cpp`와 생산 main(11/07부터, TiltGuard 입력) | 모터·SystemManager를 건드리지 않음. 오류 시 FAULT로 멈추고 자동 재시도 없음 |
 
 §5에 따라 새 기능을 `include/<module>/` 및 `src/<module>/`로 분리했다.
 헤더의 `// Contract`는 역할·호출 위치·실패 경계를 설명한다.

@@ -23,7 +23,8 @@ constexpr uint32_t ESTOP_LOG_PERIOD_MS = 3000;
 
 namespace led {
 constexpr uint32_t UPDATE_PERIOD_MS = 20;
-constexpr uint8_t INTERNAL_BRIGHTNESS = 32;
+// V2 has only this LED; 32 was too dim to read under field lights (not yet seen on the board).
+constexpr uint8_t INTERNAL_BRIGHTNESS = 96;
 constexpr uint8_t EXTERNAL_BRIGHTNESS = 64;
 }  // namespace led
 
