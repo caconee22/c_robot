@@ -86,7 +86,7 @@ bool SensorManager::begin() {
       ColorSensorManager::status().readyMask;
   latestSnapshot.colorCalibrationValid = CalibrationStore::valid();
   // Color sensors are optional at boot. Missing sensors remain UNKNOWN and
-  // are logged once. Failed channels require reboot after a wiring repair.
+  // are logged once. A failed channel gets at most SENSOR_RETRY_LIMIT re-inits.
   return true;
 }
 

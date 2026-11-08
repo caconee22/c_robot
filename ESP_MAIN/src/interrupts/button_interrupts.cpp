@@ -14,7 +14,6 @@
 
 namespace {
 volatile bool emergencyIsLatched = false;
-volatile bool emergencyEventPending = false;
 volatile bool emergencyEdgePending = false;
 bool emergencyHolding = false;
 uint32_t emergencyLowSinceMs = 0;
@@ -68,7 +67,6 @@ void latchEmergency() {
   disableMotorEnPins();
   portENTER_CRITICAL(&buttonMux);
   emergencyIsLatched = true;
-  emergencyEventPending = true;
   portEXIT_CRITICAL(&buttonMux);
 }
 
@@ -106,7 +104,6 @@ void ButtonInterrupts::begin() {
 
   // Held at boot: stop at once, nothing is driving yet.
   emergencyIsLatched = digitalRead(pins::SAFETY_SWITCH) == LOW;
-  emergencyEventPending = emergencyIsLatched;
   emergencyEdgePending = false;
   emergencyHolding = false;
   if (emergencyIsLatched) {
@@ -208,14 +205,6 @@ bool ButtonInterrupts::emergencyLatched() {
   const bool result = emergencyIsLatched;
   portEXIT_CRITICAL(&buttonMux);
   return result;
-}
-
-bool ButtonInterrupts::consumeEmergencyEvent() {
-  portENTER_CRITICAL(&buttonMux);
-  const bool pending = emergencyEventPending;
-  emergencyEventPending = false;
-  portEXIT_CRITICAL(&buttonMux);
-  return pending;
 }
 
 bool ButtonInterrupts::consumeStartEvent() {

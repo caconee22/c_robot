@@ -5,7 +5,8 @@
 // Contract
 // Role: V2 MPU6050 bring-up check. Resets the IMU, confirms WHO_AM_I and
 //   reports whether new samples keep arriving (data-ready flag and changing
-//   values). Raw counts only; no attitude or fusion. Bench/diagnostic use.
+//   values). Raw counts only; no attitude or fusion. Bench diagnostics and,
+//   in the match firmware, the TiltGuard input (since 11/07).
 // Called from: setup() (begin, after SensorManager::begin started Wire) and
 //   loop() (update). Each update does at most one short I2C transaction
 //   (bounded by config::sensors::I2C_TIMEOUT_MS) and never waits.

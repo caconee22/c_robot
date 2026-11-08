@@ -52,6 +52,5 @@ void BootManager::staySafe() {
   }
   MotorController::emergencyStop();
   StatusLed::setBoth(LedOwner::System, LedState::Fault);
-  EventLogger::log(EventId::BootFailed);
-  EventLogger::process();
+  EventLogger::process();  // BootFailed was logged once by begin()
 }

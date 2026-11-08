@@ -761,7 +761,7 @@ int main(int argc,char** argv) {
     const Test tests[]={{"motor limit/watchdog/rollover",testMotor},
       {"buttons/ESTOP/race",testButtonsAndEstop},{"system start/fault",testSystem},
       {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},{"wander/tilt guard",testWanderAndTilt},
-      {"color sampling/errors/no recovery",testColorsAndErrors},{"three independent samples",testThreeSamples},
+      {"color sampling/errors/bounded retry",testColorsAndErrors},{"three independent samples",testThreeSamples},
       {"continuous single-exposure floor mode",testContinuousFloorMode},
       {"12-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},
       {"power-on battery check",testBattery},
