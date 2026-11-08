@@ -27,7 +27,6 @@ class ButtonInterrupts {
   static void update(uint32_t nowMs);
 
   static bool emergencyLatched();
-  static bool consumeEmergencyEvent();
   static bool consumeStartEvent();
   static bool startPressed();
   // How long SW2 has been stably pressed, 0 when released.

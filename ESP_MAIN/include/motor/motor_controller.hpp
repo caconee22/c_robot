@@ -59,15 +59,8 @@ class MotorController {
                         uint32_t timeoutMs = 0);
   static bool forward(int16_t permille, const SafetyStatus& safety,
                       uint32_t timeoutMs = 0);
-  static bool reverse(int16_t permille, const SafetyStatus& safety,
-                      uint32_t timeoutMs = 0);
-  static bool rotateLeft(int16_t permille, const SafetyStatus& safety,
-                         uint32_t timeoutMs = 0);
-  static bool rotateRight(int16_t permille, const SafetyStatus& safety,
-                          uint32_t timeoutMs = 0);
 
   static void stop(StopMode mode = StopMode::Brake);
-  static void coast();
   static void brake();
   static void emergencyStop();
   static bool clearEmergencyStop(const SafetyStatus& safety);

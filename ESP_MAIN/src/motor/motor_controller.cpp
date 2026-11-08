@@ -250,27 +250,6 @@ bool MotorController::forward(int16_t permille, const SafetyStatus& safety,
   return setTank(speed, speed, safety, timeoutMs);
 }
 
-bool MotorController::reverse(int16_t permille, const SafetyStatus& safety,
-                              uint32_t timeoutMs) {
-  const int16_t speed = positiveMagnitude(permille);
-  return setTank(static_cast<int16_t>(-speed),
-                 static_cast<int16_t>(-speed), safety, timeoutMs);
-}
-
-bool MotorController::rotateLeft(int16_t permille,
-                                 const SafetyStatus& safety,
-                                 uint32_t timeoutMs) {
-  const int16_t speed = positiveMagnitude(permille);
-  return setTank(static_cast<int16_t>(-speed), speed, safety, timeoutMs);
-}
-
-bool MotorController::rotateRight(int16_t permille,
-                                  const SafetyStatus& safety,
-                                  uint32_t timeoutMs) {
-  const int16_t speed = positiveMagnitude(permille);
-  return setTank(speed, static_cast<int16_t>(-speed), safety, timeoutMs);
-}
-
 void MotorController::stop(StopMode mode) {
   MotorLock lock;
   stopLocked(mode);
@@ -278,8 +257,6 @@ void MotorController::stop(StopMode mode) {
                                 ? MotorControlResult::Accepted
                                 : MotorControlResult::NotInitialized;
 }
-
-void MotorController::coast() { stop(StopMode::Coast); }
 
 void MotorController::brake() { stop(StopMode::Brake); }
 
