@@ -1,6 +1,30 @@
 # IRC 일정 페이지
 
-- 원본: `index.html` (여기서 수정)
-- 로컬 미리보기: 저장소 루트에서 `python -m http.server 8765 --bind 127.0.0.1 --directory schedule` → http://127.0.0.1:8765
-- 공유: 고칠 때마다 claude.ai 페이지(https://claude.ai/artifact/RwDV3jdhrkkEyZCVAJyLWT, 팀원용)에도 올리고, 확인은 로컬 서버로
-- `tools/check_js.py index.html`: 게시 전 스크립트 괄호 검사
+팀(학현 · 큰놈이 · 예찬)이 함께 보는 한 장짜리 페이지다. 스크립트·스타일이 전부 `index.html` 하나에 들어 있다.
+
+## 탭
+
+| 탭 | 내용 |
+|---|---|
+| 일정 | D-day, 사람별 가용 격자, 로드맵·스프린트, 최근 바뀐 것, 날짜 × 사람 표, 작업 우선순위, 위험·이슈·결정 |
+| 인수인계·작업 안내 | 현장 팀원용 작업 순서와 주의사항. **페이지 안에서 직접 고치고 저장할 수 있다** (claude.ai 페이지에서만) |
+| 규정 점검 | 대회 규정 기준 실격·실점 위험, 하드웨어·소프트웨어 확인 항목, 11/9 확인표 |
+| 로봇 설명 | 펌웨어 메인 워크플로, 단계별 파일과 값, FSM 상태도, LED 색 읽는 법, 증상별 고칠 곳 |
+
+주소 끝에 `#schedule`, `#handover`, `#rules`, `#robot`을 붙이면 그 탭으로 바로 열린다.
+
+## 고치는 법
+
+1. 원본은 `index.html`이다. 여기서 고친다.
+2. 게시 전 스크립트 괄호 검사: `python schedule/tools/check_js.py schedule/index.html`
+3. 로컬 미리보기 (저장소 루트에서):
+   `python -m http.server 8765 --bind 127.0.0.1 --directory schedule` → http://127.0.0.1:8765
+   (`.claude/launch.json`의 "schedule" 설정과 같다)
+4. 팀원용 사본: 고칠 때마다 claude.ai 페이지(https://claude.ai/artifact/RwDV3jdhrkkEyZCVAJyLWT)에도 올린다.
+   **올리기 전에 claude.ai 쪽 인수인계 탭(`#ho-content`)을 먼저 읽어 와서 반영한다.** 팀원이 그 탭을 페이지에서
+   직접 고쳤을 수 있고, 로컬 파일을 그대로 올리면 그 수정이 지워진다.
+
+## 주의
+
+- 저장소가 공개라서 이 페이지의 이름·일정도 공개된다(11/8 학현 동의). 연락처 같은 개인정보는 넣지 않는다.
+- 날짜 계산은 브라우저 시계를 쓴다. "오늘" 강조와 D-day는 보는 사람의 날짜 기준이다.
