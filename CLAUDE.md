@@ -6,6 +6,12 @@
 
 @AGENTS.md
 
+## 펌웨어 코드맵 (graphify)
+
+`ESP_MAIN/graphify-out/`에 펌웨어 지식 그래프가 있다(로컬 전용). 펌웨어 코드 질문은 grep이나 파일 읽기 전에
+`ESP_MAIN`에서 `C:/Users/CACONEE/AppData/Roaming/Python/Python310/Scripts/graphify.exe query "<질문>"`부터 실행한다.
+코드를 바꾼 뒤에는 같은 경로로 `graphify.exe update .`를 실행해 그래프를 갱신한다. 규칙 상세는 `ESP_MAIN/CLAUDE.md`.
+
 ## Codex 기억에서 인수한 내용 (2026-10-05 사용자 요청으로 기록된 메모)
 
 바닥 센서·주행 작업 시 아래 조건을 고려하고 있다는 점을 사용자에게 명시적으로 알린다.
