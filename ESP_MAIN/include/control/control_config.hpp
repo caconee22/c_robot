@@ -28,6 +28,8 @@ constexpr uint16_t BACKOFF_DUTY = 450;
 constexpr uint16_t ZONE_ESCAPE_DUTY = 550;
 constexpr int16_t APPROACH_STEERING_MAX = 120;
 constexpr int16_t PUSH_STEERING_MAX = 60;
+static_assert(PUSH_DUTY + PUSH_STEERING_MAX <= 710 && ATTACK_CHARGE_DUTY + PUSH_STEERING_MAX <= 710,
+              "push steering must fit under motor DEFAULT_OUTPUT_LIMIT");
 
 constexpr uint16_t TARGET_CENTER_X = 960;
 // 11/04 bench ALIGN: +-100 px swung left/right, +-200 px settled.

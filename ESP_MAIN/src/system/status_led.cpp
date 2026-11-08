@@ -77,34 +77,24 @@ bool deadlineActive(uint32_t nowMs, const LedRequest& request) {
 LedStyle styleFor(LedState state) {
   constexpr RgbColor OFF{0, 0, 0};
   switch (state) {
+    // Red = stopped or broken, except the red-groove escape (floor color, fast
+    // blink, only while driving). Blink = waiting or looking, solid = doing.
     case LedState::Booting:
-      return {{0, 0, 255}, OFF, 500};
+      return {{255, 255, 255}, OFF, 700};
     case LedState::WaitingForStart:
-      return {{255, 80, 0}, OFF, 700};
+      return {{0, 255, 0}, OFF, 700};
     case LedState::Ready:
-      return {{0, 80, 255}, {0, 80, 255}, 0};
-    case LedState::Searching:
-      return {{255, 0, 0}, OFF, 400};
-    case LedState::Tracking:
       return {{0, 255, 0}, {0, 255, 0}, 0};
-    case LedState::Aligning:
+    case LedState::Searching:
+      return {{255, 180, 0}, OFF, 400};
+    case LedState::Tracking:
       return {{255, 180, 0}, {255, 180, 0}, 0};
-    case LedState::Approaching:
-      return {{0, 255, 180}, {0, 255, 180}, 0};
-    case LedState::Charging:
-      return {{255, 255, 255}, OFF, 100};
-    case LedState::Pushing:
-      return {{0, 40, 255}, {0, 40, 255}, 0};
-    case LedState::WallEscape:
-      return {{255, 0, 255}, OFF, 150};
-    case LedState::ZoneEscape:
-      return {{255, 70, 0}, OFF, 120};
-    case LedState::CommunicationLost:
-      return {{150, 0, 255}, OFF, 250};
-    case LedState::SensorFault:
-      return {{255, 180, 0}, OFF, 200};
-    case LedState::MotorFault:
-      return {{255, 0, 0}, {255, 60, 0}, 150};
+    case LedState::Attacking:
+      return {{160, 0, 255}, {160, 0, 255}, 0};
+    case LedState::EscapeBlue:
+      return {{0, 0, 255}, OFF, 120};
+    case LedState::EscapeRed:
+      return {{255, 0, 0}, OFF, 120};
     case LedState::Fault:
       return {{255, 0, 0}, {255, 255, 255}, 150};
     case LedState::EmergencyStop:
@@ -332,26 +322,13 @@ uint8_t StatusLed::priority(LedState state) {
       return 255;
     case LedState::Fault:
       return 240;
-    case LedState::MotorFault:
-      return 230;
-    case LedState::SensorFault:
-      return 220;
-    case LedState::ZoneEscape:
+    case LedState::EscapeBlue:
+    case LedState::EscapeRed:
       return 200;
-    case LedState::WallEscape:
-      return 190;
-    case LedState::CommunicationLost:
-      return 180;
-    case LedState::Charging:
+    case LedState::Attacking:
       return 150;
-    case LedState::Pushing:
-      return 140;
-    case LedState::Aligning:
-      return 130;
     case LedState::Tracking:
       return 120;
-    case LedState::Approaching:
-      return 110;
     case LedState::Searching:
       return 100;
     case LedState::Ready:
@@ -380,24 +357,12 @@ const char* StatusLed::stateName(LedState state) {
       return "searching";
     case LedState::Tracking:
       return "tracking";
-    case LedState::Aligning:
-      return "aligning";
-    case LedState::Approaching:
-      return "approaching";
-    case LedState::Charging:
-      return "charging";
-    case LedState::Pushing:
-      return "pushing";
-    case LedState::WallEscape:
-      return "wall_escape";
-    case LedState::ZoneEscape:
-      return "zone_escape";
-    case LedState::CommunicationLost:
-      return "communication_lost";
-    case LedState::SensorFault:
-      return "sensor_fault";
-    case LedState::MotorFault:
-      return "motor_fault";
+    case LedState::Attacking:
+      return "attacking";
+    case LedState::EscapeBlue:
+      return "escape_blue";
+    case LedState::EscapeRed:
+      return "escape_red";
     case LedState::Fault:
       return "fault";
     case LedState::EmergencyStop:

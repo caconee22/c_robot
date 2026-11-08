@@ -44,6 +44,7 @@ enum class RobotState : uint8_t {
   StuckRecovery,
   EmergencyStop,
   Stop,
+  Wander,  // no usable Pi frames: random blind pattern (control/wander.hpp)
 };
 
 enum class DriveIntentType : uint8_t {

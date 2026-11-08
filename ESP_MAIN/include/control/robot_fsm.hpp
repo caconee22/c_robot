@@ -15,4 +15,6 @@ class RobotFsm {
                             const VisionSnapshot& vision,
                             const SafetyStatus& safety);
   static RobotState state();
+  // Hazard color that started the current escape; fixed until the escape ends.
+  static FloorColor escapeColor();
 };

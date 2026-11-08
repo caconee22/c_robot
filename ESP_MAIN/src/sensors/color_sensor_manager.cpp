@@ -33,6 +33,9 @@ struct SensorRead {
 ColorRawSample samples[::COLOR_SENSOR_COUNT];
 SensorRead reads[::COLOR_SENSOR_COUNT];
 ColorSensorStatus latestStatus;
+uint8_t retriesUsed[::COLOR_SENSOR_COUNT] = {};
+uint32_t nextRetryMs[::COLOR_SENSOR_COUNT] = {};
+bool retryPoweredOn[::COLOR_SENSOR_COUNT] = {};
 uint8_t nextSensor = 0;
 uint32_t lastSlotMs = 0;
 
@@ -99,16 +102,26 @@ void failSensor(uint8_t index, ColorSensorError error) {
   samples[index].timestampMs = millis();
   ++samples[index].sequence;
   ++latestStatus.failedReads;
-  // Bus/timeout faults stay disabled until reboot. No reset/retry machinery.
+  // Disabled now; tryRecover() may re-init it later (bounded count).
+  nextRetryMs[index] = millis() + config::sensors::SENSOR_RETRY_PERIOD_MS;
+  retryPoweredOn[index] = false;
 }
 
-bool initializeSensor(uint8_t index) {
+bool powerOnSensor(uint8_t index) {
   if (!selectChannel(COLOR_SENSOR_TCA_CHANNELS[index])) return false;
   uint8_t id = 0;
 #if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
   if (!readByte(0x92, id) || (id & 0xFC) != 0x24) return false;
-  if (!writeRegister(0x80, 0x01)) return false;
-  delay(1);  // Initial internal setup is about 300 us; boot only.
+#else
+  if (!readByte(0x92, id) || (id != 0x44 && id != 0x4D)) return false;
+#endif
+  return writeRegister(0x80, 0x01);
+}
+
+// Needs PON settled first: AS7341 ~300 us, TCS34725 2.4 ms.
+bool configureSensor(uint8_t index) {
+  if (!selectChannel(COLOR_SENSOR_TCA_CHANNELS[index])) return false;
+#if COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341
   const uint16_t ledMa = AS7341_LED_CURRENT_MA[index];
   if (ledMa < 4 || ledMa > 150 || (ledMa & 1U)) return false;
   if (!writeRegister(0xA9, 0x10) ||  // Low bank: CONFIG and LED.
@@ -125,12 +138,40 @@ bool initializeSensor(uint8_t index) {
          writeRegister(0xF9, 0x04) &&  // SP_IEN; no external INT wiring needed.
          writeRegister(0x93, 0x08);
 #else
-  if (!readByte(0x92, id) || (id != 0x44 && id != 0x4D)) return false;
-  if (!writeRegister(0x80, 0x01)) return false;
-  delay(3);  // Power-on oscillator startup, boot only.
   return writeRegister(0x81, static_cast<uint8_t>(TCS34725_INTEGRATION)) &&
          writeRegister(0x8F, static_cast<uint8_t>(TCS34725_GAIN));
 #endif
+}
+
+bool initializeSensor(uint8_t index) {
+  if (!powerOnSensor(index)) return false;
+  delay(COLOR_SENSOR_MODEL == COLOR_SENSOR_AS7341 ? 1 : 3);  // boot only
+  return configureSensor(index);
+}
+
+// One short recovery step for at most one disabled sensor per call.
+void tryRecover(uint32_t nowMs) {
+  for (uint8_t i = 0; i < ::COLOR_SENSOR_COUNT; ++i) {
+    if ((latestStatus.readyMask & (1U << i)) != 0) continue;
+    if (!retryPoweredOn[i] && retriesUsed[i] >= config::sensors::SENSOR_RETRY_LIMIT) continue;
+    if (static_cast<int32_t>(nowMs - nextRetryMs[i]) < 0) continue;
+    if (!retryPoweredOn[i]) {
+      ++retriesUsed[i];
+      retryPoweredOn[i] = powerOnSensor(i);
+      nextRetryMs[i] = nowMs + (retryPoweredOn[i] ? config::sensors::SENSOR_RETRY_POWER_ON_MS
+                                                  : config::sensors::SENSOR_RETRY_PERIOD_MS);
+    } else {
+      retryPoweredOn[i] = false;
+      reads[i] = SensorRead{};
+      if (configureSensor(i)) {
+        latestStatus.readyMask |= 1U << i;
+        latestStatus.error[i] = ColorSensorError::None;
+      } else {
+        nextRetryMs[i] = nowMs + config::sensors::SENSOR_RETRY_PERIOD_MS;
+      }
+    }
+    return;
+  }
 }
 
 void publishSample(uint8_t index, ColorRawSample& sample, uint16_t limit) {
@@ -258,6 +299,8 @@ bool ColorSensorManager::begin() {
   for (uint8_t i = 0; i < ::COLOR_SENSOR_COUNT; ++i) {
     samples[i] = ColorRawSample{};
     reads[i] = SensorRead{};
+    retriesUsed[i] = 0;
+    retryPoweredOn[i] = false;
     if (initializeSensor(i)) latestStatus.readyMask |= 1U << i;
     else failSensor(i, ColorSensorError::Initialization);
   }
@@ -269,6 +312,7 @@ bool ColorSensorManager::begin() {
 void ColorSensorManager::update(uint32_t nowMs) {
   if (nowMs - lastSlotMs < config::sensors::COLOR_SENSOR_SLOT_PERIOD_MS) return;
   lastSlotMs = nowMs;
+  tryRecover(nowMs);
   for (uint8_t visit = 0; visit < COLOR_SENSOR_VISITS_PER_UPDATE; ++visit) {
     latestStatus.lastReadSensor = nextSensor;
     if (available(nextSensor)) {

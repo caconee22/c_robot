@@ -97,7 +97,7 @@ void execute(const char* line) {
     // OFF also applies now (a failed check stops blocking SW2; nothing starts by
     // itself). ON waits for the next power-on so a run in progress is never cut.
     const bool on = !strcmp(line, "BAT CHECK ON");
-    if (!on) BatteryMonitor::stopCheck();
+    if (!on) { BatteryMonitor::stopCheck(); batteryReported = false; }  // GUI needs the new BAT line
     if (BatterySetting::setCheckEnabled(on))
       reply(on ? "OK BAT CHECK on from the next power-on\r\n" : "OK BAT CHECK off now and saved\r\n");
     else reply("ERR BAT CHECK not saved (NVS)\r\n");

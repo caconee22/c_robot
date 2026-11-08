@@ -22,6 +22,11 @@ constexpr uint32_t I2C_FREQUENCY_HZ = 400000;
 constexpr uint16_t I2C_TIMEOUT_MS = 5;
 constexpr uint32_t CONVERSION_TIMEOUT_MARGIN_MS = 100;
 constexpr uint32_t SMUX_TIMEOUT_MS = 30;
+// 11/08 (학현): a channel disabled by I2C/timeout/init failure gets at most
+// SENSOR_RETRY_LIMIT re-inits, one per SENSOR_RETRY_PERIOD_MS, then stays off.
+constexpr uint8_t SENSOR_RETRY_LIMIT = 3;
+constexpr uint32_t SENSOR_RETRY_PERIOD_MS = 1000;
+constexpr uint32_t SENSOR_RETRY_POWER_ON_MS = 5;  // PON -> configure gap (AS7341 ~0.3ms, TCS34725 2.4ms)
 constexpr uint8_t COLOR_SENSOR_COUNT = 4;
 
 // Robot front is up: 1=front-left, 2=front-right,

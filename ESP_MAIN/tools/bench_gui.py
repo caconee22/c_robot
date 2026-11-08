@@ -45,6 +45,11 @@ CAL_STEPS = len(CAL_ORDER)
 # shortcut: fixed to the 5 ms setting, update it if AS7341_EXPOSURE_US changes.
 AS7341_FULL_SCALE = 1798
 NEAR_SATURATION = int(AS7341_FULL_SCALE * 0.9)  # firmware drops samples at full scale
+# Live spectrum bars in the calibration tab: channel -> (bar color, label).
+SPECTRUM = {"F2": ("#6A4FC9", "보라 445"), "F3": ("#2F6FD6", "파랑 480"), "F5": ("#2E9E4F", "초록 555"),
+            "F6": ("#E0A21B", "주황 590"), "F7": ("#D23B2E", "빨강 630"), "C": ("#8A8A8A", "전체"),
+            "R": ("#D23B2E", "R"), "G": ("#2E9E4F", "G"), "B": ("#2F6FD6", "B")}
+SENSOR_NAMES = {1: "1 앞 왼쪽", 2: "2 앞 오른쪽", 3: "3 뒤 왼쪽", 4: "4 뒤 오른쪽"}
 CAL_STATES = {0: "Idle", 1: "WaitingForReady", 2: "Countdown", 3: "Measuring",
               4: "WaitingForAccept", 5: "Completed", 6: "Error"}
 COLOR_KO = {"RED": ("빨강", "가운데 빨간 홈"), "YELLOW": ("노랑", "노란 직사각형 홈"),
@@ -227,9 +232,11 @@ def _parse_cal_text(line):
         rest = line[14:].split()
         sensor = _int(rest[0][1:]) if rest and rest[0].startswith("S") else 0
         if len(rest) >= 2 and rest[1] == "NOT_READY":
-            return "cal_preview", {"sensor": sensor, "ready": False, "clear": 0}
+            return "cal_preview", {"sensor": sensor, "ready": False, "clear": 0, "channels": {}}
         kv = _keyvals(" ".join(rest[1:]))
-        return "cal_preview", {"sensor": sensor, "ready": True, "clear": _int(kv.get("C", "0"))}
+        # AS7341: F2 F3 F5 F6 F7 C, TCS34725: R G B C (firmware order kept)
+        return "cal_preview", {"sensor": sensor, "ready": True, "clear": _int(kv.get("C", "0")),
+                               "channels": {k: _int(v) for k, v in kv.items()}}
     if "Starting in" in line:
         return "cal_count", {"n": _int(line.rsplit(" ", 1)[-1].rstrip("."))}
     for key, kind in (("Measuring for", "cal_measuring"), ("saved to NVS", "cal_saved"),
@@ -259,6 +266,22 @@ def cal_quality(result):
 def cal_step_info(step):
     color, pose, sensors = CAL_ORDER[step]
     return {"sensors": list(sensors), "color": color, "pose": pose}
+
+
+BAT_FAILED = ("battery_missing", "battery_low_or_wrong", "battery_too_high")
+
+
+def led_coach(estop, system, bat, allowed):
+    """What the board LED should show right now (status_led.cpp), to check by eye."""
+    if estop:
+        return "빨강 계속 (비상정지, 재부팅해야 풀림)"
+    if (bat and bat["result"] in BAT_FAILED) or (system and system["state"] in (4, 5, 6)):
+        return "빨강·흰색 번갈아 (고장)"
+    if allowed:
+        return "초록 계속 (구동 허용)"
+    if bat is None:  # BAT line comes once, when the 3 s check ends
+        return "흰색 천천히 깜빡 (준비 중, SW2 안 먹음) → 약 3초 뒤 초록 깜빡"
+    return "초록 천천히 깜빡 (출발 대기, SW2를 누르면 시작)"
 
 
 class BenchState:
@@ -588,8 +611,10 @@ class DemoLink:
                 self.lines.put(f"[CAL][RESULT] S{n} samples=28 brightness={b + self.random.random() * 20:.1f} "
                                f"min={b - 9} max={b + 11} noise={self.random.random() * 4:.2f}")
         elif state == 1 and t % 200 == 0:
-            for n in info["sensors"]:
-                self.lines.put(f"[CAL][PREVIEW] S{n} F2=1 F3=2 F5=3 F6=4 F7=5 C={self.random.randint(400, 700)}")
+            for n in range(1, 5):
+                c = self.random.randint(400, 700)
+                self.lines.put(f"[CAL][PREVIEW] S{n} F2={c // 6} F3={c // 5} F5={c // 4} F6={c // 3} "
+                               f"F7={c // 2} C={c}")
         if t % 300 == 0 and self.cal is not None:
             mask = sum(1 << (n - 1) for n in info["sensors"])
             self.lines.put(f"CAL,{t},{self.cal[0]},{step},{mask},{info['color']},{info['pose']},"
@@ -804,6 +829,8 @@ def run_gui():
     banner_title.pack(fill="x")
     banner_sub = tk.Label(banner_text, text="", font=font(10), bg=T["sunk"], fg=T["muted"], anchor="w")
     banner_sub.pack(fill="x")
+    banner_led = tk.Label(banner_text, text="", font=font(10, "bold"), bg=T["sunk"], fg=T["ink"], anchor="w")
+    banner_led.pack(fill="x")
     stop_big = button(banner, "■  STOP   (Esc)", lambda: send("STOP"), kind="stop")
     stop_big.config(font=font(12, "bold"), padx=18, pady=10)
     stop_big.pack(side="right", padx=12, pady=8)
@@ -812,7 +839,7 @@ def run_gui():
         bg, fg = {"idle": (T["sunk"], T["faint"]), "ok": (T["ok_soft"], T["ok"]),
                   "warn": (T["warn_soft"], T["warn"]), "bad": (T["bad_soft"], T["bad"]),
                   "drive": (T["accent_soft"], T["accent"])}[level]
-        for w in (banner, banner_dot, banner_text, banner_title, banner_sub):
+        for w in (banner, banner_dot, banner_text, banner_title, banner_sub, banner_led):
             w.config(bg=bg)
         banner_dot.config(fg=fg)
         banner_title.config(text=title)
@@ -1168,14 +1195,44 @@ def run_gui():
     cal_state_sub = tk.Label(meas, text="", bg=T["surface"], fg=T["muted"], font=font(10), anchor="w",
                              justify="left", wraplength=640)
     cal_state_sub.pack(fill="x")
-    preview_row = tk.Frame(meas, bg=T["surface"])
-    preview_row.pack(fill="x", pady=(8, 0))
-    tk.Label(preview_row, text="실시간 밝기", bg=T["surface"], fg=T["muted"], font=font(9)).pack(side="left")
-    preview_bar = tk.Canvas(preview_row, height=14, bg=T["sunk"], highlightthickness=0)
-    preview_bar.pack(side="left", fill="x", expand=True, padx=8)
-    preview_fill = preview_bar.create_rectangle(0, 0, 0, 14, fill=T["accent"], outline="")
-    preview_value = tk.Label(preview_row, text="—", width=7, bg=T["surface"], fg=T["ink"], font=font(9, "bold", mono=True))
-    preview_value.pack(side="left")
+    # Four sensors laid out like the robot seen from above (front on top).
+    spectrum = tk.Canvas(meas, height=280, bg=T["surface"], highlightthickness=0)
+    spectrum.pack(fill="x", pady=(8, 0))
+
+    def draw_spectrum(previews, in_step, live):
+        spectrum.delete("all")
+        w, h = max(spectrum.winfo_width(), 400), int(spectrum["height"])
+        pw, ph = w / 2, h / 2
+        for n in range(1, 5):
+            x0, y0 = (n - 1) % 2 * pw, (n - 1) // 2 * ph
+            on, p = n in in_step, previews.get(n)
+            spectrum.create_rectangle(x0 + 3, y0 + 3, x0 + pw - 3, y0 + ph - 3, outline=T["accent"] if on else T["line"],
+                                      width=2 if on else 1)
+            spectrum.create_text(x0 + 12, y0 + 14, anchor="w", fill=T["ink"] if on else T["muted"], font=font(9, "bold"),
+                                 text=SENSOR_NAMES[n] + ("  · 이번 단계" if on else ""))
+            msg = ("준비 단계에서만 실시간 표시" if not live else "값 없음" if p is None else
+                   "무효: 포화(너무 가깝거나 밝음) 또는 무수광" if not p["ready"] else None)
+            if msg:
+                spectrum.create_text(x0 + pw / 2, y0 + ph / 2 + 6, text=msg, font=font(9),
+                                     fill=T["bad"] if live and p is not None else T["faint"])
+                continue
+            chans = [(k, v) for k, v in p["channels"].items() if k in SPECTRUM]
+            top, bottom = y0 + 40, y0 + ph - 22
+
+            def level(v):  # sqrt scale so black (low counts) still shows
+                return bottom - (bottom - top) * min(1.0, max(v, 0) / AS7341_FULL_SCALE) ** 0.5
+
+            sat_y = level(NEAR_SATURATION)  # dashed line = near saturation
+            spectrum.create_line(x0 + 10, sat_y, x0 + pw - 10, sat_y, fill=T["bad"], dash=(3, 3))
+            slot = (pw - 20) / max(len(chans), 1)
+            for i, (k, v) in enumerate(chans):
+                color, label = SPECTRUM[k]
+                bx, y, hot = x0 + 10 + i * slot, level(v), v >= NEAR_SATURATION
+                spectrum.create_rectangle(bx + slot * 0.2, y, bx + slot * 0.8, bottom, fill=color,
+                                          outline=T["bad"] if hot else "", width=2)
+                spectrum.create_text(bx + slot / 2, y - 7, text=str(v), font=font(8, mono=True),
+                                     fill=T["bad"] if hot else T["ink"])
+                spectrum.create_text(bx + slot / 2, bottom + 10, text=label, font=font(8), fill=T["muted"])
 
     result_card = card(cal_right, "이번 측정 결과")
     result_text = tk.Label(result_card, text="아직 없음", bg=T["surface"], fg=T["faint"], font=font(10, mono=True),
@@ -1280,17 +1337,9 @@ def run_gui():
                      fg={"ok": T["ok"], "warn": T["warn"], "bad": T["bad"]}[level], font=font(10, "bold"),
                      anchor="w").pack(fill="x")
 
-        ps = {n: p for n, p in state.cal_previews.items() if c and n in c.get("sensors", [])}
         # Firmware reports NOT_READY for saturated (too close / too bright) samples too.
-        preview_value.config(width=30, text="  ".join(
-            f"{n}:{p['clear'] if p['ready'] else '포화?'}" for n, p in sorted(ps.items())) if active and ps else "—")
-        brightest = max((p["clear"] for p in ps.values() if p["ready"]), default=0)
-        if active and c["state"] == "WaitingForReady" and brightest:
-            width = preview_bar.winfo_width()
-            preview_bar.coords(preview_fill, 0, 0, int(width * min(1.0, brightest / AS7341_FULL_SCALE)), 14)
-            preview_bar.itemconfig(preview_fill, fill=T["bad"] if brightest >= NEAR_SATURATION else T["accent"])
-        else:
-            preview_bar.coords(preview_fill, 0, 0, 0, 14)
+        draw_spectrum(state.cal_previews, c.get("sensors", []) if c else [],
+                      bool(active and c and c["state"] == "WaitingForReady"))
 
         if not connected:
             cal_step_label.config(text="교정 전")
@@ -1525,7 +1574,7 @@ def run_gui():
             c = state.cal
             set_banner("warn", f"색 교정 중 · 단계 {c['step'] + 1}/{CAL_STEPS}",
                        "모터는 브레이크 상태입니다 · 색 교정 탭의 안내를 따라가세요")
-        elif b and not b["result"].endswith("ok"):
+        elif b and b["result"] in BAT_FAILED:
             set_banner("bad", f"배터리 판정 실패 · {b['result']}",
                        f"{b['mv'] / 1000:.2f} V · 3S/4S 범위가 아니면 모터가 움직이지 않습니다")
         elif not ui["seen_data"]:
@@ -1541,6 +1590,9 @@ def run_gui():
             set_banner("idle", f"MODE {d['mode']}", "센서 값을 보려면 DATA, 주행하려면 MANUAL")
         else:
             set_banner("idle", "연결됨", "로그가 멈춰 있으면 LOG ON")
+        coach = led_coach(state.estop, state.system, b, bool(d and d["allowed"]))
+        banner_led.config(text=f"보드 LED는 지금: {coach} · 다르면 로그를 학현에게"
+                          if link["obj"] and ui["seen_data"] else "")
 
     def render_status():
         bat_check_btn.config(text="배터리 판정: " + ("— (보드 연결 후 표시)" if state.bat_check is None else

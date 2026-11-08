@@ -57,6 +57,9 @@ class SystemManager {
 
   // SW2 only starts operation. A software stop must be requested explicitly.
   static void requestStop();
+  // Software emergency stop (IMU rollover, TiltGuard): the same permanent
+  // latch as SW1, taken over by the next update(); recovery is a reboot.
+  static void triggerEmergencyStop();
 
   // Health setters log only an actual change. The detail value is normally a
   // motor number, sensor channel, or module-specific short identifier.

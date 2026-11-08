@@ -1,6 +1,7 @@
 #include "control/robot_fsm.hpp"
 
 #include "control/control_config.hpp"
+#include "control/wander.hpp"
 #include "system/event_logger.hpp"
 
 namespace {
@@ -25,9 +26,13 @@ uint32_t insideGrooveSinceMs = 0;
 // Per sensor: when it last read a hazard (see HAZARD_CONTACT_HOLD_MS).
 uint32_t lastHazardMs[COLOR_SENSOR_COUNT] = {};
 bool hazardSeen[COLOR_SENSOR_COUNT] = {};
+FloorColor lastHazardColor[COLOR_SENSOR_COUNT] = {};
+FloorColor currentEscapeColor = FloorColor::Unknown;
 // Search starts toward the side the tower was last seen, then alternates.
 uint32_t searchStartedMs = 0;
 bool searchFirstLeft = true;
+// Last pass with a usable Pi frame (target or not); see config::wander.
+uint32_t lastVisionOkMs = 0;
 
 void transitionTo(RobotState next, uint32_t nowMs) {
   if (currentState == next) return;
@@ -69,6 +74,7 @@ uint8_t hazardSensorMask(const SensorSnapshot& sensors, uint32_t nowMs) {
     if (isHazardColor(sensors.floorColor[index])) {
       mask |= 1U << index;
       lastHazardMs[index] = nowMs;
+      lastHazardColor[index] = sensors.floorColor[index].color;
       hazardSeen[index] = true;
     } else if (hazardSeen[index] && contactBlind(sensors.colorRaw[index]) &&
                nowMs - lastHazardMs[index] < config::control::HAZARD_CONTACT_HOLD_MS) {
@@ -80,6 +86,13 @@ uint8_t hazardSensorMask(const SensorSnapshot& sensors, uint32_t nowMs) {
 
 void clearHazardMemory() {
   for (bool& seen : hazardSeen) seen = false;
+}
+
+FloorColor firstHazardColor(uint8_t hazards) {
+  for (uint8_t index = 0; index < COLOR_SENSOR_COUNT; ++index) {
+    if ((hazards & (1U << index)) != 0) return lastHazardColor[index];
+  }
+  return FloorColor::Unknown;
 }
 
 DriveIntent searchIntent(uint32_t nowMs) {
@@ -198,6 +211,7 @@ void RobotFsm::begin() {
   insideGroove = false;
   searchStartedMs = stateEnteredMs;
   searchFirstLeft = true;
+  lastVisionOkMs = 0;
   clearHazardMemory();
   transitionTo(RobotState::WaitStart, stateEnteredMs);
 }
@@ -226,6 +240,7 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
   }
   if (hazards != 0 && currentState != RobotState::ZoneEscape) {
     activeHazardSensors = hazards;
+    currentEscapeColor = firstHazardColor(hazards);
     escapeStartedReversing = currentState == RobotState::Backoff;
     insideGroove = false;
     resetTargetConfirmation();
@@ -279,9 +294,10 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
     return searchIntent(nowMs);
   }
 
-  const bool targetVisible = vision.linkValid && vision.frameFresh &&
-                             vision.targetValid && vision.cameraOk &&
-                             vision.pipelineOk;
+  const bool visionUsable = vision.linkValid && vision.frameFresh &&
+                            vision.cameraOk && vision.pipelineOk;
+  if (visionUsable) lastVisionOkMs = nowMs;
+  const bool targetVisible = visionUsable && vision.targetValid;
   if (targetVisible) {
     observeTargetFrame(vision);
     lastTargetMs = vision.frameUpdatedMs;
@@ -363,6 +379,14 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
                         : DriveIntentType::SearchRight,
                     config::control::SEARCH_DUTY);
     }
+    // Pi silent or broken: a fixed spin would look like a broken robot.
+    if (nowMs - lastVisionOkMs >= config::wander::VISION_LOST_MS) {
+      if (currentState != RobotState::Wander) {
+        transitionTo(RobotState::Wander, nowMs);
+        Wander::reset(nowMs);
+      }
+      return Wander::intent(nowMs);
+    }
     transitionTo(RobotState::Search, nowMs);
     return searchIntent(nowMs);
   }
@@ -416,3 +440,5 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
 }
 
 RobotState RobotFsm::state() { return currentState; }
+
+FloorColor RobotFsm::escapeColor() { return currentEscapeColor; }
