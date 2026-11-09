@@ -112,6 +112,15 @@ class CalibratorTests(unittest.TestCase):
         d.min_area, d.max_area = 1e-4, 0.01            # largest allowed 1 %
         self.assertEqual(d.detect(image).candidates, [])
 
+    def test_zero_min_area_skips_a_one_pixel_line(self):
+        # 11/09 Pi: min_area 0.0 saved from the app, a 1 px line (area 0) crashed detect
+        d = T.TowerDetector(NO_FILE)
+        d.min_area = 0.0
+        image = frame()
+        image[100:200, 300] = GREEN
+        small = cv2.resize(frame((290, 100, 20, 100)), (320, 180), interpolation=cv2.INTER_AREA)
+        self.assertEqual(d.detect(image, small).candidates, [])
+
 
 if __name__ == "__main__":
     unittest.main()

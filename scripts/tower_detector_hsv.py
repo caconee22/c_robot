@@ -226,6 +226,8 @@ class TowerDetector:
                 rejected.append(((x, y, w, h), "flat"))
                 continue
             m = cv2.moments(contour)
+            if m["m00"] == 0:   # 1 px line, area 0: only reachable with min_area 0
+                continue
             tall.append({"bbox": (x, y, w, h), "area": area,
                          "centroid": (m["m10"] / m["m00"], m["m01"] / m["m00"])})
         tall.sort(key=lambda c: c["area"], reverse=True)
