@@ -22,6 +22,9 @@ uint8_t lastOneEndHazards = 0;
 bool escapeStartedReversing = false;
 bool insideGroove = false;
 bool grooveExitForward = false;
+// Lock-on escape: straight back off a front hazard while pushing the opponent
+// into the zone, keeping the target (see config::control::LOCKON_*).
+bool lockOnEscape = false;
 uint32_t insideGrooveSinceMs = 0;
 // Per sensor: when it last read a hazard (see HAZARD_CONTACT_HOLD_MS).
 uint32_t lastHazardMs[COLOR_SENSOR_COUNT] = {};
@@ -95,13 +98,29 @@ FloorColor firstHazardColor(uint8_t hazards) {
   return FloorColor::Unknown;
 }
 
-DriveIntent searchIntent(uint32_t nowMs) {
-  const bool flipped =
-      (((nowMs - searchStartedMs) / config::control::SEARCH_DIRECTION_PERIOD_MS) & 1U) != 0;
-  const bool turnLeft = searchFirstLeft != flipped;
-  return intent(turnLeft ? DriveIntentType::SearchLeft
-                         : DriveIntentType::SearchRight,
+// One direction only (11/09): swinging left/right kept the robot looking at
+// the same half of the field.
+DriveIntent searchIntent(uint32_t) {
+  return intent(searchFirstLeft ? DriveIntentType::SearchLeft
+                                : DriveIntentType::SearchRight,
                 config::control::SEARCH_DUTY);
+}
+
+// Tracking the opponent: aligning, approaching, attacking or pushing with the
+// tower seen a moment ago.
+bool trackingTarget(uint32_t nowMs) {
+  switch (currentState) {
+    case RobotState::TrackAlign:
+    case RobotState::Approach:
+    case RobotState::DiveReady:
+    case RobotState::DiveBrake:
+    case RobotState::SpokeEngaged:
+    case RobotState::Push:
+      break;
+    default:
+      return false;
+  }
+  return lastTargetKnown && nowMs - lastTargetMs < config::control::LOCKON_RECENT_MS;
 }
 
 DriveIntent zoneEscapeIntent(uint32_t nowMs) {
@@ -209,6 +228,7 @@ void RobotFsm::begin() {
   lastOneEndHazards = 0;
   escapeStartedReversing = false;
   insideGroove = false;
+  lockOnEscape = false;
   searchStartedMs = stateEnteredMs;
   searchFirstLeft = true;
   lastVisionOkMs = 0;
@@ -225,6 +245,7 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
     targetSequenceKnown = false;
     lastOneEndHazards = 0;
     insideGroove = false;
+    lockOnEscape = false;
     clearHazardMemory();
     transitionTo(safety.state == SafetyState::EmergencyStop
                      ? RobotState::EmergencyStop
@@ -243,7 +264,8 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
     currentEscapeColor = firstHazardColor(hazards);
     escapeStartedReversing = currentState == RobotState::Backoff;
     insideGroove = false;
-    resetTargetConfirmation();
+    lockOnEscape = frontHazardIn(hazards) && !rearHazardIn(hazards) && trackingTarget(nowMs);
+    if (!lockOnEscape) resetTargetConfirmation();
     transitionTo(RobotState::ZoneEscape, nowMs);
   }
 
@@ -255,6 +277,10 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
     if (front && rear) {
       // Whole robot over a hazard color: braking forever would leave it in
       // the groove. Brake briefly, then drive out (see grooveExitIntent).
+      if (lockOnEscape) {
+        lockOnEscape = false;
+        resetTargetConfirmation();
+      }
       activeHazardSensors = hazards;
       stateEnteredMs = nowMs;
       return grooveExitIntent(nowMs);
@@ -268,30 +294,50 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
       stateEnteredMs = nowMs;
       return zoneEscapeIntent(nowMs);
     }
-    // Never complete an old timed movement into a newly detected groove.
-    if (elapsed < config::control::ZONE_ESCAPE_REVERSE_MS &&
-        ((reversing && rear) || (!reversing && front))) {
-      activeHazardSensors = hazards;
-      stateEnteredMs = nowMs;
-      return intent(DriveIntentType::Brake);
+    if (lockOnEscape) {
+      if (rear) {
+        // Backed onto a hazard: stop, then the normal escape takes over.
+        lockOnEscape = false;
+        resetTargetConfirmation();
+        activeHazardSensors = hazards;
+        stateEnteredMs = nowMs;
+        return intent(DriveIntentType::Brake);
+      }
+      if (front) stateEnteredMs = nowMs;   // back off until the front is clear
+      if (nowMs - stateEnteredMs < config::control::LOCKON_BACKOFF_MS) {
+        return intent(DriveIntentType::Reverse, config::control::LOCKON_BACKOFF_DUTY);
+      }
+      // Out of the zone: keep the lock and push again (falls through to the
+      // tracking code below, which always picks the next state).
+      lockOnEscape = false;
+      activeHazardSensors = 0;
+      lastOneEndHazards = 0;
+    } else {
+      // Never complete an old timed movement into a newly detected groove.
+      if (elapsed < config::control::ZONE_ESCAPE_REVERSE_MS &&
+          ((reversing && rear) || (!reversing && front))) {
+        activeHazardSensors = hazards;
+        stateEnteredMs = nowMs;
+        return intent(DriveIntentType::Brake);
+      }
+      if (elapsed >= config::control::ZONE_ESCAPE_REVERSE_MS && hazards != 0) {
+        activeHazardSensors = hazards;
+      }
+      const uint32_t escapeDuration = config::control::ZONE_ESCAPE_REVERSE_MS +
+                                      config::control::ZONE_ESCAPE_TURN_MS;
+      if (nowMs - stateEnteredMs < escapeDuration) {
+        return zoneEscapeIntent(nowMs);
+      }
+      if (hazards != 0) {
+        activeHazardSensors = hazards;
+        stateEnteredMs = nowMs;
+        return zoneEscapeIntent(nowMs);
+      }
+      activeHazardSensors = 0;
+      lastOneEndHazards = 0;
+      transitionTo(RobotState::Search, nowMs);
+      return searchIntent(nowMs);
     }
-    if (elapsed >= config::control::ZONE_ESCAPE_REVERSE_MS && hazards != 0) {
-      activeHazardSensors = hazards;
-    }
-    const uint32_t escapeDuration = config::control::ZONE_ESCAPE_REVERSE_MS +
-                                    config::control::ZONE_ESCAPE_TURN_MS;
-    if (nowMs - stateEnteredMs < escapeDuration) {
-      return zoneEscapeIntent(nowMs);
-    }
-    if (hazards != 0) {
-      activeHazardSensors = hazards;
-      stateEnteredMs = nowMs;
-      return zoneEscapeIntent(nowMs);
-    }
-    activeHazardSensors = 0;
-    lastOneEndHazards = 0;
-    transitionTo(RobotState::Search, nowMs);
-    return searchIntent(nowMs);
   }
 
   const bool visionUsable = vision.linkValid && vision.frameFresh &&
@@ -341,7 +387,7 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
 
   if (currentState == RobotState::Push) {
     if (targetVisible) {
-      if (vision.targetHeight < config::control::ATTACK_BOX_HEIGHT / 2 ||
+      if (vision.targetHeight < config::control::PUSH_MIN_BOX_HEIGHT ||
           abs(static_cast<int32_t>(vision.targetX) -
               config::control::TARGET_CENTER_X) > 600) {
         resetTargetConfirmation();
@@ -380,7 +426,8 @@ DriveIntent RobotFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
                     config::control::SEARCH_DUTY);
     }
     // Pi silent or broken: a fixed spin would look like a broken robot.
-    if (nowMs - lastVisionOkMs >= config::wander::VISION_LOST_MS) {
+    if (config::control::WANDER_WHEN_VISION_LOST &&
+        nowMs - lastVisionOkMs >= config::wander::VISION_LOST_MS) {
       if (currentState != RobotState::Wander) {
         transitionTo(RobotState::Wander, nowMs);
         Wander::reset(nowMs);

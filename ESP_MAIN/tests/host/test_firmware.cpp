@@ -48,7 +48,7 @@ void pressStart() {
   fake::level(pins::START_SWITCH,HIGH); SystemManager::update(millis());
   fake::advance(40); SystemManager::update(millis());
 }
-std::vector<uint8_t> packet(uint8_t seq, uint16_t x=960, uint16_t height=300, uint8_t flags=0x33) {
+std::vector<uint8_t> packet(uint8_t seq, uint16_t x=960, uint16_t height=200, uint8_t flags=0x33) {
   const uint16_t y=flags&1 ? 500 : 0, width=flags&1 ? 200 : 0;
   if(!(flags&1)) { x=0; height=0; }
   std::vector<uint8_t> p{0xAA,0x55,1,10,seq,flags};
@@ -58,7 +58,7 @@ std::vector<uint8_t> packet(uint8_t seq, uint16_t x=960, uint16_t height=300, ui
 void feed(const std::vector<uint8_t>& bytes) {
   Serial1.inject(bytes); while(Serial1.available()) RaspberryLink::poll();
 }
-VisionSnapshot target(uint8_t seq, uint32_t frameMs, uint16_t x=960, uint16_t height=300) {
+VisionSnapshot target(uint8_t seq, uint32_t frameMs, uint16_t x=960, uint16_t height=200) {  // below ATTACK_BOX_HEIGHT: approach
   VisionSnapshot v; v.sequence=seq; v.frameUpdatedMs=frameMs; v.receivedMs=frameMs;
   v.targetX=x; v.targetHeight=height; v.targetWidth=200; v.targetY=500;
   v.linkValid=v.frameFresh=v.targetValid=v.cameraOk=v.pipelineOk=true;
@@ -218,6 +218,7 @@ void testProtocol() {
   feed(noise); feed(packet(8)); feed(packet(9)); CHECK(RaspberryLink::status().lastSequence==9);
 }
 
+void testLockOnAndCharge();
 void testFsm() {
   fixture(); RobotFsm::begin(); SensorSnapshot sensors; VisionSnapshot missing;
   CHECK(RobotFsm::update(0,sensors,missing,SafetyStatus{}).type==DriveIntentType::Brake);
@@ -311,7 +312,7 @@ void testFsm() {
   RobotFsm::update(config::control::LOST_TARGET_HOLD_MS-1,sensors,missing,running());
   CHECK(RobotFsm::state()==RobotState::LostTarget);
   RobotFsm::update(config::control::LOST_TARGET_HOLD_MS,sensors,missing,running());
-  CHECK(RobotFsm::state()==RobotState::Wander);  // Pi silent past VISION_LOST_MS: no fixed spin
+  CHECK(RobotFsm::state()==RobotState::Search);  // 11/09: Pi silent keeps the spin search (Wander off)
   // A sensor that read red and is then blinded by floor contact (invalid sample)
   // still counts as a hazard for HAZARD_CONTACT_HOLD_MS; a never-sampled one does not.
   RobotFsm::begin(); sensors=SensorSnapshot{};
@@ -350,8 +351,8 @@ void testFsm() {
   CHECK(RobotFsm::update(20,sensors,noTower,running()).type==DriveIntentType::SearchRight);
   const uint32_t searchAt=10+config::control::LOST_TARGET_HOLD_MS;
   CHECK(RobotFsm::update(searchAt,sensors,noTower,running()).type==DriveIntentType::SearchRight);
-  CHECK(RobotFsm::update(searchAt+config::control::SEARCH_DIRECTION_PERIOD_MS,sensors,noTower,
-                         running()).type==DriveIntentType::SearchLeft);
+  CHECK(RobotFsm::update(searchAt+5000,sensors,noTower,
+                         running()).type==DriveIntentType::SearchRight);  // 11/09: no left/right swing
   // Align spin ramps: slow just outside the window, fastest far off, never below the floor.
   RobotFsm::begin();
   RobotFsm::update(10,sensors,target(1,10,1900),running());
@@ -362,6 +363,65 @@ void testFsm() {
   CHECK(near.type==DriveIntentType::AlignRight && near.requestedDuty==config::control::ALIGN_MIN_DUTY);
   CHECK(RobotFsm::update(50,sensors,target(5,50,960+config::control::TARGET_CENTER_DEADBAND),
                          running()).type==DriveIntentType::Approach);
+  testLockOnAndCharge();
+}
+
+void testLockOnAndCharge() {
+  using namespace config::control;
+  SensorSnapshot sensors; VisionSnapshot missing;
+  // Charge starts at ATTACK_BOX_HEIGHT (lowered 11/09), not one pixel below.
+  RobotFsm::begin();
+  RobotFsm::update(10,sensors,target(1,10),running()); RobotFsm::update(20,sensors,target(2,20),running());
+  CHECK(RobotFsm::update(30,sensors,target(3,30,960,ATTACK_BOX_HEIGHT-1),running()).type==DriveIntentType::Approach);
+  CHECK(RobotFsm::update(40,sensors,target(4,40,960,ATTACK_BOX_HEIGHT),running()).type==DriveIntentType::AttackCharge);
+  // Push keeps going down to PUSH_MIN_BOX_HEIGHT (unchanged by the lower charge height).
+  uint32_t ms=40+ATTACK_CHARGE_MS; RobotFsm::update(ms,sensors,missing,running());
+  ms+=DIVE_BRAKE_MS; RobotFsm::update(ms,sensors,missing,running());
+  ms+=SPOKE_INSERT_MS;
+  CHECK(RobotFsm::update(ms,sensors,target(5,ms,960,PUSH_MIN_BOX_HEIGHT),running()).type==DriveIntentType::Push);
+  CHECK(RobotFsm::state()==RobotState::Push);
+  CHECK(RobotFsm::update(ms+10,sensors,target(6,ms+10,960,PUSH_MIN_BOX_HEIGHT-1),running()).type==DriveIntentType::Brake);
+  CHECK(RobotFsm::state()==RobotState::TargetConfirm);
+
+  // Lock-on: pushing the opponent, front hits red -> straight back (no turn),
+  // target kept, then approach again without a new confirmation.
+  RobotFsm::begin();
+  RobotFsm::update(10,sensors,target(1,10),running()); RobotFsm::update(20,sensors,target(2,20),running());
+  CHECK(RobotFsm::state()==RobotState::Approach);
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  CHECK(RobotFsm::update(30,sensors,target(3,30),running()).type==DriveIntentType::Reverse);
+  CHECK(RobotFsm::state()==RobotState::ZoneEscape);
+  CHECK(RobotFsm::update(200,sensors,target(4,200),running()).type==DriveIntentType::Reverse);  // still on red
+  sensors=SensorSnapshot{};
+  auto d=RobotFsm::update(200+LOCKON_BACKOFF_MS-1,sensors,target(5,200+LOCKON_BACKOFF_MS-1),running());
+  CHECK(d.type==DriveIntentType::Reverse && d.requestedDuty==LOCKON_BACKOFF_DUTY);
+  d=RobotFsm::update(200+LOCKON_BACKOFF_MS,sensors,target(6,200+LOCKON_BACKOFF_MS),running());
+  CHECK(d.type==DriveIntentType::Approach && RobotFsm::state()==RobotState::Approach);   // pushes again
+  // Lost during the back-off: spin toward the last side, no turn-away escape.
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  RobotFsm::update(10,sensors,target(1,10,1100),running()); RobotFsm::update(20,sensors,target(2,20,1100),running());
+  sensors.floorColor[1].color=FloorColor::Blue; sensors.floorColor[1].reliable=true;
+  CHECK(RobotFsm::update(30,sensors,missing,running()).type==DriveIntentType::Reverse);
+  sensors=SensorSnapshot{};
+  CHECK(RobotFsm::update(30+LOCKON_BACKOFF_MS,sensors,missing,running()).type==DriveIntentType::SearchRight);
+  CHECK(RobotFsm::state()==RobotState::LostTarget);
+  // Rear hits a hazard while backing off: brake, then the normal escape (forward).
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  RobotFsm::update(10,sensors,target(1,10),running()); RobotFsm::update(20,sensors,target(2,20),running());
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  RobotFsm::update(30,sensors,target(3,30),running());
+  sensors=SensorSnapshot{}; sensors.floorColor[2].color=FloorColor::Blue; sensors.floorColor[2].reliable=true;
+  CHECK(RobotFsm::update(100,sensors,target(4,100),running()).type==DriveIntentType::Brake);
+  CHECK(RobotFsm::update(110,sensors,target(5,110),running()).type==DriveIntentType::Approach);
+  CHECK(RobotFsm::update(110+ZONE_ESCAPE_REVERSE_MS,sensors,target(6,110+ZONE_ESCAPE_REVERSE_MS),
+                         running()).type==DriveIntentType::EscapeRight);   // normal escape turns away
+  // Not tracking (tower not seen for LOCKON_RECENT_MS): normal escape with a turn.
+  RobotFsm::begin(); sensors=SensorSnapshot{};
+  RobotFsm::update(10,sensors,target(1,10),running()); RobotFsm::update(20,sensors,target(2,20),running());
+  sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
+  CHECK(RobotFsm::update(20+LOCKON_RECENT_MS,sensors,missing,running()).type==DriveIntentType::Reverse);
+  CHECK(RobotFsm::update(20+LOCKON_RECENT_MS+ZONE_ESCAPE_REVERSE_MS,sensors,missing,
+                         running()).type==DriveIntentType::EscapeRight);
 }
 
 void testColorsAndErrors() {
@@ -686,17 +746,20 @@ void testWanderAndTilt() {
   // Pi alive but no tower: the normal spin search.
   VisionSnapshot empty=target(1,1000); empty.targetValid=false;
   RobotFsm::update(1000,sensors,empty,running()); CHECK(RobotFsm::state()==RobotState::Search);
-  // Silent shorter than VISION_LOST_MS: still Search; longer: Wander.
-  RobotFsm::update(1000+config::wander::VISION_LOST_MS-1,sensors,missing,running());
-  CHECK(RobotFsm::state()==RobotState::Search);
-  RobotFsm::update(1000+config::wander::VISION_LOST_MS,sensors,missing,running());
-  CHECK(RobotFsm::state()==RobotState::Wander);
-  // Over 20 s it alternates turn / forward with changing lengths and sides.
+  // 11/09: Wander is off (WANDER_WHEN_VISION_LOST): a silent Pi keeps the same spin.
+  static_assert(!config::control::WANDER_WHEN_VISION_LOST, "update this test when Wander is back on");
+  const auto firstSpin=RobotFsm::update(1000+config::wander::VISION_LOST_MS,sensors,missing,running()).type;
+  for(uint32_t ms=1000+config::wander::VISION_LOST_MS;ms<12000;ms+=50) {
+    CHECK(RobotFsm::update(ms,sensors,missing,running()).type==firstSpin);
+    CHECK(RobotFsm::state()==RobotState::Search);
+  }
+  // The Wander module itself (still built, used again if the switch is turned on):
+  // over 20 s it alternates turn / forward with changing lengths and sides.
   uint32_t t=2000; DriveIntentType last=DriveIntentType::Brake; uint32_t segStart=t;
   int forwards=0,lefts=0,rights=0; uint32_t minSeg=UINT32_MAX,maxSeg=0; bool consecutiveSame=false;
+  Wander::reset(t);
   for(;t<22000;t+=10) {
-    const auto d=RobotFsm::update(t,sensors,missing,running());
-    CHECK(RobotFsm::state()==RobotState::Wander);
+    const auto d=Wander::intent(t);
     CHECK(d.type==DriveIntentType::Approach||d.type==DriveIntentType::SearchLeft||d.type==DriveIntentType::SearchRight);
     if(d.type!=last) {
       const bool lastTurn=last!=DriveIntentType::Approach, nowTurn=d.type!=DriveIntentType::Approach;
@@ -709,7 +772,7 @@ void testWanderAndTilt() {
     }
   }
   CHECK(!consecutiveSame && forwards>5 && lefts>0 && rights>0 && maxSeg>minSeg+150);
-  // A floor hazard still wins over wandering.
+  // A floor hazard still wins over the search.
   sensors.floorColor[0].color=FloorColor::Red; sensors.floorColor[0].reliable=true;
   CHECK(RobotFsm::update(t,sensors,missing,running()).type==DriveIntentType::Reverse);
   CHECK(RobotFsm::state()==RobotState::ZoneEscape);

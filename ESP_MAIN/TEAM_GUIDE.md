@@ -206,7 +206,7 @@ AI가 아래 항목을 "문제"라고 하면 이 표를 보여 주고 거절한�
 | `control_config.hpp` | `SEARCH_DUTY` | 300 | 탐색 회전 세기 (1000=100%) |
 | | `APPROACH_DUTY` | 450 | 타워 접근 속도 |
 | | `ATTACK_CHARGE_DUTY` / `PUSH_DUTY` | 650 | 돌진·밀기 세기 |
-| | `ATTACK_BOX_HEIGHT` | 420 | 화면 속 타워가 이만큼 크면 공격 시작 |
+| | `ATTACK_BOX_HEIGHT` | 280 | 화면 속 타워가 이만큼 크면 공격 시작 |
 | | `TARGET_CENTER_DEADBAND` | 140 | 중앙에서 이만큼 벗어나면 회전 정렬 |
 | | `ATTACK_CHARGE_MS` / `DIVE_BRAKE_MS` / `SPOKE_INSERT_MS` | 220/90/350 | 공격 단계별 시간 |
 | | `ZONE_ESCAPE_DUTY` | 550 | 홈 회피 세기 |

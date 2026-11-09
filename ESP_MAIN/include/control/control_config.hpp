@@ -37,12 +37,30 @@ constexpr uint16_t TARGET_CENTER_DEADBAND = 200;
 // Attack needs a narrower center than align, but +-75 px was tighter than the
 // align could hold; approach steering closes the rest on the way in.
 constexpr uint16_t ATTACK_CENTER_DEADBAND = 150;
-constexpr uint16_t ATTACK_BOX_HEIGHT = 420;
+// 11/09 field run: 420 only charged when already very close; lowered so the
+// charge starts farther out. Start value, measure the box height at the
+// wanted charge distance with the real camera.
+constexpr uint16_t ATTACK_BOX_HEIGHT = 280;
+// Push gives up and re-confirms below this box height. Kept at the old
+// 420 / 2 so lowering the charge height does not change the push.
+constexpr uint16_t PUSH_MIN_BOX_HEIGHT = 210;
 constexpr uint8_t TARGET_CONFIRM_FRAMES = 2;
 // After losing the tower, keep spinning toward the side it was last seen
 // (bench ALIGN found it again this way), then search starts on that side too.
 constexpr uint32_t LOST_TARGET_HOLD_MS = 1500;
-constexpr uint32_t SEARCH_DIRECTION_PERIOD_MS = 1200;
+// 11/09: search keeps spinning one way (toward the side the tower was last
+// seen) instead of swinging left/right, and keeps spinning when the Pi goes
+// silent instead of the random forward/turn Wander. true restores Wander.
+constexpr bool WANDER_WHEN_VISION_LOST = false;
+
+// Lock-on escape (11/09): a hazard on the front sensors only while the robot
+// is tracking the opponent (align, approach, attack or push, tower seen within
+// LOCKON_RECENT_MS) means it is pushing the opponent into the zone. Back
+// straight out without turning, keep the target, then push again.
+// Start values, not yet driven on the field.
+constexpr uint32_t LOCKON_RECENT_MS = 300;
+constexpr uint32_t LOCKON_BACKOFF_MS = 360;
+constexpr uint16_t LOCKON_BACKOFF_DUTY = 550;
 
 // Time-based nose-dive and spoke sequence. Tune on a lifted-wheel rig first.
 constexpr uint32_t ATTACK_CHARGE_MS = 220;
