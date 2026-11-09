@@ -44,6 +44,7 @@ from pi_green_tracker import DEFAULT_CONFIG, PiCameraSource, VideoSource, load_p
 from tower_detector_hsv import TowerDetector  # noqa: E402
 import camera_settings  # noqa: E402
 import vision_packet  # noqa: E402
+from view_tap import ViewTap  # noqa: E402
 
 SEND_PERIOD_S = 0.020  # 50 Hz
 
@@ -132,6 +133,7 @@ def main() -> None:
     sender.start()
     stop = threading.Event()
     stats = {"frames": 0, "fps": 0.0, "detect_ms": 0.0, "age_ms": None, "targets": 0}
+    view = ViewTap()   # tracking viewer on the desktop (vision_viewer.py); idle when no viewer
 
     def detect_loop(on_frame=None) -> None:
         sequence = stable = report_frames = 0
@@ -159,6 +161,7 @@ def main() -> None:
             stamp = getattr(source, "metadata", {}).get("SensorTimestamp")
             if stamp:
                 stats["age_ms"] = (time.clock_gettime_ns(time.CLOCK_BOOTTIME) - stamp) / 1e6
+            view.publish(frame.shape, search_frame, result.candidates, stats)
             if on_frame:
                 on_frame(frame, search_frame, result)
             report_frames += 1

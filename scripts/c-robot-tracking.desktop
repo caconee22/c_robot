@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=C_ROBOT 추적 화면
+Comment=송신을 멈추지 않고 지금 추적 중인 화면을 봅니다 (q로 닫기)
+Exec=nice -n 10 python3 /home/caconee/c_robot/scripts/vision_viewer.py
+Icon=camera-video
+Terminal=false
