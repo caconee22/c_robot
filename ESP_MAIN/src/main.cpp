@@ -2,7 +2,10 @@
 
 #include "app/boot_manager.hpp"
 #include "communication/raspberry_link.hpp"
+#include "control/align_fsm.hpp"
+#include "control/control_config.hpp"
 #include "control/drive_logic.hpp"
+#include "control/opening_move.hpp"
 #include "control/robot_fsm.hpp"
 #include "motor/motor_controller.hpp"
 #include "sensors/imu_monitor.hpp"
@@ -47,7 +50,8 @@ void showRobotState(RobotState state) {
       StatusLed::setBoth(LedOwner::Fsm, LedState::Attacking);
       break;
     case RobotState::ZoneEscape:
-      StatusLed::setBoth(LedOwner::Fsm, RobotFsm::escapeColor() == FloorColor::Blue
+      StatusLed::setBoth(LedOwner::Fsm, (config::control::ALIGN_ONLY_FSM ? AlignFsm::escapeColor()
+                                                                          : RobotFsm::escapeColor()) == FloorColor::Blue
                                             ? LedState::EscapeBlue
                                             : LedState::EscapeRed);
       break;
@@ -62,7 +66,7 @@ void setup() {
   const BootResult boot = BootManager::begin();
   if (!boot.safeToRun) stayInBootFailure();
 
-  RobotFsm::begin();
+  if (config::control::ALIGN_ONLY_FSM) AlignFsm::begin(); else RobotFsm::begin();
   BatteryMonitor::begin(millis());
   ImuMonitor::begin(millis());
   TiltGuard::begin();
@@ -79,6 +83,9 @@ void loop() {
   RaspberryLink::poll();
   SensorManager::update();
   BatteryMonitor::update(millis());
+  // Opening move duty follows the pack type found at power-on (3S vs 4S), Ok only.
+  OpeningMove::setBatteryCells(BatteryMonitor::status().result == BatteryCheckResult::Ok
+                                   ? BatteryMonitor::status().cells : 0);
   ImuMonitor::update(millis());
   // Upside down (past the tilt limit) for too long: permanent emergency stop.
   if (TiltGuard::update(millis(), SystemManager::running(), ImuMonitor::status(),
@@ -91,8 +98,10 @@ void loop() {
 
   const SensorSnapshot sensors = SensorManager::snapshot();
   const VisionSnapshot vision = RaspberryLink::latest();
+  // 11/10: ALIGN_ONLY_FSM = the rebuilt FSM (opening, escape, charge, align; control/align_fsm.hpp).
   const DriveIntent driveIntent =
-      RobotFsm::update(nowMs, sensors, vision, system.safety);
+      config::control::ALIGN_ONLY_FSM ? AlignFsm::update(nowMs, sensors, vision, system.safety)
+                                      : RobotFsm::update(nowMs, sensors, vision, system.safety);
   const MotorCommand command = DriveLogic::makeCommand(nowMs, driveIntent);
 
   if (system.motorAllowed) {
@@ -104,7 +113,7 @@ void loop() {
     MotorController::brake();
   }
 
-  showRobotState(RobotFsm::state());
+  showRobotState(config::control::ALIGN_ONLY_FSM ? AlignFsm::state() : RobotFsm::state());
   StatusLed::update(nowMs);
   EventLogger::process();
   delay(1);  // Yield to the watchdog and ESP32 background tasks.

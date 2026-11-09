@@ -82,8 +82,13 @@ StatusLed::update, EventLogger::process, delay(1)
 | SW1/SW2 | `interrupts/button_interrupts.hpp` | `update`, `consumeStartEvent`, `enterEmergencyStopLoop` | ISR, SystemManager | 예 |
 | 안전 관리 | `system/system_manager.hpp` | `update`, `status`, `requestStop`, `set*Healthy` | loop | 예 |
 | 모터 | `motor/motor_controller.hpp` | `apply`, `brake`, `update`, `status` | loop, 감시 태스크 | 예 |
+| 직진 보정 (NVS `motor`/`trimL`·`trimR`, 800~1000) | `motor/motor_trim.hpp` | `load`, `set`, `save`, `scale` | MotorController (apply·begin), 벤치 `TRIM` | |
 | BTS7960 | `motor/bts7960_driver.hpp` | `drive`, `brake`, `latch*DriveInhibit` | MotorController, SW1 ISR | 예 |
 | FSM | `control/robot_fsm.hpp` | `update`, `state` | loop | |
+| 새 경기 FSM (11/10, `ALIGN_ONLY_FSM`: 시작 루틴·회피·돌진·정렬) | `control/align_fsm.hpp` | `update`, `state` | loop (RobotFsm 대신) | |
+| 시작 루틴 | `control/opening_move.hpp` | `start`, `active`, `intent` | AlignFsm | |
+| 바닥 위험 판단 (처음 감지 쪽) | `control/floor_hazard.hpp` | `update` | AlignFsm | |
+| 바닥 회피 동작 | `control/escape_move.hpp` | `start`, `update` | AlignFsm | |
 | 구동 변환 | `control/drive_logic.hpp` | `makeCommand` | loop | |
 | 라즈 없을 때 무작위 순회 | `control/wander.hpp` | `reset`, `intent` | RobotFsm | |
 | 뒤집힘 비상정지 (V2) | `system/tilt_guard.hpp` | `begin`, `update` | setup, loop → `SystemManager::triggerEmergencyStop` | 예 |

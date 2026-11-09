@@ -53,6 +53,22 @@ constexpr uint32_t LOST_TARGET_HOLD_MS = 1500;
 // silent instead of the random forward/turn Wander. true restores Wander.
 constexpr bool WANDER_WHEN_VISION_LOST = false;
 
+// 11/10 restart: true runs AlignFsm (control/align_fsm.hpp) instead of
+// RobotFsm: turn in place toward the tower and search by spinning, never
+// forward or backward. false = the full match FSM below.
+constexpr bool ALIGN_ONLY_FSM = true;
+// AlignFsm: tower missing this long (detector drop) -> brake, then search.
+constexpr uint32_t ALIGN_LOST_HOLD_MS = 300;
+// AlignFsm charge (11/10, start values for 3S): tower within
+// ATTACK_CENTER_DEADBAND for CHARGE_CONFIRM_FRAMES new frames -> drive at it.
+constexpr bool CHARGE_ENABLED = true;
+constexpr uint16_t CHARGE_DUTY = 500;
+constexpr int16_t CHARGE_STEERING_MAX = 120;
+constexpr uint8_t CHARGE_CONFIRM_FRAMES = 2;
+constexpr uint16_t CHARGE_ABORT_ERROR = 400;     // px off center -> back to align
+constexpr uint32_t CHARGE_LOST_HOLD_MS = 300;    // keep going straight through a drop
+static_assert(CHARGE_DUTY + CHARGE_STEERING_MAX <= 710, "charge must fit under the motor limit");
+
 // Lock-on escape (11/09): a hazard on the front sensors only while the robot
 // is tracking the opponent (align, approach, attack or push, tower seen within
 // LOCKON_RECENT_MS) means it is pushing the opponent into the zone. Back

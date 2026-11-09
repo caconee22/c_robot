@@ -7,6 +7,7 @@
 #include "interrupts/button_interrupts.hpp"
 #include "motor/bts7960_driver.hpp"
 #include "motor/motor_config.hpp"
+#include "motor/motor_trim.hpp"
 #include "pins.hpp"
 
 namespace {
@@ -100,6 +101,7 @@ void rejectLocked(MotorControlResult result, StopMode mode) {
 }
 
 bool MotorController::begin() {
+  MotorTrim::load();   // NVS once per boot, before any output
   if (motorMutex == nullptr) {
     motorMutex = xSemaphoreCreateMutexStatic(&motorMutexStorage);
   }
@@ -167,10 +169,13 @@ bool MotorController::apply(const MotorCommand& command,
     return false;
   }
 
-  const int16_t left = applyLimit(
-      clampCommand(command.leftPermille), latestStatus.outputLimitPermille);
-  const int16_t right = applyLimit(
-      clampCommand(command.rightPermille), latestStatus.outputLimitPermille);
+  // Straight-drive trim (motor_trim.hpp): reduce-only, after the limit.
+  const int16_t left = MotorTrim::scale(
+      applyLimit(clampCommand(command.leftPermille), latestStatus.outputLimitPermille),
+      MotorTrim::left());
+  const int16_t right = MotorTrim::scale(
+      applyLimit(clampCommand(command.rightPermille), latestStatus.outputLimitPermille),
+      MotorTrim::right());
 
   if (left == 0 && right == 0) {
     stopLocked(command.stopMode);

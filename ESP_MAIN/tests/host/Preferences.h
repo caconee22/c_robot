@@ -6,6 +6,7 @@
 namespace fake {
 extern std::vector<uint8_t> nvs;
 extern std::map<std::string, uint8_t> nvsU8;   // getUChar/putUChar keys
+extern std::map<std::string, uint16_t> nvsU16; // getUShort/putUShort keys
 extern bool nvsWriteOk, nvsReadOk;
 }
 struct Preferences {
@@ -25,6 +26,13 @@ struct Preferences {
   size_t putUChar(const char* key, uint8_t value) {
     if (!fake::nvsWriteOk) return 0;
     fake::nvsU8[key] = value; return 1;
+  }
+  uint16_t getUShort(const char* key, uint16_t fallback) {
+    auto it = fake::nvsU16.find(key); return it == fake::nvsU16.end() ? fallback : it->second;
+  }
+  size_t putUShort(const char* key, uint16_t value) {
+    if (!fake::nvsWriteOk) return 0;
+    fake::nvsU16[key] = value; return 2;
   }
   void end() {}
 };

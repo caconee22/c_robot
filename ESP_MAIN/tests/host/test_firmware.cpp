@@ -4,12 +4,16 @@
 #include "app/boot_manager.hpp"
 #include "communication/raspberry_link.hpp"
 #include "communication/vision_protocol.hpp"
+#include "control/align_fsm.hpp"
+#include "control/opening_move.hpp"
+#include "control/escape_move.hpp"
 #include "control/control_config.hpp"
 #include "control/drive_logic.hpp"
 #include "control/robot_fsm.hpp"
 #include "control/wander.hpp"
 #include "interrupts/button_interrupts.hpp"
 #include "motor/motor_controller.hpp"
+#include "motor/motor_trim.hpp"
 #include "pins.hpp"
 #include "calibration/color_calibration.hpp"
 #include "sensors/calibration_store.hpp"
@@ -98,6 +102,29 @@ void testMotor() {
   CHECK(!MotorController::status().outputsActive);
   SafetyStatus invalid=running(); invalid.state=SafetyState::WaitingForStart;
   CHECK(!MotorController::forward(200,invalid)); CHECK(!MotorController::clearEmergencyStop(invalid));
+}
+
+void testMotorTrim() {
+  // Nothing saved: no trim.
+  fixture(); CHECK(MotorTrim::left()==1000 && MotorTrim::right()==1000);
+  CHECK(MotorController::clearEmergencyStop(running()));
+  CHECK(MotorController::setTank(500,500,running()));
+  auto s=MotorController::status(); CHECK(s.appliedLeftPermille==500 && s.appliedRightPermille==500);
+  // Saved 950/1000 is loaded at begin and scales every command after the limit.
+  fake::nvsU16["trimL"]=950; fake::nvsU16["trimR"]=1000;
+  EventLogger::begin(); MotorController::begin(); CHECK(MotorTrim::left()==950);
+  CHECK(MotorController::clearEmergencyStop(running()));
+  CHECK(MotorController::setTank(500,-500,running()));
+  s=MotorController::status(); CHECK(s.appliedLeftPermille==475 && s.appliedRightPermille==-500);
+  CHECK(MotorController::setTank(1000,1000,running()));   // limit first (710), then trim
+  s=MotorController::status();
+  CHECK(s.appliedLeftPermille==config::motor::DEFAULT_OUTPUT_LIMIT*950/1000 &&
+        s.appliedRightPermille==config::motor::DEFAULT_OUTPUT_LIMIT);
+  // Reduce-only range; out-of-range saved values fall back to no trim.
+  CHECK(!MotorTrim::set(799,1000) && !MotorTrim::set(1000,1001) && MotorTrim::left()==950);
+  CHECK(MotorTrim::set(1000,900) && MotorTrim::save() && fake::nvsU16["trimR"]==900);
+  fake::nvsU16["trimL"]=1200; MotorTrim::load(); CHECK(MotorTrim::left()==1000 && MotorTrim::right()==1000);
+  fake::nvsWriteOk=false; CHECK(!MotorTrim::save());
 }
 
 void testButtonsAndEstop() {
@@ -722,6 +749,118 @@ void testBattery() {
 #endif
 }
 
+void testAlignFsm() {
+  using namespace config::control;
+  const uint32_t OPENING_MS=config::opening::TURN_LEFT_45_MS+config::opening::FORWARD_MS+
+                            config::opening::TURN_LEFT_90_MS+3*config::opening::PAUSE_MS;
+  SensorSnapshot floor; VisionSnapshot missing;
+  auto hazard=[](SensorSnapshot& s,uint8_t corner,FloorColor c){
+    s.floorColor[corner].color=c; s.floorColor[corner].reliable=true;
+    s.colorRaw[corner].sequence=1; s.colorRaw[corner].valid=true; };
+  auto upd=[&](uint32_t t,const SensorSnapshot& s,const VisionSnapshot& v,SafetyStatus safe){
+    return AlignFsm::update(t,s,v,safe); };
+  {
+    // Battery compensation by pack type: 4S x1.0, 3S x THREE_CELL_SCALE, fixed at start.
+    using namespace config::opening;
+    auto firstDuty=[](uint8_t cells){ OpeningMove::setBatteryCells(cells); OpeningMove::start(0);
+                                      const auto d=OpeningMove::intent(0); OpeningMove::cancel(); return d.requestedDuty; };
+    CHECK(firstDuty(0)==TURN_DUTY && firstDuty(4)==TURN_DUTY);
+    CHECK(firstDuty(3)==TURN_DUTY*THREE_CELL_SCALE_PERMILLE/1000);
+    OpeningMove::setBatteryCells(3); OpeningMove::start(0);
+    OpeningMove::setBatteryCells(4);                                      // later value: not this run
+    CHECK(OpeningMove::intent(0).requestedDuty==TURN_DUTY*THREE_CELL_SCALE_PERMILLE/1000);
+    OpeningMove::cancel(); OpeningMove::setBatteryCells(0);
+  }
+  // Opening move steps, even with the tower in view.
+  fixture(); AlignFsm::begin();
+  CHECK(upd(0,floor,missing,SafetyStatus{}).type==DriveIntentType::Brake && AlignFsm::state()==RobotState::WaitStart);
+  {
+    using namespace config::opening;
+    auto at=[&](uint32_t t){ return upd(t,floor,target(static_cast<uint8_t>(t/10),t,1900),running()); };
+    auto d=at(0); CHECK(AlignFsm::state()==RobotState::Opening && d.type==DriveIntentType::SearchLeft && d.requestedDuty==TURN_DUTY);
+    CHECK(at(TURN_LEFT_45_MS).type==DriveIntentType::Brake);
+    d=at(TURN_LEFT_45_MS+PAUSE_MS); CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==FORWARD_DUTY && d.steering==0);
+    const uint32_t turn90=TURN_LEFT_45_MS+FORWARD_MS+2*PAUSE_MS;
+    CHECK(at(turn90).type==DriveIntentType::SearchLeft && at(turn90+TURN_LEFT_90_MS-1).type==DriveIntentType::SearchLeft);
+    CHECK(at(turn90+TURN_LEFT_90_MS).type==DriveIntentType::Brake && AlignFsm::state()==RobotState::Opening);
+    if (!TRACK_AFTER) {
+      CHECK(at(OPENING_MS).type==DriveIntentType::Brake && AlignFsm::state()==RobotState::Stop);
+      return;
+    }
+    CHECK(at(OPENING_MS).type==DriveIntentType::AlignRight && AlignFsm::state()==RobotState::TrackAlign);
+  }
+  // Helper: a fresh run with the opening already done at time T0.
+  const uint32_t T0=OPENING_MS+10;
+  auto freshRun=[&]{ fixture(); AlignFsm::begin(); SensorSnapshot clear;
+    for(uint32_t t=0;t<T0;t+=10) upd(t,clear,missing,running()); };
+
+  // No tower: spin left; tower on the right: turn right, ramped.
+  freshRun();
+  auto d=upd(T0,floor,missing,running());
+  CHECK(d.type==DriveIntentType::SearchLeft && d.requestedDuty==SEARCH_DUTY && AlignFsm::state()==RobotState::Search);
+  d=upd(T0+10,floor,target(1,T0+10,1900),running());
+  CHECK(d.type==DriveIntentType::AlignRight && d.requestedDuty==ALIGN_MAX_DUTY);
+  d=upd(T0+20,floor,target(2,T0+20,TARGET_CENTER_X+TARGET_CENTER_DEADBAND+1),running());
+  CHECK(d.type==DriveIntentType::AlignRight && d.requestedDuty==ALIGN_MIN_DUTY);
+  // Centered: brake while confirming, then charge with steering toward the tower.
+  CHECK(upd(T0+30,floor,target(3,T0+30,TARGET_CENTER_X+100),running()).type==DriveIntentType::Brake);
+  CHECK(upd(T0+31,floor,target(3,T0+30,TARGET_CENTER_X+100),running()).type==DriveIntentType::Brake);  // same frame
+  d=upd(T0+40,floor,target(4,T0+40,TARGET_CENTER_X+100),running());
+  CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==CHARGE_DUTY && d.steering>0);
+  CHECK(AlignFsm::state()==RobotState::Approach);
+  // Charging keeps going while the tower drifts a little, aligns again past the abort error.
+  CHECK(upd(T0+50,floor,target(5,T0+50,TARGET_CENTER_X-300),running()).steering<0);
+  CHECK(upd(T0+60,floor,target(6,T0+60,TARGET_CENTER_X+CHARGE_ABORT_ERROR+1),running()).type==DriveIntentType::AlignRight);
+  // Charge again, then a short drop keeps going straight, a long one searches.
+  upd(T0+70,floor,target(7,T0+70),running()); upd(T0+80,floor,target(8,T0+80),running());
+  CHECK(AlignFsm::state()==RobotState::Approach);
+  d=upd(T0+80+CHARGE_LOST_HOLD_MS-1,floor,missing,running());
+  CHECK(d.type==DriveIntentType::Approach && d.steering==0);
+  CHECK(upd(T0+80+CHARGE_LOST_HOLD_MS,floor,missing,running()).type==DriveIntentType::SearchRight);  // last x 960: not left of center
+
+  // Escape while charging: front left first -> back off, nose swings right; lock-on kept.
+  freshRun();
+  upd(T0,floor,target(1,T0,1200),running()); upd(T0+10,floor,target(2,T0+10,1100),running());
+  upd(T0+20,floor,target(3,T0+20,1100),running()); CHECK(AlignFsm::state()==RobotState::Approach);
+  SensorSnapshot fl; hazard(fl,0,FloorColor::Red);
+  d=upd(T0+30,fl,target(4,T0+30,1100),running());
+  CHECK(AlignFsm::state()==RobotState::ZoneEscape && AlignFsm::escapeColor()==FloorColor::Red);
+  CHECK(d.type==DriveIntentType::Reverse && d.requestedDuty==config::escape::REVERSE_DUTY &&
+        d.steering==config::escape::TURN_STEERING);
+  hazard(fl,1,FloorColor::Red);                                   // right also sees it later: still turn right
+  CHECK(upd(T0+60,fl,target(5,T0+60,1100),running()).steering==config::escape::TURN_STEERING);
+  CHECK(upd(T0+60+config::escape::CLEAR_MS-1,floor,missing,running()).type==DriveIntentType::Reverse);
+  d=upd(T0+60+config::escape::CLEAR_MS,floor,missing,running());   // clear: lock-on kept, tower lost < hold
+  CHECK(AlignFsm::state()!=RobotState::ZoneEscape && d.type==DriveIntentType::Brake);
+  d=upd(T0+60+config::escape::CLEAR_MS+ALIGN_LOST_HOLD_MS,floor,missing,running());
+  CHECK(d.type==DriveIntentType::SearchRight);                     // last seen right of center
+  // Front right first -> nose swings left.
+  freshRun(); SensorSnapshot fr; hazard(fr,1,FloorColor::Blue);
+  d=upd(T0,fr,missing,running());
+  CHECK(d.type==DriveIntentType::Reverse && d.steering==-config::escape::TURN_STEERING &&
+        AlignFsm::escapeColor()==FloorColor::Blue);
+  // Backing onto a hazard with the rear: brake, then forward.
+  SensorSnapshot rear; hazard(rear,2,FloorColor::Blue);
+  CHECK(upd(T0+50,rear,missing,running()).type==DriveIntentType::Brake);
+  CHECK(upd(T0+60,rear,missing,running()).type==DriveIntentType::Approach);
+  // Rear first -> forward; both ends -> brake, then drive out (groove).
+  freshRun(); d=upd(T0,rear,missing,running()); CHECK(d.type==DriveIntentType::Approach);
+  SensorSnapshot both=rear; hazard(both,0,FloorColor::Red);
+  CHECK(upd(T0+10,both,missing,running()).type==DriveIntentType::Brake);
+  CHECK(upd(T0+10+config::escape::BOTH_BRAKE_MS,both,missing,running()).type==DriveIntentType::Reverse);
+  // A hazard during the opening move cancels it and escapes.
+  fixture(); AlignFsm::begin(); upd(0,floor,missing,running());
+  CHECK(AlignFsm::state()==RobotState::Opening);
+  d=upd(config::opening::TURN_LEFT_45_MS+config::opening::PAUSE_MS+100,fl,missing,running());
+  CHECK(AlignFsm::state()==RobotState::ZoneEscape && d.type==DriveIntentType::Reverse);
+  for(uint32_t t=config::opening::TURN_LEFT_45_MS+config::opening::PAUSE_MS+110;t<5000;t+=10) upd(t,floor,missing,running());
+  CHECK(AlignFsm::state()==RobotState::Search);                     // opening not resumed
+  // Safety stop wins.
+  SafetyStatus estop; estop.state=SafetyState::EmergencyStop;
+  CHECK(upd(6000,fl,target(9,6000,1900),estop).type==DriveIntentType::Brake);
+  CHECK(AlignFsm::state()==RobotState::EmergencyStop);
+}
+
 void testMainIntegration() {
   fake::reset(); setup();
   for(uint8_t i=0;i<4;++i) fake::floor(i,3);
@@ -734,9 +873,21 @@ void testMainIntegration() {
   for(const uint32_t pressed=millis(); millis()-pressed<config::switches::HOLD_MS+60;) loop();
   fake::level(pins::START_SWITCH,HIGH); for(int i=0;i<50;++i) loop();
   CHECK(SystemManager::motorAllowed()); CHECK(MotorController::status().outputsActive);
-  CHECK(RobotFsm::state()==RobotState::Search);
+  const auto fsmState=[]{ return config::control::ALIGN_ONLY_FSM ? AlignFsm::state() : RobotFsm::state(); };
+  if (config::control::ALIGN_ONLY_FSM && config::opening::ENABLED) {
+    CHECK(fsmState()==RobotState::Opening);                   // fixed opening move first
+    for(int i=0;i<5000 && fsmState()==RobotState::Opening;++i) loop();
+    if (!config::opening::TRACK_AFTER) {   // tracker off: stays braked
+      CHECK(fsmState()==RobotState::Stop);
+      Serial1.inject(packet(1)); loop(); Serial1.inject(packet(2)); loop();
+      CHECK(fsmState()==RobotState::Stop);
+      return;
+    }
+  }
+  CHECK(fsmState()==RobotState::Search);
   Serial1.inject(packet(1)); loop(); Serial1.inject(packet(2)); loop();
-  CHECK(RobotFsm::state()==RobotState::Approach);
+  CHECK(fsmState()==(config::control::ALIGN_ONLY_FSM && !config::control::CHARGE_ENABLED
+                         ? RobotState::TrackAlign : RobotState::Approach));
   fake::advance(110); CHECK(!MotorController::status().outputsActive);
   loop(); CHECK(SystemManager::motorAllowed());  // No restart policy for a brief command expiry.
 }
@@ -805,7 +956,7 @@ void demo() {
   const char* states[]={"Boot","WaitStart","Search","TargetConfirm","TrackAlign",
     "Approach","ContactCheck","AttackCharge","DiveBrake","SpokeInsert","UndercutDrive",
     "Push","ScoreHold","Backoff","LostTarget","WallEscape","ZoneEscape","StuckRecovery",
-    "EmergencyStop","Stop","Wander"};
+    "EmergencyStop","Stop","Wander","Opening"};
   std::cout<<"time_ms,state,left,right (permille)\n";
   for(uint32_t time=0;time<=1600;time+=20) {
     VisionSnapshot vision;
@@ -821,9 +972,9 @@ int main(int argc,char** argv) {
   try {
     if(argc>1 && std::string(argv[1])=="--demo") { demo(); return 0; }
     struct Test { const char* name; void (*run)(); };
-    const Test tests[]={{"motor limit/watchdog/rollover",testMotor},
+    const Test tests[]={{"motor limit/watchdog/rollover",testMotor},{"motor straight trim/NVS",testMotorTrim},
       {"buttons/ESTOP/race",testButtonsAndEstop},{"system start/fault",testSystem},
-      {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},{"wander/tilt guard",testWanderAndTilt},
+      {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},{"wander/tilt guard",testWanderAndTilt},{"align-only FSM",testAlignFsm},
       {"color sampling/errors/bounded retry",testColorsAndErrors},{"three independent samples",testThreeSamples},
       {"continuous single-exposure floor mode",testContinuousFloorMode},
       {"12-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},

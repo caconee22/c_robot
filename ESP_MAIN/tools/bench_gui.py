@@ -142,6 +142,11 @@ def parse_line(line):
         return None, None
     if line == "ESTOP":
         return "estop", {}
+    if line.startswith("TRIM,"):
+        parts = line.split(",")
+        if len(parts) >= 3:
+            return "trim", {"left": _int(parts[1]), "right": _int(parts[2])}
+        return None, None
     if line.startswith("BATCHECK,"):
         return "batcheck", {"on": line.split(",")[1].strip() == "1"}
     if line.startswith("BAT "):
@@ -290,6 +295,7 @@ class BenchState:
     def __init__(self):
         self.bat = None
         self.bat_check = None      # saved power-on battery check switch (BATCHECK row)
+        self.trim = None           # straight-drive trim in use (TRIM row), permille left/right
         self.d = None
         self.sensors = {}
         self.imu = None
@@ -318,6 +324,8 @@ class BenchState:
             self.bat = v
         elif kind == "batcheck":
             self.bat_check = v["on"]
+        elif kind == "trim":
+            self.trim = v
         elif kind == "d":
             self.d = v
         elif kind == "link":
@@ -942,6 +950,42 @@ def run_gui():
     bat_check_btn.pack(fill="x", pady=(4, 0))
     tk.Label(stat, text="저장됨 · 끄기는 바로, 켜기는 다음 전원부터 · 경기용 펌웨어도 같은 값", bg=T["surface"],
              fg=T["faint"], font=font(8)).pack(anchor="w")
+
+    # 11/10 straight-drive trim: each side x (value / 1000), reduce-only 800..1000.
+    trim_box = card(left, "직진 보정 (모터 출력 배율)")
+    trim_row = tk.Frame(trim_box, bg=T["surface"])
+    trim_row.pack(fill="x")
+    trim_vars = {}
+    for side, label in (("left", "왼쪽"), ("right", "오른쪽")):
+        tk.Label(trim_row, text=label, bg=T["surface"], fg=T["muted"], font=font(10)).pack(side="left")
+        var = tk.StringVar(value="1000")
+        tk.Spinbox(trim_row, from_=800, to=1000, increment=5, width=5, textvariable=var,
+                   font=font(10, mono=True)).pack(side="left", padx=(4, 10))
+        trim_vars[side] = var
+
+    def trim_apply():
+        try:
+            l, r = int(trim_vars["left"].get()), int(trim_vars["right"].get())
+        except ValueError:
+            set_hint("보정값은 800~1000 숫자")
+            return
+        if not (800 <= l <= 1000 and 800 <= r <= 1000):
+            set_hint("보정값은 800~1000 (줄이기만 됨)")
+            return
+        send(f"TRIM {l} {r}")
+
+    trim_btns = tk.Frame(trim_box, bg=T["surface"])
+    trim_btns.pack(fill="x", pady=(4, 0))
+    button(trim_btns, "적용", trim_apply).pack(side="left")
+    button(trim_btns, "저장", lambda: send("TRIM SAVE")).pack(side="left", padx=4)
+    button(trim_btns, "초기화", lambda: send("TRIM RESET")).pack(side="left")
+    button(trim_btns, "읽기", lambda: send("TRIM")).pack(side="left", padx=4)
+    trim_now = tk.Label(trim_box, text="보드 값: —", bg=T["surface"], fg=T["ink"], font=font(10, "bold"),
+                        anchor="w")
+    trim_now.pack(fill="x", pady=(4, 0))
+    tk.Label(trim_box, text="오른쪽으로 휘면 왼쪽을, 왼쪽으로 휘면 오른쪽을 줄입니다 · 적용은 바로(전원 끄면 사라짐), "
+             "저장하면 모터를 멈추고 영구 저장 · 경기용 펌웨어도 같은 값", bg=T["surface"], fg=T["faint"],
+             font=font(8), wraplength=300, justify="left").pack(anchor="w")
 
     # middle: log + manual command
     # pin panel: levels the board read back from its own pins (PIN row)
@@ -1595,6 +1639,8 @@ def run_gui():
                           if link["obj"] and ui["seen_data"] else "")
 
     def render_status():
+        t = state.trim
+        trim_now.config(text=f"보드 값: 왼쪽 {t['left']} · 오른쪽 {t['right']}" if t else "보드 값: — (읽기)")
         bat_check_btn.config(text="배터리 판정: " + ("— (보드 연결 후 표시)" if state.bat_check is None else
                                                    "켜짐 → 누르면 끔 (경기용)" if state.bat_check else
                                                    "꺼짐 → 누르면 켬 (시험용 보호)"))
@@ -1744,6 +1790,10 @@ def run_gui():
         conn_btn.config(text="끊기", bg=T["sunk"], fg=T["ink"], activebackground=T["line"])
         log_label.config(text=f"로그: logs/{os.path.basename(log.path)}  (클릭하면 폴더 열기)")
         set_hint(f"{port} {baud_var.get()} 연결됨 · 보드 RST를 누르면 BAT 줄이 나옵니다")
+        try:
+            link["obj"].send("TRIM")   # current straight-drive trim for the trim card
+        except Exception:
+            pass
 
     def disconnect():
         l, link["obj"] = link["obj"], None

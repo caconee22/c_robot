@@ -23,6 +23,7 @@ int criticalDepth = 0;
 std::function<void()> writeHook;
 std::vector<uint8_t> nvs;
 std::map<std::string, uint8_t> nvsU8;
+std::map<std::string, uint16_t> nvsU16;
 bool nvsWriteOk = true, nvsReadOk = true;
 SensorDevice sensors[4];
 ImuDevice imu;
@@ -37,7 +38,7 @@ void reset() {
   std::fill(interrupts,interrupts+64,nullptr); deferred.clear(); criticalDepth=0;
   Serial=FakeSerial{}; Serial1=FakeSerial{}; Wire=TwoWire{};
   writeHook=nullptr; stopOnDelay=false; pwmSetupOk=true;
-  nvs.clear(); nvsU8.clear(); nvsReadOk=nvsWriteOk=true; tcaConnected=true; busTransactions=0;
+  nvs.clear(); nvsU8.clear(); nvsU16.clear(); nvsReadOk=nvsWriteOk=true; tcaConnected=true; busTransactions=0;
   transactionDelayMs=0;
   for (auto& sensor : sensors) sensor=SensorDevice{};
   imu=ImuDevice{};

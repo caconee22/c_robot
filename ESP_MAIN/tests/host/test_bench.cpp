@@ -6,6 +6,8 @@
 #include "bench/bench_controller.hpp"
 #include "bench/bench_config.hpp"
 #include "motor/motor_controller.hpp"
+#include "motor/motor_trim.hpp"
+#include "Preferences.h"
 #include "system/system_manager.hpp"
 #include "system/battery_monitor.hpp"
 #include "system/status_led.hpp"
@@ -308,6 +310,19 @@ void batteryCheckSwitchTest() {
   Serial.tx.clear(); send("BAT CHECK ON");
   CHECK(Serial.tx.find("BATCHECK,1")!=std::string::npos);
 }
+void trimCommandTest() {
+  fake::reset(); setup(); ticks(30);
+  Serial.tx.clear(); send("TRIM"); CHECK(Serial.tx.find("TRIM,1000,1000")!=std::string::npos);
+  Serial.tx.clear(); send("TRIM 950 1000");                 // RAM, applies at once
+  CHECK(Serial.tx.find("TRIM,950,1000")!=std::string::npos && MotorTrim::left()==950);
+  CHECK(fake::nvsU16.find("trimL")==fake::nvsU16.end());     // not saved yet
+  Serial.tx.clear(); send("TRIM 700 1000");                 // out of range: rejected, unchanged
+  CHECK(Serial.tx.find("ERR TRIM")!=std::string::npos && MotorTrim::left()==950);
+  send("TRIM 950"); CHECK(MotorTrim::left()==950);           // malformed
+  send("TRIM SAVE"); CHECK(fake::nvsU16["trimL"]==950 && fake::nvsU16["trimR"]==1000);
+  send("TRIM RESET"); CHECK(MotorTrim::left()==1000);
+  setup(); ticks(30); CHECK(MotorTrim::left()==950);         // next power-on reads the saved trim
+}
 void batteryFailureTest() {
   fake::reset();
   fake::adcMillivolts[pins::BATTERY_ADC] = 0;
@@ -439,6 +454,7 @@ int main(int argc, char** argv) {
       imuTests();
       calibrationTests();
       batteryCheckSwitchTest();
+      trimCommandTest();
 #endif
     }
     std::cout<<"BENCH MODEL "<<COLOR_SENSOR_MODEL<<": "<<checks<<" checks passed\n";

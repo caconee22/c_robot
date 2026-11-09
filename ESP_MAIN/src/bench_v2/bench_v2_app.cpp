@@ -18,6 +18,7 @@
 #include "sensors/imu_monitor.hpp"
 #include "motor/motor_config.hpp"
 #include "motor/motor_controller.hpp"
+#include "motor/motor_trim.hpp"
 #include "pins.hpp"
 #include "sensors/color_sensor_manager.hpp"
 #include "sensors/sensor_manager.hpp"
@@ -64,11 +65,45 @@ void help() {
   reply("CAL START / CAL ERASE / CAL STATUS: floor color calibration\r\n");
   reply("I2C SCAN: main bus + TCA9548A channels\r\n");
   reply("BAT CHECK ON|OFF: power-on battery check, saved, next boot (match too)\r\n");
+  reply("TRIM / TRIM <L> <R> (800-1000, now) / TRIM SAVE / TRIM RESET: straight trim (match too)\r\n");
 }
 
 // BATCHECK,<1|0>: the saved setting, for the GUI.
 void replyBatteryCheck() {
   reply(BatterySetting::checkEnabled() ? "BATCHECK,1\r\n" : "BATCHECK,0\r\n");
+}
+
+// TRIM,<left>,<right>: the trim in use (permille), for the GUI.
+void replyTrim() {
+  char line[32];
+  snprintf(line, sizeof(line), "TRIM,%u,%u\r\n", MotorTrim::left(), MotorTrim::right());
+  reply(line);
+}
+
+// "TRIM" reports, "TRIM <L> <R>" sets in RAM (applies at once, lost on power-off),
+// "TRIM SAVE" stops the motors and saves to NVS, "TRIM RESET" = 1000 1000 in RAM.
+// Returns false for a malformed line.
+bool trimCommand(const char* line) {
+  if (!strcmp(line, "TRIM")) { replyTrim(); return true; }
+  if (!strcmp(line, "TRIM SAVE")) {
+    stop();   // NVS write takes a few ms; never with the wheels running
+    reply(MotorTrim::save() ? "OK TRIM saved\r\n" : "ERR TRIM not saved (NVS)\r\n");
+    replyTrim();
+    return true;
+  }
+  if (!strcmp(line, "TRIM RESET")) {
+    MotorTrim::set(MotorTrim::MAX_PERMILLE, MotorTrim::MAX_PERMILLE);
+    replyTrim();
+    return true;
+  }
+  unsigned left = 0, right = 0;
+  char extra = 0;
+  if (sscanf(line, "TRIM %4u %4u %c", &left, &right, &extra) == 2 &&
+      MotorTrim::set(static_cast<uint16_t>(left), static_cast<uint16_t>(right))) {
+    replyTrim();
+    return true;
+  }
+  return false;
 }
 
 bool startsWith(const char* line, const char* prefix) { return !strncmp(line, prefix, strlen(prefix)); }
@@ -105,6 +140,10 @@ void execute(const char* line) {
     return;
   }
   if (!strcmp(line, "BAT CHECK")) { replyBatteryCheck(); return; }
+  if (startsWith(line, "TRIM")) {
+    if (!trimCommand(line)) { reply("ERR TRIM <800-1000> <800-1000> | TRIM SAVE | TRIM RESET\r\n"); replyTrim(); }
+    return;
+  }
   if (!strcmp(line, "I2C SCAN")) {
     stop();  // motors stay braked; a new SW2 is needed after the scan
     BenchI2cScan::start(millis());
@@ -386,6 +425,7 @@ void BenchV2App::begin() {
   lastInputMs = lastLogMs = millis();
   help();
   replyBatteryCheck();
+  replyTrim();
 }
 
 void BenchV2App::update() {
