@@ -4,30 +4,42 @@
 #include "robot_types.hpp"
 
 // Contract
-// Role: floor escape for AlignFsm (11/10). Front corner hit first -> back off
-//   while the nose turns away from the side that saw the hazard first (front
-//   left first -> nose swings right). Rear hit first -> drive forward.
-//   Ends CLEAR_MS after every corner is clear. Front and rear at once (inside
-//   a groove): brake BOTH_BRAKE_MS, then drive out opposite to the way the
-//   robot was moving, flipping every FLIP_MS (never park in a groove: 10 s rule).
-//   Still on a hazard after FLIP_MS in one direction -> flip the direction.
+// Role: floor escape for AlignFsm (11/10). The way out is decided by the side
+//   that went onto the color FIRST (FloorHazard), not by the direction the
+//   robot was commanding: when the opponent pushes us in, the commanded
+//   direction and the real motion differ. That decision is kept when the
+//   robot ends up fully on the color (pushed all the way in), with a higher
+//   duty because the opponent is still pushing.
+//     front both  -> reverse                front left/right -> reverse + turn
+//     rear both   -> forward                rear left/right  -> forward, nose
+//                                                               away from it
+//     left side   -> forward, hard right    right side       -> forward, hard left
+//     unclear     -> reverse if we were charging, else forward
+//   Reverse turn sign set on the field 11/10 (front left -> -TURN_STEERING).
+//   Still on the color after FLIP_MS one way -> flip direction (10 s rule).
+//   Ends CLEAR_MS after every corner is clear.
 // Does not touch the target memory: AlignFsm keeps its lock-on.
 // Called from: AlignFsm only. Pure logic: no hardware, never blocks.
 // Values: start values, not yet driven on the field.
 
 namespace config {
 namespace escape {
-constexpr uint16_t REVERSE_DUTY = 450;
-constexpr int16_t TURN_STEERING = 150;   // nose swing while backing off
-constexpr uint16_t FORWARD_DUTY = 450;   // rear-first escape
+constexpr uint16_t REVERSE_DUTY = 450;   // 11/10: back from the +20 % try
+constexpr uint16_t FORWARD_DUTY = 450;   // 11/10: back from the +20 % try
+constexpr int16_t TURN_STEERING = 150;   // front corner first, while reversing
+constexpr int16_t REAR_STEERING = 120;   // rear corner first, while going forward
+constexpr int16_t SIDE_STEERING = 250;   // pushed in sideways
+// Front and rear both on the color (pushed all the way in): push back harder.
+constexpr uint16_t PUSHED_DUTY = 620;    // 11/10: back from the try; duty + steering capped at 710
+constexpr uint16_t MOTOR_LIMIT = 710;   // motor DEFAULT_OUTPUT_LIMIT: duty + steering stays under it
 constexpr uint32_t CLEAR_MS = 200;       // keep moving this long after the floor is clear
-constexpr uint32_t BOTH_BRAKE_MS = 150;
 constexpr uint32_t FLIP_MS = 1500;
 }  // namespace escape
 }  // namespace config
 
 namespace EscapeMove {
-void start(uint32_t nowMs, const FloorHazardInfo& floor);
+// wasCharging: the robot was driving forward at the tower (for an unclear entry).
+void start(uint32_t nowMs, const FloorHazardInfo& floor, bool wasCharging = false);
 void cancel();
 bool active();
 // Advances the escape; returns Brake and ends (active() false) once clear.

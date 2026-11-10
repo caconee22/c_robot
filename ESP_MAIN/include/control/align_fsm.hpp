@@ -13,6 +13,8 @@
 //   4. charge: tower centered for CHARGE_CONFIRM_FRAMES new frames -> drive at
 //      it with steering; back to align when it drifts past CHARGE_ABORT_ERROR;
 //      a detector drop shorter than CHARGE_LOST_HOLD_MS keeps driving straight
+//   4b. fork attack (control/fork_attack.hpp): charging at a close centered
+//      tower -> brake, slide the fork under, burst; then keep charging
 //   5. align: turn in place toward the tower (duty ramps with the error)
 //   6. lost: brake ALIGN_LOST_HOLD_MS, then spin toward the side last seen
 //   config::opening::TRACK_AFTER false stops after the opening move instead

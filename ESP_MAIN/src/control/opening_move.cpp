@@ -22,7 +22,7 @@ constexpr uint8_t STEP_COUNT = sizeof(STEPS) / sizeof(STEPS[0]);
 
 bool running = false;
 uint32_t startedMs = 0;
-uint8_t batteryCells = 0;
+uint8_t cellCount = 0;
 uint16_t scale = 1000;   // permille, fixed for one run
 
 uint16_t scaleFor(uint8_t cells) {
@@ -40,14 +40,16 @@ uint8_t stepAt(uint32_t nowMs) {
 }
 }  // namespace
 
-void OpeningMove::setBatteryCells(uint8_t cells) { batteryCells = cells; }
+void OpeningMove::setBatteryCells(uint8_t cells) { cellCount = cells; }
 
 uint16_t OpeningMove::scalePermille() { return scale; }
+
+uint8_t OpeningMove::batteryCells() { return cellCount; }
 
 void OpeningMove::start(uint32_t nowMs) {
   running = true;
   startedMs = nowMs;
-  scale = scaleFor(batteryCells);
+  scale = scaleFor(cellCount);
 }
 
 void OpeningMove::cancel() { running = false; }

@@ -12,16 +12,23 @@
 //   stop (SystemManager::triggerEmergencyStop), so recovery is a reboot.
 // Called from: loop() after ImuMonitor::update, before the second
 //   SystemManager::update. Pure math on the latest sample; no I2C, no waiting.
-// Failure: no fresh IMU data -> no judgment and the hold timer restarts, so a
-//   missing or broken IMU never stops the robot by itself (it only loses this
-//   check). Mounting direction does not matter: level is learned, not assumed.
-// Values: start values, not yet checked on the robot (lift attacks must stay
-//   under HOLD_MS).
+// 11/10 field: upside down it tripped only after a long time, and not at all
+//   while the wheels were driving. Causes: HOLD_MS was 3 s, and every single
+//   raw sample under the limit (motor vibration, rocking, a wheel bump) reset
+//   the hold. Now the gravity vector is low-pass filtered (FILTER_WEIGHT) and
+//   the hold is only cleared after RELEASE_MS under the limit.
+// Failure: no fresh IMU data -> no judgment (never trips without data) but the
+//   hold is kept, so a short IMU gap while flipped does not restart it. A
+//   missing or broken IMU never stops the robot by itself. Mounting direction
+//   does not matter: level is learned, not assumed.
+// Values: start values (lift attacks must stay under HOLD_MS past LIMIT_DEG).
 
 namespace config {
 namespace tilt {
 constexpr float LIMIT_DEG = 80.0f;
-constexpr uint32_t HOLD_MS = 3000;
+constexpr uint32_t HOLD_MS = 1000;      // 11/10: was 3000
+constexpr uint32_t RELEASE_MS = 200;    // under the limit this long clears the hold
+constexpr float FILTER_WEIGHT = 0.15f;  // per 100 Hz sample, ~60 ms smoothing
 constexpr uint8_t LEVEL_SAMPLES = 10;   // fresh samples while stopped before level is trusted
 }  // namespace tilt
 }  // namespace config

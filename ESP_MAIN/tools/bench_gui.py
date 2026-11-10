@@ -963,7 +963,7 @@ def run_gui():
                    font=font(10, mono=True)).pack(side="left", padx=(4, 10))
         trim_vars[side] = var
 
-    def trim_apply():
+    def trim_apply(save=False):
         try:
             l, r = int(trim_vars["left"].get()), int(trim_vars["right"].get())
         except ValueError:
@@ -973,11 +973,15 @@ def run_gui():
             set_hint("보정값은 800~1000 (줄이기만 됨)")
             return
         send(f"TRIM {l} {r}")
+        # 11/10: "저장" used to send only TRIM SAVE, so the box values were never
+        # set and 1000/1000 was saved. Now it sets the box values first.
+        if save:
+            send("TRIM SAVE")
 
     trim_btns = tk.Frame(trim_box, bg=T["surface"])
     trim_btns.pack(fill="x", pady=(4, 0))
     button(trim_btns, "적용", trim_apply).pack(side="left")
-    button(trim_btns, "저장", lambda: send("TRIM SAVE")).pack(side="left", padx=4)
+    button(trim_btns, "저장", lambda: trim_apply(save=True)).pack(side="left", padx=4)
     button(trim_btns, "초기화", lambda: send("TRIM RESET")).pack(side="left")
     button(trim_btns, "읽기", lambda: send("TRIM")).pack(side="left", padx=4)
     trim_now = tk.Label(trim_box, text="보드 값: —", bg=T["surface"], fg=T["ink"], font=font(10, "bold"),

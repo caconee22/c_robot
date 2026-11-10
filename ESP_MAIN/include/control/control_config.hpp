@@ -12,13 +12,13 @@ namespace control {
 // 11/04 bench (V2, 3S pack): below ~250 the robot does not spin in place and
 // at 260 one wheel stalls so it pivots (looks like driving forward/back);
 // 300 spins cleanly. Spin duties stay at or above that floor.
-constexpr uint16_t SEARCH_DUTY = 300;
+constexpr uint16_t SEARCH_DUTY = 300;   // 11/10: tried 360 (+20 %), no clear gain, back to 300
 constexpr uint16_t TARGET_CONFIRM_DUTY = 300;
 // Align spin ramps with the tower's distance from center: MIN just outside the
 // center window, MAX at ALIGN_FULL_ERROR px and beyond (bench ALIGN: less
 // overshoot and left/right swinging than one fixed duty).
-constexpr uint16_t ALIGN_MIN_DUTY = 280;
-constexpr uint16_t ALIGN_MAX_DUTY = 380;
+constexpr uint16_t ALIGN_MIN_DUTY = 280;   // 11/10: back from the +20 % try
+constexpr uint16_t ALIGN_MAX_DUTY = 380;   // 11/10: back from the +20 % try (455)
 constexpr uint16_t ALIGN_FULL_ERROR = 700;
 constexpr uint16_t APPROACH_DUTY = 450;
 constexpr uint16_t ATTACK_CHARGE_DUTY = 650;
@@ -61,8 +61,15 @@ constexpr bool ALIGN_ONLY_FSM = true;
 constexpr uint32_t ALIGN_LOST_HOLD_MS = 300;
 // AlignFsm charge (11/10, start values for 3S): tower within
 // ATTACK_CENTER_DEADBAND for CHARGE_CONFIRM_FRAMES new frames -> drive at it.
+// AlignFsm align damping (11/10, the +20 % outputs rocked left/right):
+// stop early when the tower's image speed says it reaches the window within
+// ALIGN_LEAD_MS (camera + UART delay and coasting), and once settled only turn
+// again past ALIGN_RESUME_ERROR. Camera only, no IMU (AGENTS: no IMU control).
+constexpr uint32_t ALIGN_LEAD_MS = 80;
+constexpr uint16_t ALIGN_RESUME_ERROR = 260;
+static_assert(ALIGN_RESUME_ERROR > TARGET_CENTER_DEADBAND, "resume band must be wider than the window");
 constexpr bool CHARGE_ENABLED = true;
-constexpr uint16_t CHARGE_DUTY = 500;
+constexpr uint16_t CHARGE_DUTY = 500;      // 11/10: back from the +18 % try (590)
 constexpr int16_t CHARGE_STEERING_MAX = 120;
 constexpr uint8_t CHARGE_CONFIRM_FRAMES = 2;
 constexpr uint16_t CHARGE_ABORT_ERROR = 400;     // px off center -> back to align

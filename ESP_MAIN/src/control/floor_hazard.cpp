@@ -7,7 +7,8 @@ namespace {
 uint32_t lastHazardMs[COLOR_SENSOR_COUNT] = {};
 bool hazardSeen[COLOR_SENSOR_COUNT] = {};
 FloorColor lastHazardColor[COLOR_SENSOR_COUNT] = {};
-HazardSide firstSide = HazardSide::None;
+uint8_t firstMask = 0;
+uint32_t firstSinceMs = 0;
 FloorColor firstColor = FloorColor::Unknown;
 uint32_t lastAnyMs = 0;
 
@@ -25,11 +26,18 @@ bool isHazardColor(const FloorColorResult& result) {
 bool contactBlind(const ColorRawSample& raw) { return raw.sequence != 0 && !raw.valid; }
 
 HazardSide sideOf(uint8_t mask) {
-  const bool fl = (mask & 0x01U) != 0, fr = (mask & 0x02U) != 0;
-  if (fl && fr) return HazardSide::FrontBoth;
-  if (fl) return HazardSide::FrontLeft;
-  if (fr) return HazardSide::FrontRight;
-  return (mask & 0x0CU) != 0 ? HazardSide::Rear : HazardSide::None;
+  switch (mask) {
+    case 0x00: return HazardSide::None;
+    case 0x01: return HazardSide::FrontLeft;
+    case 0x02: return HazardSide::FrontRight;
+    case 0x03: return HazardSide::FrontBoth;
+    case 0x04: return HazardSide::RearLeft;
+    case 0x08: return HazardSide::RearRight;
+    case 0x0C: return HazardSide::RearBoth;
+    case 0x05: return HazardSide::Left;
+    case 0x0A: return HazardSide::Right;
+    default: return HazardSide::Unclear;   // diagonal or 3+ corners
+  }
 }
 
 FloorColor colorOf(uint8_t mask) {
@@ -43,7 +51,7 @@ FloorColor colorOf(uint8_t mask) {
 
 void FloorHazard::reset() {
   for (bool& seen : hazardSeen) seen = false;
-  firstSide = HazardSide::None;
+  firstMask = 0;
   firstColor = FloorColor::Unknown;
   lastAnyMs = 0;
 }
@@ -62,17 +70,19 @@ FloorHazardInfo FloorHazard::update(uint32_t nowMs, const SensorSnapshot& sensor
     }
   }
   if (info.mask != 0) {
-    if (firstSide == HazardSide::None) {
-      firstSide = sideOf(info.mask);
+    if (firstMask == 0) {
+      firstMask = info.mask;
+      firstSinceMs = nowMs;
       firstColor = colorOf(info.mask);
+    } else if (nowMs - firstSinceMs < config::floor_hazard::FIRST_WINDOW_MS) {
+      firstMask |= info.mask;   // the other sensor of the same side, a pass later
     }
     lastAnyMs = nowMs;
-  } else if (firstSide != HazardSide::None &&
-             nowMs - lastAnyMs >= config::floor_hazard::FIRST_CLEAR_MS) {
-    firstSide = HazardSide::None;
+  } else if (firstMask != 0 && nowMs - lastAnyMs >= config::floor_hazard::FIRST_CLEAR_MS) {
+    firstMask = 0;
     firstColor = FloorColor::Unknown;
   }
-  info.first = firstSide;
+  info.first = sideOf(firstMask);
   info.firstColor = firstColor;
   return info;
 }

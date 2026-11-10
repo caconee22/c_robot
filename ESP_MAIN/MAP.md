@@ -89,10 +89,14 @@ StatusLed::update, EventLogger::process, delay(1)
 | 시작 루틴 | `control/opening_move.hpp` | `start`, `active`, `intent` | AlignFsm | |
 | 바닥 위험 판단 (처음 감지 쪽) | `control/floor_hazard.hpp` | `update` | AlignFsm | |
 | 바닥 회피 동작 | `control/escape_move.hpp` | `start`, `update` | AlignFsm | |
+| 가운데 빨간 원 돌아가기 (멀리 있는 타워 락온 중) | `control/circle_bypass.hpp` | `start`, `update` | AlignFsm | |
+| 포크 공격 (11/10: 가까운 타워 돌진 중 브레이크 → 삽입 → 급가속) | `control/fork_attack.hpp` | `start`, `phase`, `intent` | AlignFsm | |
 | 구동 변환 | `control/drive_logic.hpp` | `makeCommand` | loop | |
 | 라즈 없을 때 무작위 순회 | `control/wander.hpp` | `reset`, `intent` | RobotFsm | |
 | 뒤집힘 비상정지 (V2) | `system/tilt_guard.hpp` | `begin`, `update` | setup, loop → `SystemManager::triggerEmergencyStop` | 예 |
 | 라즈 UART | `communication/raspberry_link.hpp` | `poll`, `latest`, `status` | loop | |
+| 실행 로그 → 라즈 (11/10, UART1 TX, 버전 0x81) | `communication/run_log.hpp` | `push`, `alive`, `process` | AlignFsm, loop (라즈: `scripts/esp_log_receiver.py`) | |
+| 로그용 위치 추정 (11/10, 자이로 방향 + 명령 거리, FSM 미사용) | `control/pose_estimate.hpp` | `update`, `pose` | loop → RunLog Pose | |
 | 센서 판정 | `sensors/sensor_manager.hpp` | `update`, `snapshot` | loop | |
 | 센서 I2C (꺼진 채널 최대 3번 재초기화) | `sensors/color_sensor_manager.hpp` | `update`, `sample` | SensorManager | |
 | 색 판별 | `sensors/floor_color_classifier.hpp` | `classify` | SensorManager | |

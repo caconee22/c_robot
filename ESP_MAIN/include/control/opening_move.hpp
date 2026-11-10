@@ -23,11 +23,12 @@ constexpr bool ENABLED = true;
 // 11/10: false = after the move the robot just brakes and stays (tracker off,
 // for tuning the move alone). true = align/search toward the tower afterwards.
 constexpr bool TRACK_AFTER = true;
-constexpr uint16_t TURN_DUTY = 350;
-constexpr uint32_t TURN_LEFT_45_MS = 220;   // 11/10 field: about right (4S)
+constexpr uint16_t TURN_DUTY = 400;   // 11/10 3S logs: 400 x 1.167 gave 43-44 deg for the 45 deg turn, 350 only ~30 deg
+// 11/10 14:08 log (3S, trim R900): 220 ms gave ~34 deg, 440 ms ~70 deg -> +30%/+28%.
+constexpr uint32_t TURN_LEFT_45_MS = 290;
 constexpr uint16_t FORWARD_DUTY = 400;
 constexpr uint32_t FORWARD_MS = 2000;   // 11/10 field: 900 went half the distance -> 2 s
-constexpr uint32_t TURN_LEFT_90_MS = 440;
+constexpr uint32_t TURN_LEFT_90_MS = 565;
 // Brake between steps so one step's momentum does not carry into the next.
 constexpr uint32_t PAUSE_MS = 150;
 // Battery compensation (11/10): the times above were tuned on a 4S pack. The
@@ -49,6 +50,7 @@ namespace OpeningMove {
 // Cell count from the power-on battery check (3 or 4), 0 = unknown. Read at start().
 void setBatteryCells(uint8_t cells);
 uint16_t scalePermille();             // duty scale of the current/last run
+uint8_t batteryCells();               // last value given to setBatteryCells
 void start(uint32_t nowMs);
 void cancel();
 bool active(uint32_t nowMs);          // false once every step has run (or cancelled)

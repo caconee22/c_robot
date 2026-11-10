@@ -1,0 +1,15 @@
+[Unit]
+Description=C_ROBOT ESP32 run log receiver (UART /dev/ttyAMA0 RX -> logs/runs)
+After=c-robot-vision.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=caconee
+WorkingDirectory=/home/caconee/c_robot
+ExecStart=/usr/bin/python3 scripts/esp_log_receiver.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -3,10 +3,14 @@
 #include "Preferences.h"
 #include "app/boot_manager.hpp"
 #include "communication/raspberry_link.hpp"
+#include "communication/run_log.hpp"
 #include "communication/vision_protocol.hpp"
 #include "control/align_fsm.hpp"
 #include "control/opening_move.hpp"
+#include "control/pose_estimate.hpp"
 #include "control/escape_move.hpp"
+#include "control/circle_bypass.hpp"
+#include "control/fork_attack.hpp"
 #include "control/control_config.hpp"
 #include "control/drive_logic.hpp"
 #include "control/robot_fsm.hpp"
@@ -734,11 +738,23 @@ void testBattery() {
   // Check switched off in NVS (set on the bench): no pack at all still starts.
   fixture(); SystemManager::update(millis());
   CHECK(BatterySetting::setCheckEnabled(false));
+  fake::adcMillivolts[pins::BATTERY_ADC] = 0;   // no pack
   BatteryMonitor::begin(millis());
   for (int i = 0; i < 400; ++i) { BatteryMonitor::update(millis()); SystemManager::update(millis()); fake::advance(10); }
   CHECK(BatteryMonitor::status().result == BatteryCheckResult::Disabled);
   CHECK(SystemManager::status().applicationHealthy);
   pressStart(); CHECK(SystemManager::motorAllowed());
+  // 11/10: switched off still measures, so a fitting 3S pack reports Ok + 3 cells
+  // (the opening move needs it), and SW2 is not held while it measures.
+  fixture(); SystemManager::update(millis());
+  CHECK(BatterySetting::setCheckEnabled(false));   // fixture() cleared the fake NVS
+  fake::adcMillivolts[pins::BATTERY_ADC] = 11800 / 11;
+  BatteryMonitor::begin(millis());
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Checking);
+  pressStart(); CHECK(SystemManager::motorAllowed());
+  for (int i = 0; i < 100; ++i) { BatteryMonitor::update(millis()); SystemManager::update(millis()); fake::advance(10); }
+  CHECK(BatteryMonitor::status().result == BatteryCheckResult::Ok && BatteryMonitor::status().cells == 3);
+  CHECK(SystemManager::motorAllowed());
   CHECK(BatterySetting::setCheckEnabled(true));
 #else
   // V1 has no battery input: the check is skipped and start is unaffected.
@@ -800,14 +816,46 @@ void testAlignFsm() {
   CHECK(d.type==DriveIntentType::SearchLeft && d.requestedDuty==SEARCH_DUTY && AlignFsm::state()==RobotState::Search);
   d=upd(T0+10,floor,target(1,T0+10,1900),running());
   CHECK(d.type==DriveIntentType::AlignRight && d.requestedDuty==ALIGN_MAX_DUTY);
-  d=upd(T0+20,floor,target(2,T0+20,TARGET_CENTER_X+TARGET_CENTER_DEADBAND+1),running());
-  CHECK(d.type==DriveIntentType::AlignRight && d.requestedDuty==ALIGN_MIN_DUTY);
+  {
+    // Just outside the window with the tower not moving in the image: slowest turn.
+    freshRun(); upd(T0,floor,target(1,T0,TARGET_CENTER_X+TARGET_CENTER_DEADBAND+1),running());
+    d=upd(T0+20,floor,target(2,T0+20,TARGET_CENTER_X+TARGET_CENTER_DEADBAND+1),running());
+    CHECK(d.type==DriveIntentType::AlignRight && d.requestedDuty==ALIGN_MIN_DUTY);
+    // 11/10 rocking fix: the tower sweeps toward the center fast enough to reach
+    // the window within ALIGN_LEAD_MS -> brake early instead of overshooting.
+    freshRun(); upd(T0,floor,target(1,T0,1500),running());
+    d=upd(T0+20,floor,target(2,T0+20,1300),running());      // 10 px/ms: 340 - 800 crosses
+    CHECK(d.type==DriveIntentType::Brake && AlignFsm::state()==RobotState::TrackAlign);
+    d=upd(T0+40,floor,target(3,T0+40,1290),running());      // slowed down: 330 - 40 stays out
+    CHECK(d.type==DriveIntentType::AlignRight);
+    // Settled inside the window: 200..260 px does not start a turn again (charges instead).
+    freshRun(); upd(T0,floor,target(1,T0,TARGET_CENTER_X+100),running());
+    upd(T0+20,floor,target(2,T0+20,TARGET_CENTER_X+100),running());   // settled -> charging
+    freshRun(); upd(T0,floor,target(1,T0,TARGET_CENTER_X+100),running());
+    CHECK(upd(T0+10,floor,target(1,T0,TARGET_CENTER_X+100),running()).type==DriveIntentType::Brake);  // settled, 1 frame
+    CHECK(upd(T0+20,floor,target(2,T0+20,TARGET_CENTER_X+240),running()).type!=DriveIntentType::AlignRight);
+    freshRun(); upd(T0,floor,target(1,T0,TARGET_CENTER_X+240),running());
+    CHECK(upd(T0+20,floor,target(2,T0+20,TARGET_CENTER_X+240),running()).type==DriveIntentType::AlignRight);  // not settled: turns
+    freshRun(); upd(T0,floor,missing,running());
+    upd(T0+10,floor,target(1,T0+10,1900),running());
+  }
   // Centered: brake while confirming, then charge with steering toward the tower.
   CHECK(upd(T0+30,floor,target(3,T0+30,TARGET_CENTER_X+100),running()).type==DriveIntentType::Brake);
   CHECK(upd(T0+31,floor,target(3,T0+30,TARGET_CENTER_X+100),running()).type==DriveIntentType::Brake);  // same frame
   d=upd(T0+40,floor,target(4,T0+40,TARGET_CENTER_X+100),running());
   CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==CHARGE_DUTY && d.steering>0);
   CHECK(AlignFsm::state()==RobotState::Approach);
+  // 11/10 field log: 150..200 px off center was a dead band (no turn, no charge,
+  // braked forever). Inside the align window it must always charge.
+  freshRun();
+  CHECK(upd(T0,floor,target(1,T0,TARGET_CENTER_X+184),running()).type==DriveIntentType::Brake);
+  d=upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X+184),running());
+  CHECK(d.type==DriveIntentType::Approach && d.steering>0);
+  freshRun(); upd(T0,floor,target(1,T0,TARGET_CENTER_X-TARGET_CENTER_DEADBAND),running());
+  CHECK(upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X-TARGET_CENTER_DEADBAND),running()).type==DriveIntentType::Approach);
+  freshRun(); upd(T0,floor,target(1,T0,1900),running());
+  upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X+100),running());
+  upd(T0+20,floor,target(3,T0+20,TARGET_CENTER_X+100),running());
   // Charging keeps going while the tower drifts a little, aligns again past the abort error.
   CHECK(upd(T0+50,floor,target(5,T0+50,TARGET_CENTER_X-300),running()).steering<0);
   CHECK(upd(T0+60,floor,target(6,T0+60,TARGET_CENTER_X+CHARGE_ABORT_ERROR+1),running()).type==DriveIntentType::AlignRight);
@@ -818,36 +866,152 @@ void testAlignFsm() {
   CHECK(d.type==DriveIntentType::Approach && d.steering==0);
   CHECK(upd(T0+80+CHARGE_LOST_HOLD_MS,floor,missing,running()).type==DriveIntentType::SearchRight);  // last x 960: not left of center
 
-  // Escape while charging: front left first -> back off, nose swings right; lock-on kept.
+  // Escape while charging a close tower (box 600, not the center circle): back off with a turn.
   freshRun();
-  upd(T0,floor,target(1,T0,1200),running()); upd(T0+10,floor,target(2,T0+10,1100),running());
-  upd(T0+20,floor,target(3,T0+20,1100),running()); CHECK(AlignFsm::state()==RobotState::Approach);
+  upd(T0,floor,target(1,T0,1200,600),running()); upd(T0+10,floor,target(2,T0+10,1100,600),running());
+  upd(T0+20,floor,target(3,T0+20,1100,600),running()); CHECK(AlignFsm::state()==RobotState::Approach);
   SensorSnapshot fl; hazard(fl,0,FloorColor::Red);
-  d=upd(T0+30,fl,target(4,T0+30,1100),running());
+  d=upd(T0+30,fl,target(4,T0+30,1100,600),running());
   CHECK(AlignFsm::state()==RobotState::ZoneEscape && AlignFsm::escapeColor()==FloorColor::Red);
   CHECK(d.type==DriveIntentType::Reverse && d.requestedDuty==config::escape::REVERSE_DUTY &&
-        d.steering==config::escape::TURN_STEERING);
-  hazard(fl,1,FloorColor::Red);                                   // right also sees it later: still turn right
-  CHECK(upd(T0+60,fl,target(5,T0+60,1100),running()).steering==config::escape::TURN_STEERING);
-  CHECK(upd(T0+60+config::escape::CLEAR_MS-1,floor,missing,running()).type==DriveIntentType::Reverse);
-  d=upd(T0+60+config::escape::CLEAR_MS,floor,missing,running());   // clear: lock-on kept, tower lost < hold
+        d.steering==-config::escape::TURN_STEERING);   // 11/10 field sign
+  hazard(fl,1,FloorColor::Red);              // right sees it after the 60 ms window: still front-left first
+  CHECK(upd(T0+100,fl,target(5,T0+100,1100,600),running()).steering==-config::escape::TURN_STEERING);
+  CHECK(upd(T0+100+config::escape::CLEAR_MS-1,floor,missing,running()).type==DriveIntentType::Reverse);
+  d=upd(T0+100+config::escape::CLEAR_MS,floor,missing,running());  // clear: lock-on kept, tower lost < hold
   CHECK(AlignFsm::state()!=RobotState::ZoneEscape && d.type==DriveIntentType::Brake);
-  d=upd(T0+60+config::escape::CLEAR_MS+ALIGN_LOST_HOLD_MS,floor,missing,running());
+  d=upd(T0+100+config::escape::CLEAR_MS+ALIGN_LOST_HOLD_MS,floor,missing,running());
   CHECK(d.type==DriveIntentType::SearchRight);                     // last seen right of center
-  // Front right first -> nose swings left.
-  freshRun(); SensorSnapshot fr; hazard(fr,1,FloorColor::Blue);
-  d=upd(T0,fr,missing,running());
-  CHECK(d.type==DriveIntentType::Reverse && d.steering==-config::escape::TURN_STEERING &&
-        AlignFsm::escapeColor()==FloorColor::Blue);
-  // Backing onto a hazard with the rear: brake, then forward.
-  SensorSnapshot rear; hazard(rear,2,FloorColor::Blue);
-  CHECK(upd(T0+50,rear,missing,running()).type==DriveIntentType::Brake);
-  CHECK(upd(T0+60,rear,missing,running()).type==DriveIntentType::Approach);
-  // Rear first -> forward; both ends -> brake, then drive out (groove).
-  freshRun(); d=upd(T0,rear,missing,running()); CHECK(d.type==DriveIntentType::Approach);
-  SensorSnapshot both=rear; hazard(both,0,FloorColor::Red);
-  CHECK(upd(T0+10,both,missing,running()).type==DriveIntentType::Brake);
-  CHECK(upd(T0+10+config::escape::BOTH_BRAKE_MS,both,missing,running()).type==DriveIntentType::Reverse);
+  {
+    // 11/10 pushed-in exits: decided by the side that went in first, kept when fully in.
+    using namespace config::escape;
+    auto snap=[&](std::initializer_list<uint8_t> corners,FloorColor c){
+      SensorSnapshot s; for(uint8_t i:corners) hazard(s,i,c); return s; };
+    const SensorSnapshot all=snap({0,1,2,3},FloorColor::Red);
+    // Front right first -> reverse, nose the other way from front left.
+    freshRun(); d=upd(T0,snap({1},FloorColor::Blue),missing,running());
+    CHECK(d.type==DriveIntentType::Reverse && d.steering==TURN_STEERING && AlignFsm::escapeColor()==FloorColor::Blue);
+    // Rear touches later (outside the window): keep reversing; fully in: reverse harder.
+    CHECK(upd(T0+100,snap({2},FloorColor::Blue),missing,running()).type==DriveIntentType::Reverse);
+    d=upd(T0+110,all,missing,running());
+    CHECK(d.type==DriveIntentType::Reverse && d.requestedDuty==MOTOR_LIMIT-TURN_STEERING && d.steering==TURN_STEERING);  // capped: turn not clipped   // was: forward, deeper in
+    // Pushed backward in (rear both first): forward, and still forward when fully in.
+    freshRun(); d=upd(T0,snap({2,3},FloorColor::Red),missing,running());
+    CHECK(d.type==DriveIntentType::Approach && d.steering==0 && d.requestedDuty==FORWARD_DUTY);
+    d=upd(T0+100,all,missing,running());
+    CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==PUSHED_DUTY);   // was: reverse, deeper in
+    // Not off after FLIP_MS: the other way.
+    CHECK(upd(T0+FLIP_MS,all,missing,running()).type==DriveIntentType::Reverse);
+    // Rear left first -> forward, nose right; rear right -> nose left.
+    freshRun(); d=upd(T0,snap({2},FloorColor::Red),missing,running());
+    CHECK(d.type==DriveIntentType::Approach && d.steering==REAR_STEERING);
+    freshRun(); CHECK(upd(T0,snap({3},FloorColor::Red),missing,running()).steering==-REAR_STEERING);
+    // Pushed sideways: left side first -> forward hard right (also when the two
+    // sensors confirm one pass apart); right side -> hard left.
+    freshRun(); upd(T0,snap({0},FloorColor::Blue),missing,running());
+    d=upd(T0+20,snap({0,2},FloorColor::Blue),missing,running());
+    CHECK(d.type==DriveIntentType::Approach && d.steering==SIDE_STEERING);
+    freshRun(); d=upd(T0,snap({1,3},FloorColor::Blue),missing,running());
+    CHECK(d.type==DriveIntentType::Approach && d.steering==-SIDE_STEERING);
+    // Unclear (diagonal): reverse if we were charging, else forward.
+    freshRun(); CHECK(upd(T0,snap({0,3},FloorColor::Blue),missing,running()).type==DriveIntentType::Approach);
+    freshRun(); upd(T0,floor,target(1,T0,960,600),running()); upd(T0+10,floor,target(2,T0+10,960,600),running());
+    CHECK(AlignFsm::state()==RobotState::Approach);
+    CHECK(upd(T0+20,snap({0,3},FloorColor::Blue),target(3,T0+20,960,600),running()).type==DriveIntentType::Reverse);
+  }
+  {
+    // Red while locked on a far tower (box < TOWER_MAX_HEIGHT) = center circle: go around it.
+    using namespace config::circle;
+    auto lockFar=[&]{ freshRun();
+      upd(T0,floor,target(1,T0,1000,TOWER_MAX_HEIGHT-1),running());
+      upd(T0+10,floor,target(2,T0+10,1000,TOWER_MAX_HEIGHT-1),running()); };
+    lockFar(); SensorSnapshot red; hazard(red,0,FloorColor::Red);       // circle on the left
+    d=upd(T0+20,red,target(3,T0+20,1000,TOWER_MAX_HEIGHT-1),running());
+    CHECK(AlignFsm::state()==RobotState::CircleBypass && d.type==DriveIntentType::Reverse &&
+          d.requestedDuty==BACK_DUTY && d.steering==0);
+    d=upd(T0+20+BACK_MS,red,missing,running());
+    CHECK(d.type==DriveIntentType::SearchRight && d.requestedDuty==TURN_DUTY);   // away from the circle
+    d=upd(T0+20+BACK_MS+TURN_MS,floor,missing,running());
+    CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==ARC_DUTY && d.steering==-ARC_STEERING);
+    // Touching red again in the arc: next step (reverse again).
+    CHECK(upd(T0+20+BACK_MS+TURN_MS+100,red,missing,running()).type==DriveIntentType::Brake);
+    CHECK(upd(T0+30+BACK_MS+TURN_MS+100,red,missing,running()).type==DriveIntentType::Reverse);
+    // Arc done without touching: back to tracking (tower still in view -> align/charge).
+    const uint32_t t1=T0+30+BACK_MS+TURN_MS+100;
+    CHECK(upd(t1+BACK_MS+TURN_MS+ARC_MS,floor,target(4,t1+BACK_MS+TURN_MS+ARC_MS,1000,200),running()).type!=DriveIntentType::Reverse);
+    CHECK(AlignFsm::state()==RobotState::TrackAlign);
+    // Tower not seen during the bypass: it turned right, so search left at once
+    // (the old x 1000 would have said right: 11/10 field bug).
+    lockFar(); upd(T0+20,red,target(3,T0+20,1000,TOWER_MAX_HEIGHT-1),running());
+    for(uint32_t t=T0+30;t<T0+20+BACK_MS+TURN_MS+ARC_MS;t+=10) upd(t,floor,missing,running());
+    d=upd(T0+20+BACK_MS+TURN_MS+ARC_MS,floor,missing,running());
+    CHECK(d.type==DriveIntentType::SearchLeft && AlignFsm::state()==RobotState::Search);
+    // Seen during the arc: that newer position wins.
+    lockFar(); upd(T0+20,red,target(3,T0+20,1000,TOWER_MAX_HEIGHT-1),running());
+    upd(T0+20+BACK_MS+TURN_MS+50,floor,target(4,T0+20+BACK_MS+TURN_MS+50,1500,200),running());
+    d=upd(T0+20+BACK_MS+TURN_MS+ARC_MS,floor,target(5,T0+20+BACK_MS+TURN_MS+ARC_MS,1500,200),running());
+    CHECK(d.type==DriveIntentType::AlignRight);
+    // Front right first -> turn left, arc right.
+    lockFar(); SensorSnapshot redR; hazard(redR,1,FloorColor::Red);
+    upd(T0+20,redR,missing,running());
+    CHECK(upd(T0+20+BACK_MS,redR,missing,running()).type==DriveIntentType::SearchLeft);
+    CHECK(upd(T0+20+BACK_MS+TURN_MS,floor,missing,running()).steering==ARC_STEERING);
+    // Rear on a hazard while reversing -> normal escape.
+    lockFar(); upd(T0+20,red,missing,running());
+    SensorSnapshot back; hazard(back,2,FloorColor::Red);
+    upd(T0+30,back,missing,running()); CHECK(AlignFsm::state()==RobotState::ZoneEscape);
+    // Blue (corner groove) or a close tower: normal escape, not the bypass.
+    lockFar(); SensorSnapshot blue; hazard(blue,0,FloorColor::Blue);
+    upd(T0+20,blue,missing,running()); CHECK(AlignFsm::state()==RobotState::ZoneEscape);
+    freshRun(); upd(T0,floor,target(1,T0,1000,TOWER_MAX_HEIGHT),running());
+    upd(T0+20,red,missing,running()); CHECK(AlignFsm::state()==RobotState::ZoneEscape);
+    // Tower not seen recently: normal escape.
+    lockFar(); upd(T0+10+LOCK_RECENT_MS,red,missing,running()); CHECK(AlignFsm::state()==RobotState::ZoneEscape);
+  }
+  {
+    // A stop forgets the floor first-hit side: the next run classifies afresh.
+    SensorSnapshot fl2; hazard(fl2,0,FloorColor::Red); SensorSnapshot rr; hazard(rr,3,FloorColor::Blue);
+    freshRun(); upd(T0,fl2,missing,running());                       // front left first
+    upd(T0+10,fl2,missing,SafetyStatus{});                          // stopped while on it
+    for(uint32_t t=T0+20;t<T0+20+OPENING_MS+20;t+=10) upd(t,floor,missing,running());   // new run, opening done
+    const auto e=upd(T0+30+OPENING_MS,rr,missing,running());        // rear right first now
+    CHECK(e.type==DriveIntentType::Approach && e.steering==-config::escape::REAR_STEERING);
+  }
+  {
+    // Fork attack: charging at a close centered tower -> brake, insert, burst, keep charging.
+    using namespace config::fork;
+    auto close=[&](uint8_t seq,uint32_t t,uint16_t x=TARGET_CENTER_X+50){ return target(seq,t,x,TRIGGER_HEIGHT); };
+    freshRun();
+    upd(T0,floor,target(1,T0,TARGET_CENTER_X,300),running()); upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X,300),running());
+    CHECK(AlignFsm::state()==RobotState::Approach);                         // charging, still far
+    d=upd(T0+20,floor,close(3,T0+20),running());
+    CHECK(d.type==DriveIntentType::Brake && AlignFsm::state()==RobotState::DiveBrake);
+    CHECK(upd(T0+20+BRAKE_MS-1,floor,missing,running()).type==DriveIntentType::Brake);   // blind: still brakes
+    d=upd(T0+20+BRAKE_MS,floor,close(4,T0+20+BRAKE_MS),running());
+    CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==INSERT_DUTY && d.steering>0 &&
+          AlignFsm::state()==RobotState::SpokeEngaged);
+    d=upd(T0+20+BRAKE_MS+INSERT_MS,floor,missing,running());
+    CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==BURST_DUTY && d.steering==0 &&
+          AlignFsm::state()==RobotState::Push);
+    const uint32_t end=T0+20+BRAKE_MS+INSERT_MS+BURST_MS;
+    d=upd(end,floor,close(5,end),running());                              // done: back to charging
+    CHECK(d.type==DriveIntentType::Approach && d.requestedDuty==CHARGE_DUTY && AlignFsm::state()==RobotState::Approach);
+    // Cooldown: no new attack right away, then again.
+    CHECK(upd(end+10,floor,close(6,end+10),running()).requestedDuty==CHARGE_DUTY);
+    CHECK(upd(end+COOLDOWN_MS,floor,close(7,end+COOLDOWN_MS),running()).type==DriveIntentType::Brake);
+    // Not centered enough or not close enough: just charge.
+    freshRun();
+    upd(T0,floor,target(1,T0,TARGET_CENTER_X,300),running()); upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X,300),running());
+    CHECK(upd(T0+20,floor,close(3,T0+20,TARGET_CENTER_X+TRIGGER_CENTER+1),running()).requestedDuty==CHARGE_DUTY);
+    CHECK(upd(T0+30,floor,target(4,T0+30,TARGET_CENTER_X,TRIGGER_HEIGHT-1),running()).requestedDuty==CHARGE_DUTY);
+    // A floor hazard cancels it: escape wins.
+    freshRun();
+    upd(T0,floor,target(1,T0,TARGET_CENTER_X,300),running()); upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X,300),running());
+    upd(T0+20,floor,close(3,T0+20),running()); upd(T0+20+BRAKE_MS,floor,close(4,T0+20+BRAKE_MS),running());
+    SensorSnapshot fl3; hazard(fl3,0,FloorColor::Blue);
+    CHECK(upd(T0+30+BRAKE_MS,fl3,close(5,T0+30+BRAKE_MS),running()).type==DriveIntentType::Reverse);
+    CHECK(AlignFsm::state()==RobotState::ZoneEscape && ForkAttack::phase(T0+40+BRAKE_MS)==ForkPhase::Idle);
+  }
   // A hazard during the opening move cancels it and escapes.
   fixture(); AlignFsm::begin(); upd(0,floor,missing,running());
   CHECK(AlignFsm::state()==RobotState::Opening);
@@ -859,6 +1023,51 @@ void testAlignFsm() {
   SafetyStatus estop; estop.state=SafetyState::EmergencyStop;
   CHECK(upd(6000,fl,target(9,6000,1900),estop).type==DriveIntentType::Brake);
   CHECK(AlignFsm::state()==RobotState::EmergencyStop);
+}
+
+void testRunLog() {
+  fixture(); RunLog::reset(); Serial1.tx.clear();
+  RunLog::push(RunLogKind::State,0x1234,2,0xFFFF,0); RunLog::process();
+  const std::string f=Serial1.tx;
+  CHECK(f.size()==14);
+  const uint8_t expect[14]={0xAA,0x55,0x81,0x0A,0,2,0x34,0x12,2,0,0xFF,0xFF,0,0};
+  CHECK(std::memcmp(f.data(),expect,14)==0);
+  // TX buffer full: frames wait in the queue, never block; a full queue drops.
+  Serial1.tx.clear(); Serial1.capacity=13; RunLog::push(RunLogKind::Stop,1); RunLog::process();
+  CHECK(Serial1.tx.empty());
+  Serial1.capacity=4096; RunLog::process(); CHECK(Serial1.tx.size()==14 && static_cast<uint8_t>(Serial1.tx[4])==1);
+  for(int i=0;i<config::run_log::QUEUE_SIZE+3;++i) RunLog::push(RunLogKind::Alive);
+  CHECK(RunLog::dropped()==3);
+  Serial1.tx.clear(); RunLog::process(); CHECK(Serial1.tx.size()==14u*config::run_log::QUEUE_SIZE);
+  // Alive: 5 Hz while driving only.
+  RunLog::reset(); Serial1.tx.clear();
+  for(uint32_t t=0;t<1000;t+=10) RunLog::alive(t,true,3,960,6,500);
+  RunLog::alive(1000,false,0,0,0,0); RunLog::alive(1010,false,0,0,0,0);
+  RunLog::process(); CHECK(Serial1.tx.size()==14u*5);
+}
+
+void testPoseEstimate() {
+  // Log-only pose: gyro heading about the learned "up" axis, commanded distance.
+  PoseEstimate::reset();
+  ImuStatus imu; imu.dataFresh=true; ImuSample s; uint32_t t=0;
+  auto feed=[&](int16_t gz,bool run,int16_t l,int16_t r,int16_t ax=0,int16_t az=4096){
+    t+=10; s.timestampMs=t; s.accel[0]=ax; s.accel[1]=0; s.accel[2]=az;
+    s.gyro[0]=5; s.gyro[1]=-3; s.gyro[2]=gz; PoseEstimate::update(t,run,imu,s,l,r); };
+  for(int i=0;i<100;++i) feed(20,false,0,0);          // at rest: bias (5,-3,20) learned, z up
+  feed(20,true,0,0);                                   // SW2: pose zeroed
+  CHECK(PoseEstimate::pose().imuOk && std::abs(PoseEstimate::pose().headingDeg)<0.01f);
+  // Left turn at 90 deg/s for 0.5 s -> +45 deg (32.8 LSB per deg/s, plus the bias).
+  for(int i=0;i<50;++i) feed(static_cast<int16_t>(20+90*32.8f),true,-300,300);
+  CHECK(std::abs(PoseEstimate::pose().headingDeg-45.0f)<1.0f);
+  CHECK(std::abs(PoseEstimate::pose().xMm)<1.0f);      // spin in place: no distance
+  // 1 s straight at 500 -> ~500 mm along 45 deg.
+  for(int i=0;i<100;++i) feed(20,true,500,500);
+  CHECK(std::abs(PoseEstimate::pose().xMm-353.6f)<15 && std::abs(PoseEstimate::pose().yMm-353.6f)<15);
+  // Stop and a new run start from zero again; stale IMU holds the heading.
+  feed(20,false,0,0); feed(20,true,0,0);
+  CHECK(std::abs(PoseEstimate::pose().xMm)<0.01f && std::abs(PoseEstimate::pose().headingDeg)<0.01f);
+  imu.dataFresh=false; for(int i=0;i<20;++i) feed(2000,true,0,0);
+  CHECK(!PoseEstimate::pose().imuOk && std::abs(PoseEstimate::pose().headingDeg)<0.01f);
 }
 
 void testMainIntegration() {
@@ -874,6 +1083,13 @@ void testMainIntegration() {
   fake::level(pins::START_SWITCH,HIGH); for(int i=0;i<50;++i) loop();
   CHECK(SystemManager::motorAllowed()); CHECK(MotorController::status().outputsActive);
   const auto fsmState=[]{ return config::control::ALIGN_ONLY_FSM ? AlignFsm::state() : RobotFsm::state(); };
+  if (config::control::ALIGN_ONLY_FSM) {   // run log: a Start frame went to the Pi on SW2
+    const std::string start{static_cast<char>(0xAA),0x55,static_cast<char>(0x81),0x0A};
+    bool found=false;
+    for(size_t at=Serial1.tx.find(start);at!=std::string::npos;at=Serial1.tx.find(start,at+1))
+      found|=at+14<=Serial1.tx.size() && Serial1.tx[at+5]==1;
+    CHECK(found);
+  }
   if (config::control::ALIGN_ONLY_FSM && config::opening::ENABLED) {
     CHECK(fsmState()==RobotState::Opening);                   // fixed opening move first
     for(int i=0;i<5000 && fsmState()==RobotState::Opening;++i) loop();
@@ -937,17 +1153,25 @@ void testWanderAndTilt() {
   bool tripped=false; uint32_t start=ms;
   while(ms-start<config::tilt::HOLD_MS-20) tripped|=feed(0,0,-4096,true);   // upside down
   CHECK(!tripped && TiltGuard::lastAngleDeg()>170);
-  for(int i=0;i<5;++i) tripped|=feed(0,0,-4096,true);
+  for(int i=0;i<10;++i) tripped|=feed(0,0,-4096,true);   // filter: ~50 ms to cross the limit
   CHECK(tripped);
-  // Back under the limit restarts the hold; stale IMU never trips.
+  // 11/10: rocking or vibration (short dips under the limit) no longer restarts the hold.
   TiltGuard::begin(); for(int i=0;i<20;++i) feed(0,0,4096,false);
-  start=ms; while(ms-start<2000) CHECK(!feed(4096,0,200,true));   // ~87 deg
-  CHECK(!feed(0,0,4096,true));
-  start=ms; while(ms-start<2000) CHECK(!feed(4096,0,200,true));
+  start=ms; tripped=false;
+  while(ms-start<config::tilt::HOLD_MS+200) {
+    const bool bump=((ms-start)/10)%10==0;                 // one raw level sample in ten
+    tripped|=bump ? feed(0,0,4096,true) : feed(0,0,-4096,true);
+  }
+  CHECK(tripped);
+  // Back under the limit for longer than RELEASE_MS restarts the hold; stale IMU never trips.
+  TiltGuard::begin(); for(int i=0;i<20;++i) feed(0,0,4096,false);
+  start=ms; while(ms-start<config::tilt::HOLD_MS-200) CHECK(!feed(4096,0,200,true));   // ~87 deg
+  start=ms; while(ms-start<config::tilt::RELEASE_MS+200) CHECK(!feed(0,0,4096,true));
+  start=ms; while(ms-start<config::tilt::HOLD_MS-200) CHECK(!feed(4096,0,200,true));
   imu.dataFresh=false; start=ms; while(ms-start<5000) CHECK(!feed(0,0,-4096,true));
   // Mounting does not matter: level learned with x up, then flipped.
   imu.dataFresh=true; TiltGuard::begin(); for(int i=0;i<20;++i) feed(4096,0,0,false);
-  start=ms; tripped=false; while(ms-start<config::tilt::HOLD_MS+50) tripped|=feed(-4096,0,0,true);
+  start=ms; tripped=false; while(ms-start<config::tilt::HOLD_MS+150) tripped|=feed(-4096,0,0,true);
   CHECK(tripped);
 }
 
@@ -956,7 +1180,7 @@ void demo() {
   const char* states[]={"Boot","WaitStart","Search","TargetConfirm","TrackAlign",
     "Approach","ContactCheck","AttackCharge","DiveBrake","SpokeInsert","UndercutDrive",
     "Push","ScoreHold","Backoff","LostTarget","WallEscape","ZoneEscape","StuckRecovery",
-    "EmergencyStop","Stop","Wander","Opening"};
+    "EmergencyStop","Stop","Wander","Opening","CircleBypass"};
   std::cout<<"time_ms,state,left,right (permille)\n";
   for(uint32_t time=0;time<=1600;time+=20) {
     VisionSnapshot vision;
@@ -979,7 +1203,7 @@ int main(int argc,char** argv) {
       {"continuous single-exposure floor mode",testContinuousFloorMode},
       {"12-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},
       {"power-on battery check",testBattery},
-      {"real main loop integration",testMainIntegration},
+      {"run log to the Pi",testRunLog},{"log-only pose estimate",testPoseEstimate},{"real main loop integration",testMainIntegration},
       {"I2C time/optional sensors/boot ESTOP",testRealisticTimingAndBoot}};
     for(const auto& test:tests) { test.run(); ++groups; std::cout<<"PASS "<<test.name<<"\n"; }
     std::cout<<"MODEL "<<COLOR_SENSOR_MODEL<<": "<<groups<<" groups, "<<assertions<<" checks passed\n";

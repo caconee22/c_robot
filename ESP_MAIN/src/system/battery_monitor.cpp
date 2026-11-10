@@ -14,6 +14,9 @@ uint32_t checkStartedMs = 0;
 uint32_t lastSampleMs = 0;
 bool sampled = false;
 uint8_t lastCells = 0;
+// 11/10: the NVS switch only decides whether a bad pack blocks the start. The
+// pack is always measured, so the cell count (3S/4S) is known either way.
+bool blocking = true;
 
 constexpr uint32_t packMaxMv() {
   return config::battery::CELL_COUNT_MAX * config::battery::CELL_MAX_MV;
@@ -30,6 +33,8 @@ uint8_t cellsFor(uint32_t packMv) {
 }
 
 void finish(BatteryCheckResult result) {
+  // Check switched off: a bad reading is only reported, never a fault.
+  if (!blocking && result != BatteryCheckResult::Ok) result = BatteryCheckResult::Disabled;
   current.result = result;
   if (result == BatteryCheckResult::Ok) SystemManager::holdStart(false);
   const int32_t mv = static_cast<int32_t>(current.packMillivolts);
@@ -38,7 +43,7 @@ void finish(BatteryCheckResult result) {
                                                         : LogSeverity::Error,
                        LogSource::System, BatteryMonitor::resultName(result), mv,
                        current.cells, 0);
-  if (result == BatteryCheckResult::Ok) return;
+  if (result == BatteryCheckResult::Ok || result == BatteryCheckResult::Disabled) return;
   const FaultCode fault = result == BatteryCheckResult::Missing
                               ? FaultCode::Disconnected
                           : result == BatteryCheckResult::High
@@ -54,12 +59,11 @@ void BatteryMonitor::begin(uint32_t nowMs) {
   current = BatteryStatus{};
 #if HW_VERSION == 2
   analogSetPinAttenuation(pins::BATTERY_ADC, ADC_11db);
-  if (!BatterySetting::checkEnabled()) {
-    current.result = BatteryCheckResult::Disabled;  // match: run on whatever pack is fitted
-    return;
-  }
+  blocking = BatterySetting::checkEnabled();
   current.result = BatteryCheckResult::Checking;
-  SystemManager::holdStart(true);  // No SW2 start before the pack is judged.
+  // No SW2 start before the pack is judged, unless the check is switched off
+  // (match: run on whatever pack is fitted; it is still measured for 3S/4S).
+  if (blocking) SystemManager::holdStart(true);
   checkStartedMs = nowMs;
   sampled = false;
   lastCells = 0;
@@ -103,10 +107,12 @@ void BatteryMonitor::update(uint32_t nowMs) {
 void BatteryMonitor::stopCheck() {
 #if HW_VERSION == 2
   const auto result = current.result;
+  blocking = false;
   if (result == BatteryCheckResult::NotAvailable || result == BatteryCheckResult::Ok ||
       result == BatteryCheckResult::Disabled) return;
-  current.result = BatteryCheckResult::Disabled;
   SystemManager::holdStart(false);
+  if (result == BatteryCheckResult::Checking) return;   // keeps measuring, never blocks now
+  current.result = BatteryCheckResult::Disabled;
   // Only BatteryMonitor reports application health, so this clears just its own fault.
   if (result != BatteryCheckResult::Checking) SystemManager::setApplicationHealthy(true);
 #endif

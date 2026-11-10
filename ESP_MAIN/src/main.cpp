@@ -1,11 +1,14 @@
 #include <Arduino.h>
+#include <math.h>
 
 #include "app/boot_manager.hpp"
 #include "communication/raspberry_link.hpp"
+#include "communication/run_log.hpp"
 #include "control/align_fsm.hpp"
 #include "control/control_config.hpp"
 #include "control/drive_logic.hpp"
 #include "control/opening_move.hpp"
+#include "control/pose_estimate.hpp"
 #include "control/robot_fsm.hpp"
 #include "motor/motor_controller.hpp"
 #include "sensors/imu_monitor.hpp"
@@ -50,6 +53,7 @@ void showRobotState(RobotState state) {
       StatusLed::setBoth(LedOwner::Fsm, LedState::Attacking);
       break;
     case RobotState::ZoneEscape:
+    case RobotState::CircleBypass:
       StatusLed::setBoth(LedOwner::Fsm, (config::control::ALIGN_ONLY_FSM ? AlignFsm::escapeColor()
                                                                           : RobotFsm::escapeColor()) == FloorColor::Blue
                                             ? LedState::EscapeBlue
@@ -113,8 +117,28 @@ void loop() {
     MotorController::brake();
   }
 
+  // Run log to the Pi over UART1 (11/10): 5 Hz alive frame while driving, low priority.
+  const bool aliveSent = RunLog::alive(nowMs, system.motorAllowed && config::control::ALIGN_ONLY_FSM,
+                static_cast<uint8_t>(AlignFsm::state()),
+                vision.linkValid && vision.frameFresh && vision.cameraOk && vision.pipelineOk &&
+                        vision.targetValid
+                    ? vision.targetX
+                    : 0,
+                static_cast<uint8_t>(driveIntent.type), driveIntent.requestedDuty);
+  // Rough pose for the log only (11/10): gyro heading + commanded distance.
+  PoseEstimate::update(nowMs, system.motorAllowed, ImuMonitor::status(), ImuMonitor::latest(),
+                       MotorController::status().appliedLeftPermille,
+                       MotorController::status().appliedRightPermille);
+  if (aliveSent) {
+    const Pose pose = PoseEstimate::pose();
+    RunLog::push(RunLogKind::Pose, static_cast<uint16_t>(static_cast<int16_t>(lroundf(pose.headingDeg * 10))),
+                 static_cast<uint16_t>(static_cast<int16_t>(constrain(lroundf(pose.xMm), -32000L, 32000L))),
+                 static_cast<uint16_t>(static_cast<int16_t>(constrain(lroundf(pose.yMm), -32000L, 32000L))),
+                 pose.imuOk ? 1 : 0);
+  }
   showRobotState(config::control::ALIGN_ONLY_FSM ? AlignFsm::state() : RobotFsm::state());
   StatusLed::update(nowMs);
   EventLogger::process();
+  RunLog::process();
   delay(1);  // Yield to the watchdog and ESP32 background tasks.
 }

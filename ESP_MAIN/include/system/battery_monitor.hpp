@@ -9,7 +9,7 @@ enum class BatteryCheckResult : uint8_t {
   Missing,       // Pack voltage almost zero (no battery, USB power only).
   Low,           // No allowed cell count fits: empty pack or too few cells.
   High,          // Above the largest allowed pack: too many cells.
-  Disabled,      // Check switched off in NVS (BatterySetting): start is not held.
+  Disabled,      // Check switched off (BatterySetting) and the pack did not fit: start not held.
 };
 
 struct BatteryStatus {
@@ -32,7 +32,9 @@ struct BatteryStatus {
 //   After the check passes, the voltage is no longer watched, so a stall sag in
 //   a match never trips it.
 //   BatterySetting off (bench "BAT CHECK OFF", read from NVS at begin, also by the
-//   match firmware): no check at all, result Disabled, SW2 not held.
+//   match firmware): 11/10, the pack is still measured (Ok with the cell count
+//   when it fits, used by the opening move for 3S/4S), but SW2 is never held and
+//   a bad reading only reports Disabled, no fault.
 // Safety code: no (it only reports through SystemManager).
 class BatteryMonitor {
  public:

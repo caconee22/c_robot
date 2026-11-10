@@ -46,6 +46,7 @@ enum class RobotState : uint8_t {
   Stop,
   Wander,  // no usable Pi frames: random blind pattern (control/wander.hpp)
   Opening,  // fixed opening move after SW2 (control/opening_move.hpp)
+  CircleBypass,  // going around the red center circle (control/circle_bypass.hpp)
 };
 
 enum class DriveIntentType : uint8_t {

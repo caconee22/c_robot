@@ -19,10 +19,21 @@
 namespace config {
 namespace floor_hazard {
 constexpr uint32_t FIRST_CLEAR_MS = 300;
+// Corners that reach the color within this time of the first one count as
+// "first" together (two sensors of one side rarely confirm in the same pass).
+constexpr uint32_t FIRST_WINDOW_MS = 60;
 }  // namespace floor_hazard
 }  // namespace config
 
-enum class HazardSide : uint8_t { None, FrontLeft, FrontRight, FrontBoth, Rear };
+// Side that went onto the color first = the deepest end (11/10: decides the
+// way out, also when the robot is pushed all the way in).
+enum class HazardSide : uint8_t {
+  None,
+  FrontLeft, FrontRight, FrontBoth,   // front first: we drove (or were pushed) forward in
+  RearLeft, RearRight, RearBoth,      // rear first: pushed backward in
+  Left, Right,                        // one side first: pushed sideways in
+  Unclear,                            // diagonal or 3+ corners at once
+};
 
 struct FloorHazardInfo {
   uint8_t mask = 0;                      // corners on a hazard now
