@@ -70,7 +70,8 @@ PC 시험·빌드 통과를 실제 차량 동작의 보증으로 읽지 않는�
 | [`ESP_MAIN/`](ESP_MAIN/) | ESP32-S3 펌웨어 (PlatformIO), PC 회귀 시험, 벤치 GUI (`tools/bench_gui.py`) |
 | [`ESP_MAIN/archive/`](ESP_MAIN/archive/) | 10/31에 은퇴시킨 펌웨어 환경(V1, TCS34725, 예전 벤치·교정). 빌드되지 않음 |
 | [`scripts/`](scripts/) | 라즈베리파이 영상 검출·UART 송신·설정 앱·시스템 서비스, 예전 영상 실험 코드 |
-| [`config/`](config/) | 예전 검출기 설정 JSON. 지금 쓰는 `tower_hsv.json`, `camera.json`은 **라즈에만 있음**(Git 밖) |
+| [`config/`](config/) | 예전 검출기 설정 JSON. 지금 쓰는 `tower_hsv.json`, `camera.json`은 라즈의 `config/`에 있고 백업은 `pi_backup/config/` |
+| [`pi_backup/`](pi_backup/) | 라즈 백업(11/10): 타워 색·카메라 설정, 주행 로그, 시스템 설정(비밀번호 지움). 복구 순서는 [PI_RECOVERY.md](PI_RECOVERY.md) |
 | [`tests/`](tests/) | 라즈 쪽 파이썬 시험 (패킷, 검출기, Wi-Fi 복구) |
 | [`cv_tests/`](cv_tests/) | 10/06 색 필터 비교 실험. 지금 검출기(`tower_detector_hsv.py`)의 근거 |
 | [`fsm_sim/`](fsm_sim/) | 브라우저 2D FSM 시뮬레이터 (10/18–19). 펌웨어와 별개 |
@@ -164,6 +165,7 @@ Camera Module 3 Wide (720p 60fps, 셔터 1ms)
 | `c-robot-netfix.service` | NetworkManager 전에 비어 버린 Wi-Fi 설정 파일 복구 (11/4 전원 차단으로 0바이트가 된 사고) |
 | `c-robot-netsave.service` | 네트워크가 올라오면 Wi-Fi 설정 백업 |
 | `c-robot-wifi-prefer.timer` | 30초마다 caconee22가 보이면 그쪽으로 옮김 (없으면 307) |
+| `c-robot-esplog.service` | ESP32 주행 로그(UART RX) → `logs/runs/run_*.csv` |
 
 ### 바탕화면 아이콘
 
@@ -185,10 +187,11 @@ Camera Module 3 Wide (720p 60fps, 셔터 1ms)
 | `scripts/vision_packet.py` | 패킷 V1 인코더. ESP32 파서와 같은 규칙, 잘못된 패킷은 만들지 않음 |
 | `scripts/pi_netfix.py`, `pi_wifi_prefer.sh` | Wi-Fi 설정 복구·백업, 선호 Wi-Fi로 복귀 |
 | `scripts/*.service`, `*.timer`, `*.desktop` | 위 서비스·아이콘 정의 |
-| `setup_raspberry_pi.sh` | OpenCV·NumPy·Picamera2 시스템 패키지 설치 |
+| `setup_raspberry_pi.sh` | OpenCV·NumPy·Picamera2 시스템 패키지 설치 (예전 것. 새 OS에는 `scripts/pi_restore.sh`) |
+| `scripts/pi_restore.sh`, `pi_backup_pull.sh` | 새 OS에 전부 다시 설정 / 노트북으로 라즈 전체 백업 ([PI_RECOVERY.md](PI_RECOVERY.md)) |
 
 **라즈에만 있는 설정 (Git에 없음):** `config/tower_hsv.json`(타워 색 범위), `config/camera.json`(카메라 설정).
-SD 카드가 망가지면 다시 맞춰야 하므로 대회 전 저장소에 백업해 두는 것이 좋다(아직 안 함).
+11/10에 `pi_backup/config/`로 백업했다. SD 카드가 망가지면 [PI_RECOVERY.md](PI_RECOVERY.md) 순서대로 새로 깔고 `scripts/pi_restore.sh`가 되돌린다.
 
 ### 라즈 사용 주의
 

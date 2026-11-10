@@ -1,0 +1,7 @@
+[Unit]
+Description=C_ROBOT 1 Hz power log (diagnostic)
+[Service]
+User=caconee
+ExecStart=/usr/bin/python3 /home/caconee/power_log.py
+[Install]
+WantedBy=multi-user.target

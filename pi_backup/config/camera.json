@@ -1,0 +1,16 @@
+{
+ "mode": "720p",
+ "exposure_mode": "short",
+ "exposure_us": 33000,
+ "gain": 8.9,
+ "mains_hz": 60,
+ "awb": false,
+ "red_gain": 2.32,
+ "blue_gain": 1.73,
+ "brightness": 0.0,
+ "contrast": 1.0,
+ "saturation": 1.0,
+ "sharpness": 1.0,
+ "af_continuous": true,
+ "lens": 0.0
+}

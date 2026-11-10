@@ -1,0 +1,1 @@
+{"low": [61, 100, 64], "high": [77, 255, 255], "min_area": 0.0003, "max_area": 1.0, "tall_ratio": 0.5, "track": true, "ranges": [{"name": "범위 5", "low": [61, 100, 64], "high": [77, 255, 255], "on": true}]}

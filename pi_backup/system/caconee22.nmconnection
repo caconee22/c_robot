@@ -1,0 +1,25 @@
+[connection]
+id=caconee22
+uuid=89e30288-d60d-44ec-a37b-80c8941043d2
+type=wifi
+autoconnect-priority=10
+interface-name=wlan0
+timestamp=1793802468
+
+[wifi]
+mode=infrastructure
+ssid=caconee22
+
+[wifi-security]
+auth-alg=open
+key-mgmt=wpa-psk
+psk=<비밀번호 직접 입력>
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+
+[proxy]
