@@ -136,4 +136,6 @@ class EventLogger {
 
   static void enterEmergencyMode();
   static void writeEmergencyStopNow();
+  // 11/11 two-button soft reset: back to normal logging (queue starts empty).
+  static void exitEmergencyMode();
 };

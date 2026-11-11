@@ -36,10 +36,13 @@ DRIVE_LIMIT = 400       # firmware bench output limit (permille)
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 CORNERS = {1: "앞 왼쪽", 2: "앞 오른쪽", 3: "뒤 왼쪽", 4: "뒤 오른쪽"}
 # Firmware order (color_calibration.cpp STEPS): per color level all 4, lifted all 4,
-# pressed front pair, pressed rear pair. Yellow is not calibrated (11/04).
+# pressed front pair, pressed rear pair; then yellow (11/11) with every pose in
+# two parts (front pair, rear pair) because the yellow zone cannot hold all four.
 CAL_ORDER = [(color, pose, sensors) for color in ("BLACK", "RED", "BLUE")
              for pose, sensors in (("LEVEL", (1, 2, 3, 4)), ("LIFTED", (1, 2, 3, 4)),
-                                   ("PRESSED", (1, 2)), ("PRESSED", (3, 4)))]
+                                   ("PRESSED", (1, 2)), ("PRESSED", (3, 4)))] + \
+            [("YELLOW", pose, sensors) for pose in ("LEVEL", "LIFTED", "PRESSED")
+             for sensors in ((1, 2), (3, 4))]
 CAL_STEPS = len(CAL_ORDER)
 # AS7341 ADC full scale = (ATIME+1)*(ASTEP+1) from sensor_config.hpp; 5 ms gives 1798.
 # shortcut: fixed to the 5 ms setting, update it if AS7341_EXPOSURE_US changes.
@@ -71,6 +74,10 @@ PIN_ROWS = [
     [("ir1", "IR1", 4), ("ir2", "IR2", 5), ("ir3", "IR3", 6), ("ir4", "IR4", 7), ("ir5", "IR5", 8),
      ("ir6", "IR6", 13)],
 ]
+# Old V1 robot (11/10, BOARD,1 line): GPIOs from include/pins.hpp. EN shows L_EN
+# (R_EN 39 / 14 follows it); V1 has no current, IR or battery inputs.
+PIN_GPIO_V1 = {"sw1": 15, "sw2": 16, "sda": 11, "scl": 12, "en1": 40, "en2": 21,
+               "lpwm1": 42, "rpwm1": 41, "lpwm2": 38, "rpwm2": 47}
 ADC_KEYS = ["is_l1", "is_r1", "is_l2", "is_r2", "ir1", "ir2", "ir3", "ir4", "ir5", "ir6", "bat"]
 
 IMU_STALE = {1: "준비 안 됨", 2: "샘플 끊김", 3: "값 고정"}
@@ -146,6 +153,37 @@ def parse_line(line):
         parts = line.split(",")
         if len(parts) >= 3:
             return "trim", {"left": _int(parts[1]), "right": _int(parts[2])}
+        return None, None
+    if line.startswith("HUSKYST,"):
+        # HUSKYST,ms,connected,baud,rxPin,rawBytes,answers,errors,sameFrame,busy,off,frame
+        f = line.split(",")
+        if len(f) >= 12:
+            return "huskyst", {"connected": f[2] == "1", "baud": _int(f[3]), "rx": _int(f[4]),
+                               "raw": _int(f[5]), "answers": _int(f[6]), "errors": _int(f[7]),
+                               "same": _int(f[8]), "busy": _int(f[9]), "off": f[10] == "1",
+                               "frame": _int(f[11])}
+        return None, None
+    if line.startswith("OK HUSKY PROBE"):
+        return "husky_probe_start", {}
+    if line.startswith("HUSKY USE,"):
+        f = line.split(",")
+        return "husky_use", {"baud": _int(f[1]), "rx": f[2].strip() if len(f) > 2 else ""}
+    if line.startswith("HUSKY PINS,"):
+        return "husky_pins", {"text": line[len("HUSKY PINS,"):]}
+    if line.startswith("OK HUSKY OFF") or line.startswith("OK HUSKY ON"):
+        return "husky_onoff", {"off": "OFF" in line.split()[2]}
+    if line.startswith("HUSKY,"):
+        # HUSKY,baud,RX18|RX17,bytes,goodFrames (one per probe setting)
+        f = line.split(",")
+        if len(f) >= 5:
+            return "husky_probe", {"baud": _int(f[1]), "rx": f[2].strip(), "bytes": _int(f[3]),
+                                   "frames": _int(f[4])}
+        return None, None
+    if line.startswith("BOARD,"):
+        parts = line.split(",")
+        if len(parts) >= 3:
+            return "board", {"hw": _int(parts[1]), "camera": parts[2].strip(),
+                             "scale": _int(parts[3]) if len(parts) > 3 else 1000}
         return None, None
     if line.startswith("BATCHECK,"):
         return "batcheck", {"on": line.split(",")[1].strip() == "1"}
@@ -296,6 +334,13 @@ class BenchState:
         self.bat = None
         self.bat_check = None      # saved power-on battery check switch (BATCHECK row)
         self.trim = None           # straight-drive trim in use (TRIM row), permille left/right
+        self.board = None          # BOARD row: hw version, camera (PI/HUSKY), output scale
+        self.husky = None          # HUSKYST row (HuskyLens link state, old V1 robot)
+        self.husky_at = 0.0
+        self.husky_probe = []      # HUSKY rows of the last HUSKY PROBE
+        self.husky_probing = False
+        self.husky_use = None      # setting kept after the probe
+        self.husky_pins = None     # last HUSKY PINS text
         self.d = None
         self.sensors = {}
         self.imu = None
@@ -326,6 +371,18 @@ class BenchState:
             self.bat_check = v["on"]
         elif kind == "trim":
             self.trim = v
+        elif kind == "board":
+            self.board = v
+        elif kind == "huskyst":
+            self.husky, self.husky_at = v, time.monotonic()
+        elif kind == "husky_probe_start":
+            self.husky_probe, self.husky_probing, self.husky_use = [], True, None
+        elif kind == "husky_probe":
+            self.husky_probe.append(v)
+        elif kind == "husky_use":
+            self.husky_use, self.husky_probing = v, False
+        elif kind == "husky_pins":
+            self.husky_pins = v["text"]
         elif kind == "d":
             self.d = v
         elif kind == "link":
@@ -712,7 +769,7 @@ CAL_PREP = [
     "경기장 실사 현수막 위에서, 대회장과 비슷한 조명으로 합니다.",
     "센서-바닥 간격을 맞출 자(또는 3·10·20mm 블록)를 준비합니다.",
     "로봇 전체를 수평으로 10mm 올릴 받침과 로봇보다 큰 검정·빨강·파랑 면을 준비합니다.",
-    f"{CAL_STEPS}단계 (색마다 평평 → 들림 → 앞 눌림 → 뒤 눌림) ≈ 5–10분. 중간에 멈추면 처음부터 다시 해야 합니다.",
+    f"{CAL_STEPS}단계 (검정·빨강·파랑은 평평 → 들림 → 앞 눌림 → 뒤 눌림, 노랑은 각 자세를 앞·뒤 두 번) ≈ 5–10분. 중간에 멈추면 처음부터 다시 해야 합니다.",
 ]
 
 
@@ -723,8 +780,12 @@ def run_gui():
     T = THEME
     root = tk.Tk()
     root.title("C_ROBOT 보드 시험")
-    root.geometry("1280x840")
-    root.minsize(1100, 720)
+    # 11/10: fit small laptop screens (e.g. 1440x900 at 200 %). The window never
+    # opens larger than the screen; each tab scrolls when its content is taller.
+    screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
+    win_w, win_h = min(1280, screen_w - 40), min(840, screen_h - 90)
+    root.geometry(f"{win_w}x{win_h}+{max(0, (screen_w - win_w) // 2)}+10")
+    root.minsize(min(1100, win_w), min(560, win_h))
     root.configure(bg=T["bg"])
 
     style = ttk.Style(root)
@@ -862,12 +923,51 @@ def run_gui():
 
     tabs = ttk.Notebook(root)
     tabs.pack(fill="both", expand=True, padx=16)
-    test_tab = tk.Frame(tabs, bg=T["bg"])
-    cal_tab = tk.Frame(tabs, bg=T["bg"])
-    cam_tab = tk.Frame(tabs, bg=T["bg"])
-    tabs.add(test_tab, text="  시험  ")
-    tabs.add(cal_tab, text="  색 교정  ")
-    tabs.add(cam_tab, text="  라즈 카메라  ")
+
+    # A tab page that scrolls vertically when the window is shorter than the
+    # layout (the fixed-width side columns need about TAB_MIN_HEIGHT px).
+    TAB_MIN_HEIGHT = 700
+
+    def scroll_page(title):
+        outer = tk.Frame(tabs, bg=T["bg"])
+        canvas = tk.Canvas(outer, bg=T["bg"], highlightthickness=0)
+        bar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        page = tk.Frame(canvas, bg=T["bg"])
+        item = canvas.create_window(0, 0, window=page, anchor="nw")
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+
+        def fit(_event=None):
+            w, h = canvas.winfo_width(), canvas.winfo_height()
+            full = max(h, TAB_MIN_HEIGHT, page.winfo_reqheight())
+            canvas.itemconfigure(item, width=w, height=full)
+            canvas.configure(scrollregion=(0, 0, w, full))
+            if full > h + 1:
+                if not bar.winfo_ismapped():
+                    bar.pack(side="right", fill="y")
+            elif bar.winfo_ismapped():
+                bar.pack_forget()
+                canvas.yview_moveto(0)
+
+        canvas.bind("<Configure>", fit)
+        page.bind("<Configure>", lambda e: root.after_idle(fit))
+
+        def wheel(event):
+            # The log and lists scroll themselves; the page scrolls everywhere else.
+            if event.widget.winfo_class() in ("Text", "Listbox", "TCombobox"):
+                return
+            if bar.winfo_ismapped():
+                canvas.yview_scroll(int(-event.delta / 120) or (-1 if event.delta > 0 else 1), "units")
+
+        outer.bind("<Enter>", lambda e: root.bind_all("<MouseWheel>", wheel))
+        outer.bind("<Leave>", lambda e: root.unbind_all("<MouseWheel>"))
+        tabs.add(outer, text=title)
+        page.tab_outer = outer   # what the notebook selects (tabs.select / NotebookTabChanged)
+        return page
+
+    test_tab = scroll_page("  시험  ")
+    cal_tab = scroll_page("  색 교정  ")
+    cam_tab = scroll_page("  라즈 카메라  ")
 
     # =================== 시험 tab ===================
     cols = tk.Frame(test_tab, bg=T["bg"])
@@ -935,6 +1035,7 @@ def run_gui():
             robot.itemconfig(label, text=str(value))
 
     stat = card(left, "전원 · IMU")
+    stat_title = stat.master.winfo_children()[0]   # renamed for the old V1 robot (apply_board)
     stat_rows = {}
     for key, label in (("bat", "배터리"), ("estop", "비상정지"), ("imu", "IMU"), ("acc", "가속도 g")):
         r = tk.Frame(stat, bg=T["surface"])
@@ -1024,6 +1125,8 @@ def run_gui():
 
     # camera box: where the Pi says the tower is (1920x1080 frame, from the D row)
     cam_box = card(cam_tab, "타워 위치 · ESP32가 라즈에게 받은 좌표 (1920×1080 화면) · 로그가 켜져 있어야 함 (MODE DATA 등)")
+    cam_title = cam_box.master.winfo_children()[0]
+    cam_title_v2 = cam_title.cget("text")
     cam_box.master.pack_configure(pady=(10, 0))
     cam_row = tk.Frame(cam_box, bg=T["surface"])
     cam_row.pack(fill="x")
@@ -1041,9 +1144,79 @@ def run_gui():
     cam_btns = tk.Frame(cam_box, bg=T["surface"])
     cam_btns.pack(fill="x", pady=(10, 0))
     button(cam_btns, "로그 켜기 (MODE DATA)", lambda: (send("LOG ON"), send("MODE DATA"))).pack(side="left")
-    tk.Label(cam_btns, text="라즈는 부팅하면 자동 송신 · 화면·색 설정은 라즈 바탕화면 'C_ROBOT 타워 설정'   ·   "
+    cam_hint = tk.Label(cam_btns, text="라즈는 부팅하면 자동 송신 · 화면·색 설정은 라즈 바탕화면 'C_ROBOT 타워 설정'   ·   "
              "배선: 라즈 8번(TX)→ESP32 RX, 10번(RX)←TX, GND 공통",
-             bg=T["surface"], fg=T["muted"], font=font(9), wraplength=900, justify="left").pack(side="left", padx=10)
+             bg=T["surface"], fg=T["muted"], font=font(9), wraplength=900, justify="left")
+    cam_hint.pack(side="left", padx=10)
+    cam_hint_pi = cam_hint.cget("text")
+
+    # HuskyLens card (old V1 robot): link state, the four HUSKY commands and the
+    # last probe table. Shown only when the board reports BOARD,...,HUSKY.
+    husky_card = card(cam_tab, "HuskyLens 연결 · 9600 → 115200 → 1000000 순서로 노크해서 자동 연결 (상태는 1.6초마다)")
+    husky_outer = husky_card.master
+    husky_row = tk.Frame(husky_card, bg=T["surface"])
+    husky_row.pack(fill="x")
+    husky_state = tk.Label(husky_row, text="—", bg=T["surface"], fg=T["ink"], font=font(13, "bold"),
+                           anchor="w", justify="left")
+    husky_state.pack(side="left", fill="x", expand=True)
+    husky_btns = tk.Frame(husky_row, bg=T["surface"])
+    husky_btns.pack(side="right")
+    for text, cmd in (("연결 점검 (6가지 설정)", "HUSKY PROBE"), ("핀 점검", "HUSKY PINS"),
+                      ("다시 연결", "HUSKY ON"), ("통신 끄기", "HUSKY OFF")):
+        button(husky_btns, text, lambda c=cmd: (send("LOG ON"), send(c))).pack(side="left", padx=(6, 0))
+    husky_detail = tk.Label(husky_card, text="", bg=T["surface"], fg=T["muted"], font=font(10, mono=True),
+                            anchor="w", justify="left")
+    husky_detail.pack(fill="x", pady=(6, 0))
+    husky_help = tk.Label(husky_card, text="배선: V1 PCB UART1(J18) 1 +5V · 2 TX(GPIO17)→HuskyLens R · "
+                          "3 RX(GPIO18)←HuskyLens T · 4 GND   ·   HuskyLens: Protocol Type = Serial 9600/115200/1000000, "
+                          "Color Recognition, 타워를 ID1로 학습 (ID 0 = 학습 안 된 색은 무시)",
+                          bg=T["surface"], fg=T["faint"], font=font(9), wraplength=1100, justify="left", anchor="w")
+    husky_help.pack(fill="x", pady=(6, 0))
+    husky_outer.pack_forget()
+
+    def render_husky():
+        b = state.board
+        show = bool(b) and b["camera"] == "HUSKY"
+        if show != bool(husky_outer.winfo_ismapped()):
+            if show:
+                husky_outer.pack(fill="x", pady=(10, 0), before=cam_box.master)
+            else:
+                husky_outer.pack_forget()
+        if not show:
+            return
+        h = state.husky
+        stale = not h or time.monotonic() - state.husky_at > 4.0
+        if not link["obj"]:
+            text, color = "보드 연결 안 됨", T["faint"]
+        elif stale:
+            text, color = "상태 줄 없음 · 로그를 켜세요 (버튼을 누르면 자동으로 켜짐)", T["muted"]
+        elif h["off"]:
+            text, color = "통신 꺼짐 (HUSKY OFF) · '다시 연결'로 켜기", T["warn"]
+        elif h["connected"] and h["answers"]:
+            text, color = f"연결됨 · {h['baud']} bps · GPIO{h['rx']} 수신 · 프레임 {h['frame']}", T["ok"]
+        elif h["connected"]:
+            text, color = f"노크 응답 받음 ({h['baud']} bps) · 블록 요청 중", T["ok"]
+        elif h["raw"]:
+            text, color = f"바이트는 오는데 해독 안 됨 ({h['baud']} bps 시도 중) · 속도 설정 확인", T["warn"]
+        else:
+            text, color = f"응답 없음 ({h['baud']} bps 노크 중) · 전원·Protocol Type·선 확인 → '연결 점검'", T["bad"]
+        husky_state.config(text=text, fg=color)
+        rows = []
+        if h and not stale:
+            rows.append(f"받은 바이트 {h['raw']}   응답 {h['answers']}   같은 프레임 {h['same']}   "
+                        f"오류·시간초과 {h['errors']}   BUSY {h['busy']}")
+        if state.husky_probing:
+            rows.append("연결 점검 중… (약 4초)")
+        if state.husky_probe:
+            rows.append("연결 점검 결과   속도      수신핀  바이트  정상응답")
+            for p in state.husky_probe:
+                mark = "  ← 응답" if p["frames"] else ("  ← 속도 틀림?" if p["bytes"] else "")
+                rows.append(f"                 {p['baud']:>7}   {p['rx']:<5}  {p['bytes']:>5}  {p['frames']:>6}{mark}")
+            if state.husky_use:
+                rows.append(f"→ 재부팅 전까지 {state.husky_use['baud']} bps, {state.husky_use['rx']} 사용")
+        if state.husky_pins:
+            rows.append("핀 점검: " + state.husky_pins + "  (11 = HuskyLens가 HIGH로 잡음 = 선 연결됨, 01 = 비어 있음)")
+        husky_detail.config(text="\n".join(rows))
 
     def paint_camera():
         d = state.d
@@ -1061,12 +1234,16 @@ def run_gui():
             cam_info.config(text="")
             return
         if not d["link"]:
-            cam.itemconfig(cam_text, text="라즈 연결 안 됨", state="normal")
+            cam.itemconfig(cam_text, text=("HuskyLens" if state.board and state.board["camera"] == "HUSKY"
+                                           else "라즈") + " 연결 안 됨", state="normal")
         elif not d["target"]:
             cam.itemconfig(cam_text, text="타워 없음", state="normal")
         else:
             cam.itemconfig(cam_text, state="hidden")
-        lines = [("라즈 링크  " + ("연결" if d["link"] else "끊김 (120ms 넘게 정상 패킷 없음)")),
+        husky = bool(state.board) and state.board["camera"] == "HUSKY"
+        src = "HuskyLens" if husky else "라즈"
+        lines = [(f"{src} 링크  " + ("연결" if d["link"] else
+                  ("끊김 (0.3초 넘게 응답 없음)" if husky else "끊김 (120ms 넘게 정상 패킷 없음)"))),
                  ("영상  " + ("새 프레임" if d["fresh"] else "멈춤 (sequence가 안 바뀜)") if d["link"] else "영상  —")]
         if d["link"] and d["target"]:
             side = "가운데" if abs(d["x"] - 960) < 120 else ("왼쪽" if d["x"] < 960 else "오른쪽")
@@ -1078,7 +1255,7 @@ def run_gui():
                      if flags & bit]
             lines.append(f"seq {d['seq']}  flags 0x{flags:02X} " + " ".join(names))
             if not (flags & 0x10 and flags & 0x20):
-                lines.append("⚠ 라즈 카메라/처리 이상 보고")
+                lines.append(f"⚠ {src} 카메라/처리 이상 보고")
         lk = state.link
         if lk:
             lines.append(f"패킷 정상 {lk['valid']}  오류 {lk['invalid']}  중복 {lk['duplicate']}")
@@ -1328,7 +1505,7 @@ def run_gui():
 
     def check_colors():
         note("#", "go check colors after calibration")
-        tabs.select(test_tab)
+        tabs.select(test_tab.tab_outer)
         send("LOG ON")
         send("MODE DATA")
         set_hint("시험 탭: 센서를 각 색 위에 올려 로봇 그림의 색이 맞는지 보세요")
@@ -1403,7 +1580,7 @@ def run_gui():
             if state.cal_finished == "saved":
                 cal_title.config(text="저장했습니다. 이제 색이 맞게 나오는지 확인하세요")
                 cal_steps_text.config(text="1. 아래 '색 확인하러 가기'를 누릅니다.\n"
-                                           "2. 각 센서를 빨강·파랑·검정 위에 올려 봅니다 (노랑은 교정하지 않음).\n"
+                                           "2. 각 센서를 빨강·파랑·검정·노랑 위에 올려 봅니다 (노랑은 위험색이 아니라 무시).\n"
                                            "3. 로봇 그림의 칸 색이 바닥과 같으면 끝입니다.\n"
                                            "4. 경기 전에는 yd_esp32_s3_v2를 다시 올리세요 (교정값은 그대로 남습니다).")
                 cal_state_label.config(text="저장 완료", fg=T["ok"])
@@ -1436,7 +1613,10 @@ def run_gui():
                 " (앞으로 기울임)" if info["sensors"] == [1, 2] else " (뒤로 기울임)")
         cal_title.config(text=f"{which} · {cname} · {pname} {gap}mm{tilt}")
         paint_cal_robot(info["sensors"], info["color"])
-        cal_steps_text.config(text=f"1. {which}가 모두 {cplace} 위에 있게 로봇을 둡니다.\n"
+        # Yellow level/lifted (11/11): only one pair on the color, the other pair off it.
+        other = ("" if len(info["sensors"]) == 4 or info["pose"] == "PRESSED" else
+                 " 나머지 센서는 이 색 밖(검정)에 둡니다.")
+        cal_steps_text.config(text=f"1. {which}가 모두 {cplace} 위에 있게 로봇을 둡니다.{other}\n"
                                    f"2. {pdesc}.\n"
                                    f"3. 손으로 잡아 움직이지 않게 한 뒤 '측정 시작'을 누릅니다.\n"
                                    f"   1초 카운트다운 → 1초 측정. 그동안 움직이지 마세요.")
@@ -1478,14 +1658,14 @@ def run_gui():
 
     def on_tab(_=None):
         # Ask once per connection whether the board already holds a calibration.
-        if tabs.select() == str(cal_tab) and link["obj"] and not calibrating() and not ui.get("asked_cal"):
+        if tabs.select() == str(cal_tab.tab_outer) and link["obj"] and not calibrating() and not ui.get("asked_cal"):
             ui["asked_cal"] = True
             send("CAL STATUS")
 
     tabs.bind("<<NotebookTabChanged>>", on_tab)
 
     def cal_enter(_=None):
-        if tabs.select() == str(cal_tab) and str(primary_btn.cget("state")) == "normal" and primary_btn.cget("text"):
+        if tabs.select() == str(cal_tab.tab_outer) and str(primary_btn.cget("state")) == "normal" and primary_btn.cget("text"):
             primary_btn.invoke()
 
     # ----- actions -----
@@ -1585,7 +1765,7 @@ def run_gui():
             cal_enter()
         elif e.keysym == "space":
             send("STOP")
-        elif e.keysym in keymap and e.keysym not in held and tabs.select() == str(test_tab):
+        elif e.keysym in keymap and e.keysym not in held and tabs.select() == str(test_tab.tab_outer):
             held.add(e.keysym)
             drive_start(keymap[e.keysym])
 
@@ -1729,7 +1909,40 @@ def run_gui():
             title.config(fg=T["ok"] if done else T["ink"])
             sub.config(text=auto.get(key, how), fg=T["ok"] if done else (T["muted"] if key in auto else T["faint"]))
 
+    # Switch pins and labels to the robot the board reports (BOARD row). Runs
+    # once per change; an older firmware without BOARD keeps the V2 layout.
+    shown_board = {"key": None}
+    tab_titles = {"cam": "  라즈 카메라  "}
+
+    def apply_board():
+        b = state.board
+        key = (b["hw"], b["camera"], b["scale"]) if b else None
+        if key == shown_board["key"]:
+            return
+        shown_board["key"] = key
+        v1 = bool(b) and b["hw"] == 1
+        for row in PIN_ROWS:
+            for k, _name, gpio in row:
+                tile, _top, _n, g, _v = pin_tiles[k]
+                if k in ADC_KEYS:
+                    tile.grid_remove() if v1 else tile.grid()
+                g.config(text=str(PIN_GPIO_V1.get(k, gpio) if v1 else gpio))
+        husky = bool(b) and b["camera"] == "HUSKY"
+        tabs.tab(cam_tab.tab_outer, text="  HuskyLens 카메라  " if husky else tab_titles["cam"])
+        cam_title.config(text="타워 위치 · ESP32가 HuskyLens에게 받은 좌표 (320×240 → 1920×1080으로 환산)"
+                         if husky else cam_title_v2)
+        cam_hint.config(text="HuskyLens 화면에서 타워 색을 ID1로 학습하면 박스가 나옵니다 · 9600이면 초당 약 10~15번 갱신"
+                        if husky else cam_hint_pi)
+        if v1:
+            root.title(f"C_ROBOT 보드 시험 · 구형 V1 로봇 (출력 ×{b['scale'] / 1000:.1f})")
+            stat_title.config(text="전원 · IMU  (구형 V1: 배터리·IMU 없음)")
+        else:
+            root.title("C_ROBOT 보드 시험" + (" · V2" if b else ""))
+            stat_title.config(text="전원 · IMU")
+
     def render():
+        apply_board()
+        render_husky()
         render_banner()
         render_status()
         render_pins()
@@ -1796,6 +2009,7 @@ def run_gui():
         set_hint(f"{port} {baud_var.get()} 연결됨 · 보드 RST를 누르면 BAT 줄이 나옵니다")
         try:
             link["obj"].send("TRIM")   # current straight-drive trim for the trim card
+            link["obj"].send("BOARD")  # which robot: V1 (old, HuskyLens) or V2
         except Exception:
             pass
 

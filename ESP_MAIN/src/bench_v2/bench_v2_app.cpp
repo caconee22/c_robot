@@ -3,9 +3,8 @@
 #include "bench_v2/i2c_scan.hpp"
 #include "hardware/reset_manager.hpp"
 #include "interrupts/button_interrupts.hpp"
-#if HW_VERSION != 2
-#error V2 bench requires HW_VERSION=2
-#endif
+// Also builds for the old V1 robot (11/10, HW_VERSION=1): there the IMU,
+// battery and analog rows stay empty (V1 has none of those inputs).
 #include <Arduino.h>
 #include <cstdio>
 #include <cstring>
@@ -14,7 +13,7 @@
 #include "calibration/color_calibration.hpp"
 #include "bench/bench_config.hpp"
 #include "bench/bench_controller.hpp"
-#include "communication/raspberry_link.hpp"
+#include "communication/vision_link.hpp"
 #include "sensors/imu_monitor.hpp"
 #include "motor/motor_config.hpp"
 #include "motor/motor_controller.hpp"
@@ -71,6 +70,15 @@ void help() {
 // BATCHECK,<1|0>: the saved setting, for the GUI.
 void replyBatteryCheck() {
   reply(BatterySetting::checkEnabled() ? "BATCHECK,1\r\n" : "BATCHECK,0\r\n");
+}
+
+// BOARD,<hw>,<camera>,<output scale permille>: which robot this bench runs on,
+// so the GUI shows the right pins and panels (11/10: old V1 robot + HuskyLens).
+void replyBoard() {
+  char line[48];
+  snprintf(line, sizeof(line), "BOARD,%d,%s,%u\r\n", HW_VERSION,
+           config::uart::VISION_FROM_HUSKYLENS ? "HUSKY" : "PI", config::motor::OUTPUT_SCALE_PERMILLE);
+  reply(line);
 }
 
 // TRIM,<left>,<right>: the trim in use (permille), for the GUI.
@@ -144,6 +152,40 @@ void execute(const char* line) {
     if (!trimCommand(line)) { reply("ERR TRIM <800-1000> <800-1000> | TRIM SAVE | TRIM RESET\r\n"); replyTrim(); }
     return;
   }
+  if (!strcmp(line, "HUSKY OFF") || !strcmp(line, "HUSKY ON")) {
+    if (!config::uart::VISION_FROM_HUSKYLENS) { reply("ERR HUSKY: this build uses the Pi\r\n"); return; }
+    const bool off = line[7] == 'F';
+    HuskyLensLink::setOff(off);
+    reply(off ? "OK HUSKY OFF (GPIO17/18 released, no requests)\r\n" : "OK HUSKY ON (knock 9600, 115200, 1000000)\r\n");
+    return;
+  }
+  if (!strcmp(line, "HUSKY PINS")) {
+    // Wire check without the UART: link off, both pins read with a pull-down
+    // then a pull-up. A powered HuskyLens T (TX) holds its pin HIGH both times;
+    // a pin with nothing on it follows the pull (0 then 1).
+    if (!config::uart::VISION_FROM_HUSKYLENS) { reply("ERR HUSKY: this build uses the Pi\r\n"); return; }
+    HuskyLensLink::setOff(true);
+    int down[2], up[2];
+    const int pinList[2] = {pins::UART1_TX, pins::UART1_RX};
+    for (int i = 0; i < 2; ++i) { pinMode(pinList[i], INPUT_PULLDOWN); }
+    delayMicroseconds(200);
+    for (int i = 0; i < 2; ++i) down[i] = digitalRead(pinList[i]);
+    for (int i = 0; i < 2; ++i) { pinMode(pinList[i], INPUT_PULLUP); }
+    delayMicroseconds(200);
+    for (int i = 0; i < 2; ++i) up[i] = digitalRead(pinList[i]);
+    for (int i = 0; i < 2; ++i) { pinMode(pinList[i], INPUT); }
+    char out[96];
+    snprintf(out, sizeof(out), "HUSKY PINS,GPIO%d=%d%d,GPIO%d=%d%d (pulldown/pullup; 11 = driven HIGH, 01 = open) link OFF\r\n",
+             pinList[0], down[0], up[0], pinList[1], down[1], up[1]);
+    reply(out);
+    return;
+  }
+  if (!strcmp(line, "HUSKY PROBE")) {
+    if (!config::uart::VISION_FROM_HUSKYLENS) { reply("ERR HUSKY PROBE: this build uses the Pi\r\n"); return; }
+    HuskyLensLink::startProbe();
+    reply("OK HUSKY PROBE (115200/9600/1000000 x GPIO18 RX / swapped, 0.6 s each)\r\n");
+    return;
+  }
   if (!strcmp(line, "I2C SCAN")) {
     stop();  // motors stay braked; a new SW2 is needed after the scan
     BenchI2cScan::start(millis());
@@ -158,6 +200,7 @@ void execute(const char* line) {
   }
   if (!strcmp(line, "STOP")) { stop(); reply("OK STOP\r\n"); return; }
   if (!strcmp(line, "HELP")) { stop(); help(); return; }
+  if (!strcmp(line, "BOARD")) { replyBoard(); return; }
   if (!strcmp(line, "LOG ON")) { logging = true; return; }
   // IMU reset only touches the IMU, so motion is not stopped.
   if (!strcmp(line, "IMU RESET")) { ImuMonitor::requestReset(millis()); reply("OK IMU RESET\r\n"); return; }
@@ -224,6 +267,29 @@ void console() {
 
 // One line once the power-on battery check decides (V2 only), for comparing
 // with a multimeter. Skipped until UART has room; never waits.
+// HUSKY,<baud>,<RX18|RX17>,<bytes>,<good frames> per setting after HUSKY PROBE,
+// then HUSKY USE,<baud>,<RX pin>. Printed once, only when UART0 has room.
+void reportHuskyProbe() {
+  static HuskyProbeResult results[config::huskylens::PROBE_STEPS];
+  static uint8_t count = 0, next = 0;
+  if (next >= count) { count = HuskyLensLink::takeProbeResults(results, config::huskylens::PROBE_STEPS); next = 0; if (!count) return; }
+  char line[64];
+  int length;
+  if (next < count) {
+    const auto& r = results[next];
+    length = snprintf(line, sizeof(line), "HUSKY,%lu,%s,%lu,%lu\r\n", static_cast<unsigned long>(r.baud),
+                      r.swapped ? "RX17" : "RX18", static_cast<unsigned long>(r.bytes),
+                      static_cast<unsigned long>(r.frames));
+  } else return;
+  if (length <= 0 || Serial.availableForWrite() < length) return;
+  Serial.write(reinterpret_cast<const uint8_t*>(line), length);
+  if (++next == count) {
+    snprintf(line, sizeof(line), "HUSKY USE,%lu,%s\r\n", static_cast<unsigned long>(HuskyLensLink::activeBaud()),
+             HuskyLensLink::activeSwapped() ? "RX17" : "RX18");
+    reply(line);
+  }
+}
+
 void reportBattery() {
   const auto battery = BatteryMonitor::status();
   if (batteryReported || battery.result == BatteryCheckResult::Checking ||
@@ -241,17 +307,21 @@ void reportBattery() {
 // Every analog input on the V2 board, read one per loop so no loop waits on
 // eleven conversions. Order matches the ADC row. GPIO19/20 (motor 2 IS) are
 // the USB pins: the first analog read hands them to the ADC.
-constexpr gpio_num_t ANALOG_PINS[] = {
+constexpr uint8_t ANALOG_COUNT = 11;   // the ADC row always has 11 values
+uint16_t analogMv[ANALOG_COUNT] = {};
+#if HW_VERSION == 2
+constexpr gpio_num_t ANALOG_PINS[ANALOG_COUNT] = {
     pins::MOTOR1_L_IS, pins::MOTOR1_R_IS, pins::MOTOR2_L_IS, pins::MOTOR2_R_IS,
     pins::IR_INPUTS[0], pins::IR_INPUTS[1], pins::IR_INPUTS[2],
     pins::IR_INPUTS[3], pins::IR_INPUTS[4], pins::IR_INPUTS[5], pins::BATTERY_ADC};
-constexpr uint8_t ANALOG_COUNT = sizeof(ANALOG_PINS) / sizeof(ANALOG_PINS[0]);
-uint16_t analogMv[ANALOG_COUNT] = {};
 uint8_t analogNext = 0;
+#endif
 
 void sampleAnalog() {
+#if HW_VERSION == 2
   analogMv[analogNext] = static_cast<uint16_t>(analogReadMilliVolts(ANALOG_PINS[analogNext]));
   analogNext = (analogNext + 1) % ANALOG_COUNT;
+#endif   // V1: no current, IR or battery inputs; the row stays 0
 }
 
 // Each frame is D, S1..S4 and one extra row. UART0 has only its 128-byte
@@ -294,7 +364,18 @@ int extraLine(char* line, size_t size, uint32_t now, Extra kind) {
           static_cast<unsigned long>(motor.watchdogStopCount));
     }
     case Extra::Link: {
-      const auto link = RaspberryLink::status();
+      const auto link = VisionLink::status();
+      if (config::uart::VISION_FROM_HUSKYLENS) {
+        // HUSKYST,ms,connected,baud,rxPin,rawBytes,answers,errors,sameFrame,busy,off,frame
+        return snprintf(line, size, "HUSKYST,%lu,%u,%lu,%u,%lu,%lu,%lu,%lu,%lu,%u,%u\r\n", ms,
+            HuskyLensLink::connected() ? 1 : 0, static_cast<unsigned long>(HuskyLensLink::activeBaud()),
+            HuskyLensLink::activeSwapped() ? 17 : 18,
+            static_cast<unsigned long>(HuskyLensLink::rawBytesReceived()),
+            static_cast<unsigned long>(link.validPackets), static_cast<unsigned long>(link.invalidPackets),
+            static_cast<unsigned long>(link.duplicatePackets),
+            static_cast<unsigned long>(HuskyLensLink::busyCount()), HuskyLensLink::off() ? 1 : 0,
+            link.lastSequence);
+      }
       return snprintf(line, size, "LINK,%lu,%u,%lu,%lu,%lu,%lu,%lu\r\n", ms, link.lastSequence,
           static_cast<unsigned long>(link.lastPacketMs), static_cast<unsigned long>(link.lastFrameMs),
           static_cast<unsigned long>(link.validPackets), static_cast<unsigned long>(link.invalidPackets),
@@ -307,7 +388,7 @@ int extraLine(char* line, size_t size, uint32_t now, Extra kind) {
       return snprintf(line, size, "PIN,%lu,%d,%d,%d,%d,%lu,%lu,%lu,%lu,%d,%d\r\n", ms,
           digitalRead(pins::SAFETY_SWITCH) == LOW ? 1 : 0,
           digitalRead(pins::START_SWITCH) == LOW ? 1 : 0,
-          digitalRead(pins::MOTOR1_EN), digitalRead(pins::MOTOR2_EN),
+          digitalRead(pins::MOTOR1_LEN), digitalRead(pins::MOTOR2_LEN),   // V2: LEN = EN
           static_cast<unsigned long>(ledcRead(config::motor::MOTOR1_LPWM_CHANNEL)),
           static_cast<unsigned long>(ledcRead(config::motor::MOTOR1_RPWM_CHANNEL)),
           static_cast<unsigned long>(ledcRead(config::motor::MOTOR2_LPWM_CHANNEL)),
@@ -370,7 +451,7 @@ void telemetry(uint32_t now) {
   int length = 0;
   const auto sensors = SensorManager::snapshot();
   if (logRow == 0) {
-    const auto vision = RaspberryLink::latest();
+    const auto vision = VisionLink::latest();
     const auto motor = MotorController::status();
     // D,ms,mode,allowed,left,right,link,fresh,target,x,height,hazard,y,width,flags,seq
     // (y..seq appended 11/04 for the GUI camera box; old readers ignore them)
@@ -413,6 +494,13 @@ void BenchV2App::begin() {
   }
   MotorController::setOutputLimit(OUTPUT_LIMIT);
   BenchController::begin();
+  // 11/11 two-button soft reset: bench back to MODE STOP.
+  SystemManager::setSoftResetHandler([] {
+    BenchController::begin();
+#if defined(BENCH_SOFTWARE_SWITCHES) && BENCH_SOFTWARE_SWITCHES
+    BenchSoftwareSwitches::begin();
+#endif
+  });
   BatteryMonitor::begin(millis());
   ImuMonitor::begin(millis());
   ColorCalibration::begin();  // CalibrationStore was loaded by SensorManager::begin
@@ -426,6 +514,7 @@ void BenchV2App::begin() {
   help();
   replyBatteryCheck();
   replyTrim();
+  replyBoard();
 }
 
 void BenchV2App::update() {
@@ -434,7 +523,7 @@ void BenchV2App::update() {
 #endif
   SystemManager::update(millis());
   alignHold(millis());
-  RaspberryLink::poll();
+  VisionLink::poll();
   SensorManager::update();
   ColorCalibration::tick(millis());
   ImuMonitor::update(millis());
@@ -443,7 +532,7 @@ void BenchV2App::update() {
   SystemManager::update(millis());
   console();
   const auto command = BenchController::update(millis(), SystemManager::motorAllowed(),
-      SensorManager::snapshot(), RaspberryLink::latest());
+      SensorManager::snapshot(), VisionLink::latest());
   if (SystemManager::motorAllowed() && !ColorCalibration::active()) {
     if (!MotorController::apply(command, SystemManager::safetyStatus()) &&
         MotorController::status().lastResult == MotorControlResult::DriverFailure)
@@ -453,6 +542,7 @@ void BenchV2App::update() {
   StatusLed::update(millis());
   EventLogger::process();
   reportBattery();
+  reportHuskyProbe();
   sampleAnalog();
   BenchI2cScan::report();
   telemetry(millis());

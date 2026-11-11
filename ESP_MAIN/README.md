@@ -62,8 +62,10 @@ V1 핀(`include/pins.hpp`)은 보관된 V1 환경과 PC 시험용으로 남아 �
 
 | 환경 | 진입 파일 | 용도 | UART0 |
 |---|---|---|---:|
-| `yd_esp32_s3_v2` (기본) | `src/main.cpp` | 경기용 FSM | 57600 |
+| `yd_esp32_s3_v2` (기본) | `src/main.cpp` | 경기용 FSM. **11/11부터 벤치·색 교정 포함**: 두 버튼을 누른 채 전원을 켜서 1초 → 벤치, 그냥 켜면 경기 | 57600 |
 | `robot_bench_v2_manual` | `src/bench_v2_main.cpp` → `src/bench_v2/` | 저출력(최대 40%) 시험·진단·12단계 색 교정 | 57600 |
+| `yd_esp32_s3_v1_husky` | `src/main.cpp` | **구형 V1 로봇**(11/10, 연습 상대) 경기용: V1 핀, TCS34725, HuskyLens 색 인식(UART1 115200, ID1 = 타워). IMU·배터리 없음(시작 루틴 4S 값), 라즈 실행 로그 없음 | 57600 |
+| `robot_bench_v1_husky` | `src/bench_v2_main.cpp` → `src/bench_v2/` | 구형 V1 로봇 벤치·색 교정 (같은 `bench_gui.py`) | 57600 |
 | `i2c_scanner_v2` | `src/i2c_scanner_main.cpp` | I2C 주소·풀업 진단. 모터 출력 LOW 유지 | 57600 |
 | `raw_motor_v2` | `src/raw_motor_main.cpp` | 두 모터를 20%로 **자동** 구동. 안전 기능 없음 | 57600 |
 
@@ -88,7 +90,7 @@ V1 핀(`include/pins.hpp`)은 보관된 V1 환경과 PC 시험용으로 남아 �
 | `app/boot_manager` | 초기 핀 안전부터 필수 모듈 초기화까지 순서 보장, 필수 모터 실패 시 구동 금지 |
 | `hardware/board_io` | 부팅 초기에 PWM/EN LOW 설정, 일반 핀모드 초기화 |
 | `hardware/reset_manager` | ESP 리셋 원인과 재무장 필요 플래그 제공. 자동 리셋은 실행하지 않음 |
-| `interrupts/button_interrupts` | SW1 영구 래치, SW2 에지·디바운스·해제 이벤트, ESTOP 영구 루프 |
+| `interrupts/button_interrupts` | SW1·SW2 디바운스·시작 이벤트(둘 다 시작), 구동 중 비상정지, 두 버튼 소프트 리셋까지 ESTOP 대기 (11/11) |
 | `system/system_manager` | SW2 이벤트 단독 소비자. 운전 요청·집계 고장을 합쳐 motorAllowed 결정 |
 | `system/event_logger` | 번호/문자열 고정 큐, 변경·중복 억제, 일반 UART 쓰기 지연 |
 | `system/status_led` | 주체별 요청 보존, 우선순위·TTL로 WS2812 표시 결정 (V2는 내장 LED 하나) |
@@ -105,6 +107,7 @@ V1 핀(`include/pins.hpp`)은 보관된 V1 환경과 PC 시험용으로 남아 �
 | `sensors/sensor_manager` | 새 sequence만 판별, 3회 확정, 무효/오래된 판정 폐기, 오류 변경 기록, snapshot |
 | `include/communication/vision_protocol.hpp` | 패킷·상태 비트·범위·오류번호. Pi 송신기와 맞춰야 하는 계약 |
 | `communication/raspberry_link` | UART1 재조립, 헤더 재동기화, 중복 sequence와 영상 신선도 처리 |
+| `communication/huskylens_link` | 구형 V1 로봇: HuskyLens에 색 블록을 20ms마다 요청(0x21), ID1 중 가장 큰 박스를 320×240 → 1920×1080으로 바꿔 같은 `VisionSnapshot`으로 |
 | `include/control/control_config.hpp` | 생산 출력·중심 기준·공격/탈출 시간·위험색 마스크 |
 | `control/robot_fsm` | 안전/바닥/비전으로 무엇을 할지 판단하고 DriveIntent 반환. GPIO 직접 제어 없음 |
 | `control/wander` | 라즈가 1초 넘게 끊겼을 때 무작위 회전·전진 호 (같은 동작 반복 = 고장 판정 실점 회피) |
@@ -173,7 +176,8 @@ V1 핀(`include/pins.hpp`)은 보관된 V1 환경과 PC 시험용으로 남아 �
 | 구동 중 SW2 0.5초 눌림 | 영구 정지 (SW1과 같음) | 동일 (소프트웨어 SW2는 구동 중 거부) |
 | STOP/모드 변경 | API로 운전 요청 폐기 | STOP/MODE 콘솔, 새 SW2 필요 |
 | 정지 전에 누른 SW2 해제 | 출발에 사용하지 않음 | 동일 |
-| SW1 0.5초 눌림 | 영구 정지, 해제해도 재부팅 전 금지 | 동일 |
+| 정지 중 SW1 또는 SW2 0.5초 눌렀다 뗌 (11/11) | 시작 | 동일 |
+| 구동 중 SW1 또는 SW2 0.5초 눌림 | 비상정지, 두 버튼 동시 0.5초 소프트 리셋 전까지 금지 (11/11) | 동일 |
 | 구동 중 출발 자세에서 80° 넘게 기운 채 1초 (V2 IMU) | 영구 정지 (SW1과 같음, 11/07) | 해당 없음 |
 | IMU 없음/고장/값 정지 | 뒤집힘 판정만 안 함, 주행 계속 | 해당 없음 |
 | 라즈 없음/영상 오래됨 | 탐색 회전 계속(11/09, Wander 꺼짐), 짧은 공격은 지속 가능 | 추적 정지; AVOID 진행 중 탈출은 우선 |
@@ -466,7 +470,7 @@ TTL=0은 계속 유지, 짧은 TTL 만료 후 다른 요청이 다시 표시된�
 
 | 우선순위 | 상태 | 색 · 깜빡임 | 뜻 |
 |---:|---|---|---|
-| 255 | EmergencyStop | 빨강 계속 | SW1 0.5초, 구동 중 SW2 0.5초, 뒤집힘 80° 1초. 재부팅해야 풀림 |
+| 255 | EmergencyStop | 빨강 계속 | 구동 중 SW1/SW2 0.5초, 뒤집힘 80° 1초. 두 버튼 동시 0.5초로 풀림(11/11) |
 | 240 | Fault | 빨강↔흰색 교대 (150ms) | 모터 드라이버·부팅 실패, 배터리 판정 실패(켜져 있을 때) |
 | 200 | EscapeBlue / EscapeRed | 파랑 / 빨강 빠른 깜빡 (120ms) | 홈 탈출 중. 처음 본 바닥 색, 탈출이 끝날 때까지 유지 |
 | 150 | Attacking | 보라 계속 | 돌진 → 브레이크 → 삽입 → 밀기 → 후진 |
@@ -521,7 +525,7 @@ pio device monitor -b 57600
 실물 첫 시험 순서 (건너뛰지 않는다):
 
 1. 모터 전원 분리 → 벤치 업로드 → GUI 연결. 배터리 값, 센서 1–4 응답, IMU, 핀 상태 판 확인.
-2. SW1 0.5초 → ESTOP, 놓아도 복구 안 됨 확인. 재부팅.
+2. 구동 중 SW1 0.5초 → ESTOP, 놓아도 복구 안 됨 확인. 두 버튼을 뗀 뒤 동시에 0.5초 → 시작 대기 복귀, 다시 시작 확인 (11/11).
 3. 바퀴 띄우기 → "주행 준비" → 방향키로 좌우 정역, 저출력부터. 드라이버·커넥터 발열 확인.
 4. 12단계 색 교정 → 저장 → "색 확인하러 가기"로 네 센서 색 확인 (3mm 포화, 20mm 파랑↔검정, 경계 혼합).
 5. 라즈 연결 → `MODE ALIGN`(또는 SW2 3초) → `MODE FOLLOW` → `MODE AVOID`. 앞의 두 모드는 바닥 보호가 없다.

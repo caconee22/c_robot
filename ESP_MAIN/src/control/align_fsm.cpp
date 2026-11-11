@@ -23,6 +23,12 @@ bool bypassTurnedRight = true;   // last circle bypass turn, for the search side
 uint32_t bypassStartMs = 0;
 bool runStarted = false;   // false until the first motor-allowed pass of a run
 bool charging = false;
+bool pushThroughActive = false;   // 11/11 push-through window running
+// 11/11 straight back-out repeat limit (same front side within the window).
+uint8_t straightCount = 0;
+uint32_t straightWindowMs = 0;
+HazardSide straightSide = HazardSide::None;
+uint32_t pushThroughStartMs = 0;
 uint8_t centeredFrames = 0;
 bool frameKnown = false;
 uint8_t lastSequence = 0;
@@ -107,6 +113,9 @@ void trackVelocity(const VisionSnapshot& vision) {
 void AlignFsm::begin() {
   currentState = RobotState::Boot;
   targetKnown = false;
+  pushThroughActive = false;
+  straightCount = 0;
+  straightSide = HazardSide::None;
   lastTargetMs = 0;
   lastTargetX = config::control::TARGET_CENTER_X;
   runStarted = false;
@@ -165,10 +174,31 @@ DriveIntent AlignFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
     }
   }
 
+  // Push-through (11/11): close opponent, front-only hazard while charging or
+  // forking -> keep pushing PUSH_THROUGH_MS before the escape below starts.
+  bool holdEscape = false;
+  if (floor.mask == 0 || EscapeMove::active() || CircleBypass::active()) {
+    pushThroughActive = false;
+  } else if (config::control::PUSH_THROUGH_MS > 0) {
+    const bool frontOnly = floor.front() && !floor.rear();
+    const bool attacking = charging || ForkAttack::phase(nowMs) != ForkPhase::Idle;
+    const bool close = targetKnown && nowMs - lastTargetMs < config::control::LOCKON_RECENT_MS &&
+                       lastTargetHeight >= config::control::PUSH_THROUGH_MIN_HEIGHT;
+    if (frontOnly && (attacking || pushThroughActive) && close) {
+      if (!pushThroughActive) {
+        pushThroughActive = true;
+        pushThroughStartMs = nowMs;
+      }
+      holdEscape = nowMs - pushThroughStartMs < config::control::PUSH_THROUGH_MS;
+    }
+  }
+
   // Floor escape wins over everything but safety, the opening move included.
   // Red while locked on a far tower = the center circle: go around it.
-  if (!EscapeMove::active() && !CircleBypass::active() && floor.mask != 0) {
+  if (!holdEscape && !EscapeMove::active() && !CircleBypass::active() && floor.mask != 0) {
+    pushThroughActive = false;
     const bool wasCharging = charging;
+    const bool wasForking = ForkAttack::phase(nowMs) != ForkPhase::Idle;
     OpeningMove::cancel();
     ForkAttack::cancel();
     stopCharge();
@@ -191,9 +221,33 @@ DriveIntent AlignFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
                            LogSource::System, "circle_bypass", turnRight ? 1 : 0, lastTargetHeight, 0);
       RunLog::push(RunLogKind::Bypass, turnRight ? 1 : 0, lastTargetHeight, lastTargetX);
     } else {
-      EscapeMove::start(nowMs, floor, wasCharging);
+      // 11/11: pushing a close opponent onto the color -> back straight out,
+      // facing it. A red hit needs a closer opponent (center circle). The
+      // same front side too often in a row -> turn as before (no loop).
+      using namespace config::control;
+      const uint16_t minHeight = floor.firstColor == FloorColor::Red ? STRAIGHT_MIN_HEIGHT_RED
+                                                                     : STRAIGHT_MIN_HEIGHT;
+      bool straight = STRAIGHT_BACK_ENABLED && frontHit && !floor.rear() &&
+                      (wasCharging || wasForking) && targetKnown &&
+                      nowMs - lastTargetMs < LOCKON_RECENT_MS && lastTargetHeight >= minHeight;
+      if (straight) {
+        if (floor.first != straightSide || nowMs - straightWindowMs > STRAIGHT_REPEAT_WINDOW_MS) {
+          straightSide = floor.first;
+          straightWindowMs = nowMs;
+          straightCount = 0;
+        }
+        if (straightCount >= STRAIGHT_REPEAT_MAX) {
+          straight = false;      // looping on one spot: turn out this time
+          straightCount = 0;
+          straightSide = HazardSide::None;
+        } else {
+          ++straightCount;
+        }
+      }
+      EscapeMove::start(nowMs, floor, wasCharging, straight);
       RunLog::push(RunLogKind::Escape, static_cast<uint16_t>(floor.first), floor.mask,
-                   static_cast<uint16_t>(floor.firstColor), wasCharging ? 1 : 0);
+                   static_cast<uint16_t>(floor.firstColor),
+                   static_cast<uint16_t>((wasCharging || wasForking ? 1 : 0) | (straight ? 2 : 0)));
     }
   }
   if (CircleBypass::active()) {

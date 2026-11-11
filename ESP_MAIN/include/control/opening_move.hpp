@@ -24,11 +24,13 @@ constexpr bool ENABLED = true;
 // for tuning the move alone). true = align/search toward the tower afterwards.
 constexpr bool TRACK_AFTER = true;
 constexpr uint16_t TURN_DUTY = 400;   // 11/10 3S logs: 400 x 1.167 gave 43-44 deg for the 45 deg turn, 350 only ~30 deg
-// 11/10 14:08 log (3S, trim R900): 220 ms gave ~34 deg, 440 ms ~70 deg -> +30%/+28%.
-constexpr uint32_t TURN_LEFT_45_MS = 290;
+// 11/10 14:08 log (3S, trim R900): 220 ms gave ~34 deg, 440 ms ~70 deg -> 290/565.
+// 11/11: new ESP chip on V2 = empty NVS, trim back to 1000/1000, and the turns
+// went too far -> back to 220/440 (gave 43-44 deg on 3S without trim, 11/10).
+constexpr uint32_t TURN_LEFT_45_MS = 220;
 constexpr uint16_t FORWARD_DUTY = 400;
 constexpr uint32_t FORWARD_MS = 2000;   // 11/10 field: 900 went half the distance -> 2 s
-constexpr uint32_t TURN_LEFT_90_MS = 565;
+constexpr uint32_t TURN_LEFT_90_MS = 440;
 // Brake between steps so one step's momentum does not carry into the next.
 constexpr uint32_t PAUSE_MS = 150;
 // Battery compensation (11/10): the times above were tuned on a 4S pack. The

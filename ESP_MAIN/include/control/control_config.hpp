@@ -75,6 +75,28 @@ constexpr uint8_t CHARGE_CONFIRM_FRAMES = 2;
 constexpr uint16_t CHARGE_ABORT_ERROR = 400;     // px off center -> back to align
 constexpr uint32_t CHARGE_LOST_HOLD_MS = 300;    // keep going straight through a drop
 static_assert(CHARGE_DUTY + CHARGE_STEERING_MAX <= 710, "charge must fit under the motor limit");
+// Push-through (11/11, 학현): opponent close (tower box at least
+// PUSH_THROUGH_MIN_HEIGHT, seen within LOCKON_RECENT_MS) while charging or in
+// the fork attack, and a hazard (red or blue) on the FRONT sensors only ->
+// keep pushing PUSH_THROUGH_MS longer before backing out, to shove the
+// opponent fully in. Rear or front+rear hazard, or a far tower -> escape at
+// once as before. 0 = off. Start 0.1 s and lengthen on the field; every 0.1 s
+// at the charge duty carries the front further over the groove edge.
+constexpr uint32_t PUSH_THROUGH_MS = 100;
+constexpr uint16_t PUSH_THROUGH_MIN_HEIGHT = 300;   // 11/11 log: pushing at h 300-420
+// Straight back-out (11/11, 학현): when the escape starts while charging or in
+// the fork attack, the opponent is close (tower seen within LOCKON_RECENT_MS)
+// and the hazard is on the front only, back straight out (no turn) so the
+// robot keeps facing the opponent it pushed in and can hit again at once.
+// Red (center circle) needs a closer opponent than blue, so an opponent just
+// beyond the circle is not chased back and forth. STRAIGHT_REPEAT_MAX
+// straight escapes from the same front side within STRAIGHT_REPEAT_WINDOW_MS
+// -> the next one turns as before (breaks a back-and-forth loop).
+constexpr bool STRAIGHT_BACK_ENABLED = true;
+constexpr uint16_t STRAIGHT_MIN_HEIGHT = 300;       // blue (corner)
+constexpr uint16_t STRAIGHT_MIN_HEIGHT_RED = 400;   // red (center circle)
+constexpr uint8_t STRAIGHT_REPEAT_MAX = 3;
+constexpr uint32_t STRAIGHT_REPEAT_WINDOW_MS = 4000;
 
 // Lock-on escape (11/09): a hazard on the front sensors only while the robot
 // is tracking the opponent (align, approach, attack or push, tower seen within

@@ -2,6 +2,8 @@
 #include "Wire.h"
 #include "Preferences.h"
 #include "app/boot_manager.hpp"
+#include "app/boot_mode.hpp"
+#include "communication/huskylens_link.hpp"
 #include "communication/raspberry_link.hpp"
 #include "communication/run_log.hpp"
 #include "communication/vision_protocol.hpp"
@@ -570,8 +572,10 @@ void testCalibration() {
   command("CAL MARGIN 4294967316 4294967336");
   for(uint8_t step=0;step<ColorCalibration::STEP_COUNT;++step) {
     auto status=ColorCalibration::status();
-    CHECK(status.color!=FloorColor::Yellow);
-    CHECK(status.sensorMask==(status.pose!=CalibrationPose::Pressed ? 0x0F : step%2==0 ? 0x03 : 0x0C));
+    // Black/red/blue: level and lifted all four, pressed front then rear.
+    // Yellow (11/11): every pose front pair then rear pair.
+    if(status.color==FloorColor::Yellow) CHECK(step>=12 && status.sensorMask==(step%2==0 ? 0x03 : 0x0C));
+    else CHECK(status.sensorMask==(status.pose!=CalibrationPose::Pressed ? 0x0F : step%2==0 ? 0x03 : 0x0C));
     // Model a different brightness for level/lifted/pressed references.
     const unsigned scale=status.pose==CalibrationPose::Level ? 2 :
                           status.pose==CalibrationPose::Lifted ? 1 : 3;
@@ -604,7 +608,7 @@ void testCalibration() {
     }
   }
   CHECK(ColorCalibration::status().state==CalibrationState::Completed);
-  command("STATUS"); CHECK(Serial.tx.find("step=12/12")!=std::string::npos);
+  command("STATUS"); CHECK(Serial.tx.find("step=18/18")!=std::string::npos);
   fake::nvsWriteOk=false; command("CAL SAVE"); CHECK(ColorCalibration::status().state==CalibrationState::Error);
   fake::nvsWriteOk=true; command("CAL SAVE"); CHECK(CalibrationStore::valid());
   CHECK(!ColorCalibration::active()); CHECK(!fake::nvs.empty());
@@ -612,7 +616,6 @@ void testCalibration() {
   CHECK(CalibrationStore::data().brightnessMarginPermille==400);
   for(uint8_t corner=0;corner<4;++corner) {
     for(uint8_t color=0;color<4;++color) {
-      if(color==static_cast<uint8_t>(FloorColor::Yellow)) continue;  // not calibrated
       fake::floor(corner,color); sensorTicks(200);
       const auto raw=ColorSensorManager::sample(corner);
       const auto result=FloorColorClassifier::classify(corner,raw,CalibrationStore::data());
@@ -674,10 +677,119 @@ void testRealisticTimingAndBoot() {
                         SystemManager::safetyStatus()).type==DriveIntentType::SearchLeft);
   fake::reset(); fake::pwmSetupOk=false;
   CHECK(!BootManager::begin().safeToRun); CHECK(!SystemManager::motorAllowed());
-  fake::reset(); fake::level(pins::SAFETY_SWITCH,LOW,false); fake::stopOnDelay=true;
-  try { BootManager::begin(); CHECK(false); } catch(const fake::StopLoop&) {}
-  fake::stopOnDelay=false; CHECK(ButtonInterrupts::emergencyLatched());
-  CHECK(!SystemManager::motorAllowed()); CHECK(Serial.tx.find("ESTOP")!=std::string::npos);
+  // 11/11: SW1 held at boot is no longer an emergency stop, and its first
+  // release (it was already down) must not start the robot.
+  fake::reset(); fake::level(pins::SAFETY_SWITCH,LOW,false);
+  CHECK(BootManager::begin().safeToRun); CHECK(!ButtonInterrupts::emergencyLatched());
+  fake::advance(config::switches::HOLD_MS+100); SystemManager::update(millis());
+  fake::level(pins::SAFETY_SWITCH,HIGH); SystemManager::update(millis());
+  fake::advance(60); SystemManager::update(millis());
+  CHECK(!SystemManager::running() && !SystemManager::motorAllowed());
+}
+
+// 11/11 (학현): both buttons start when stopped, both stop when running, and
+// both held together leave the emergency stop (soft reset, no re-init).
+// 11/11 combined firmware: both buttons held 1 s at power-on -> bench.
+void testBootMode() {
+  fake::reset();
+  uint32_t t0=millis(); CHECK(!BootMode::benchRequested());           // nothing held: match at once
+  CHECK(millis()-t0<=config::boot_mode::POLL_MS*2);
+  fake::reset(); fake::level(pins::SAFETY_SWITCH,LOW,false);          // one button: match
+  CHECK(!BootMode::benchRequested());
+  fake::reset(); fake::level(pins::SAFETY_SWITCH,LOW,false); fake::level(pins::START_SWITCH,LOW,false);
+  t0=millis(); CHECK(BootMode::benchRequested());                    // both held: bench after the hold
+  CHECK(millis()-t0>=config::boot_mode::BENCH_HOLD_MS);
+  // Both down but one let go before the hold: match.
+  fake::reset(); fake::level(pins::SAFETY_SWITCH,LOW,false); fake::level(pins::START_SWITCH,LOW,false);
+  const uint32_t start=millis();
+  fake::delayHook=[start]{ if(millis()-start>=500) fake::level(pins::START_SWITCH,HIGH,false); };
+  CHECK(!BootMode::benchRequested()); fake::delayHook=nullptr;
+  // Motor pins are put in the safe state first.
+  CHECK(fake::pins[pins::MOTOR1_LEN]==LOW && fake::pins[pins::MOTOR2_LEN]==LOW);
+}
+
+int softResetCalls = 0;
+void hold(int pin, uint32_t ms) {
+  fake::level(pin,LOW); SystemManager::update(millis());
+  fake::advance(40); SystemManager::update(millis());
+  fake::advance(ms); SystemManager::update(millis());
+  fake::level(pin,HIGH); SystemManager::update(millis());
+  fake::advance(60); SystemManager::update(millis());
+}
+// Runs SystemManager::update into the e-stop wait; script(t) sets the buttons
+// at each 1 ms step (t = ms since the wait began). Gives up after limitMs.
+bool runEstopWait(std::function<void(uint32_t)> script, uint32_t limitMs) {
+  const uint32_t start=millis();
+  fake::delayHook=[&]{ const uint32_t t=millis()-start; if(t>limitMs) throw fake::StopLoop{}; script(t); };
+  bool returned=true;
+  try { SystemManager::update(millis()); } catch(const fake::StopLoop&) { returned=false; }
+  fake::delayHook=nullptr;
+  return returned;
+}
+void testSoftReset() {
+  fixture(); softResetCalls=0;
+  SystemManager::setSoftResetHandler([]{ ++softResetCalls; });
+  // SW1 is a start button while stopped (held 0.5 s, then released).
+  hold(pins::SAFETY_SWITCH, config::switches::HOLD_MS);
+  CHECK(SystemManager::running() && !ButtonInterrupts::emergencyLatched());
+  // A short SW1 press while running does nothing; a 0.5 s one stops.
+  hold(pins::SAFETY_SWITCH, 300); CHECK(SystemManager::running());
+  fake::level(pins::SAFETY_SWITCH,LOW); SystemManager::update(millis());
+  fake::advance(config::switches::HOLD_MS+40); ButtonInterrupts::pollEmergencyHold(millis());
+  CHECK(ButtonInterrupts::emergencyLatched());
+  const gpio_num_t enPins[]={pins::MOTOR1_LEN,pins::MOTOR1_REN,pins::MOTOR2_LEN,pins::MOTOR2_REN};
+  for(const auto en:enPins) CHECK(fake::pins[en]==LOW);
+  // Still holding SW1, then SW2 joins: no reset until both were released once.
+  bool back=runEstopWait([](uint32_t t){
+    if(t==10) fake::level(pins::START_SWITCH,LOW);
+  }, 1500);
+  CHECK(!back && ButtonInterrupts::emergencyLatched() && softResetCalls==0);
+  CHECK(EventLogger::status().emergencyOnly && Serial.tx.find("ESTOP")!=std::string::npos);
+  // Presses too far apart (SW2 600 ms after SW1) are not a reset either.
+  back=runEstopWait([](uint32_t t){
+    if(t==1) { fake::level(pins::SAFETY_SWITCH,HIGH); fake::level(pins::START_SWITCH,HIGH); }
+    if(t==200) fake::level(pins::SAFETY_SWITCH,LOW);
+    if(t==800) fake::level(pins::START_SWITCH,LOW);
+  }, 2000);
+  CHECK(!back && softResetCalls==0 && !Bts7960Driver::clearDriveInhibit());
+  // Released, then both pressed together and held 0.5 s: soft reset.
+  back=runEstopWait([](uint32_t t){
+    if(t==1) { fake::level(pins::SAFETY_SWITCH,HIGH); fake::level(pins::START_SWITCH,HIGH); }
+    if(t==200) fake::level(pins::SAFETY_SWITCH,LOW);
+    if(t==350) fake::level(pins::START_SWITCH,LOW);
+  }, 3000);
+  CHECK(back && softResetCalls==1 && SystemManager::softResetCount()>=1);
+  CHECK(!ButtonInterrupts::emergencyLatched() && !EventLogger::status().emergencyOnly);
+  CHECK(SystemManager::state()==SystemState::WaitingForStart && !SystemManager::motorAllowed());
+  for(int i=0;i<4;++i) CHECK(fake::pwm[i]==0);   // braked (EN may be HIGH for the brake), no drive
+  // Releasing the reset buttons must not start the robot.
+  fake::advance(300); SystemManager::update(millis());
+  fake::level(pins::SAFETY_SWITCH,HIGH); SystemManager::update(millis());
+  fake::advance(30); fake::level(pins::START_SWITCH,HIGH); SystemManager::update(millis());
+  fake::advance(60); SystemManager::update(millis());
+  CHECK(!SystemManager::running());
+  // A new single-button start drives again (motors re-enabled by the start).
+  hold(pins::START_SWITCH, config::switches::HOLD_MS);
+  CHECK(SystemManager::running() && MotorController::forward(300,running()));
+  // Both pressed while stopped never starts, even after a long hold.
+  SystemManager::requestStop(); CHECK(!SystemManager::running());
+  fake::level(pins::SAFETY_SWITCH,LOW); fake::level(pins::START_SWITCH,LOW); SystemManager::update(millis());
+  fake::advance(40); SystemManager::update(millis());
+  fake::advance(config::switches::HOLD_MS+200); SystemManager::update(millis());
+  fake::level(pins::SAFETY_SWITCH,HIGH); SystemManager::update(millis());
+  fake::advance(60); SystemManager::update(millis());
+  fake::level(pins::START_SWITCH,HIGH); SystemManager::update(millis());
+  fake::advance(60); SystemManager::update(millis());
+  CHECK(!SystemManager::running() && !ButtonInterrupts::emergencyLatched());
+  // A software stop (tilt) uses the same latch and the same reset.
+  hold(pins::START_SWITCH, config::switches::HOLD_MS); CHECK(SystemManager::running());
+  SystemManager::triggerEmergencyStop();
+  back=runEstopWait([](uint32_t t){
+    if(t==100) { fake::level(pins::SAFETY_SWITCH,LOW); fake::level(pins::START_SWITCH,LOW); }
+  }, 2000);
+  CHECK(back && softResetCalls==2 && !ButtonInterrupts::emergencyLatched());
+  fake::level(pins::SAFETY_SWITCH,HIGH); fake::level(pins::START_SWITCH,HIGH);
+  SystemManager::setSoftResetHandler(nullptr);
 }
 
 #if HW_VERSION == 2
@@ -871,17 +983,46 @@ void testAlignFsm() {
   upd(T0,floor,target(1,T0,1200,600),running()); upd(T0+10,floor,target(2,T0+10,1100,600),running());
   upd(T0+20,floor,target(3,T0+20,1100,600),running()); CHECK(AlignFsm::state()==RobotState::Approach);
   SensorSnapshot fl; hazard(fl,0,FloorColor::Red);
-  d=upd(T0+30,fl,target(4,T0+30,1100,600),running());
+  // Close opponent: push-through first (11/11), then the escape.
+  if (PUSH_THROUGH_MS>0) { upd(T0+30,fl,target(4,T0+30,1100,600),running()); CHECK(AlignFsm::state()!=RobotState::ZoneEscape); }   // still attacking (fork)
+  const uint32_t P=PUSH_THROUGH_MS;
+  d=upd(T0+30+P,fl,target(5,T0+30+P,1100,600),running());
   CHECK(AlignFsm::state()==RobotState::ZoneEscape && AlignFsm::escapeColor()==FloorColor::Red);
-  CHECK(d.type==DriveIntentType::Reverse && d.requestedDuty==config::escape::REVERSE_DUTY &&
-        d.steering==-config::escape::TURN_STEERING);   // 11/10 field sign
+  // 11/11: pushing a close opponent (box 600 >= the red limit) -> straight back-out.
+  const int16_t S=STRAIGHT_BACK_ENABLED ? 0 : -config::escape::TURN_STEERING;
+  CHECK(d.type==DriveIntentType::Reverse && d.requestedDuty==config::escape::REVERSE_DUTY && d.steering==S);
   hazard(fl,1,FloorColor::Red);              // right sees it after the 60 ms window: still front-left first
-  CHECK(upd(T0+100,fl,target(5,T0+100,1100,600),running()).steering==-config::escape::TURN_STEERING);
-  CHECK(upd(T0+100+config::escape::CLEAR_MS-1,floor,missing,running()).type==DriveIntentType::Reverse);
-  d=upd(T0+100+config::escape::CLEAR_MS,floor,missing,running());  // clear: lock-on kept, tower lost < hold
+  CHECK(upd(T0+100+P,fl,target(6,T0+100+P,1100,600),running()).steering==S);
+  CHECK(upd(T0+100+P+config::escape::CLEAR_MS-1,floor,missing,running()).type==DriveIntentType::Reverse);
+  d=upd(T0+100+P+config::escape::CLEAR_MS,floor,missing,running());  // clear: lock-on kept, tower lost < hold
   CHECK(AlignFsm::state()!=RobotState::ZoneEscape && d.type==DriveIntentType::Brake);
-  d=upd(T0+100+config::escape::CLEAR_MS+ALIGN_LOST_HOLD_MS,floor,missing,running());
+  d=upd(T0+100+P+config::escape::CLEAR_MS+ALIGN_LOST_HOLD_MS,floor,missing,running());
   CHECK(d.type==DriveIntentType::SearchRight);                     // last seen right of center
+  if (STRAIGHT_BACK_ENABLED) {
+    // 11/11 straight back-out: only for a close opponent, a closer one on red,
+    // and at most STRAIGHT_REPEAT_MAX times in a row from the same side.
+    SensorSnapshot fb; hazard(fb,0,FloorColor::Blue);
+    SensorSnapshot fr; hazard(fr,0,FloorColor::Red);
+    auto escapeAt=[&](uint32_t t0,const SensorSnapshot& hz,uint16_t h){
+      // charge at a tower right of center (no fork: off its centre window), then the hazard
+      upd(t0,floor,target(1,t0,TARGET_CENTER_X+300,h),running());
+      upd(t0+10,floor,target(2,t0+10,TARGET_CENTER_X+190,h),running());
+      upd(t0+20,floor,target(3,t0+20,TARGET_CENTER_X+190,h),running());
+      CHECK(AlignFsm::state()==RobotState::Approach);
+      upd(t0+30,hz,target(4,t0+30,TARGET_CENTER_X+190,h),running());
+      const auto e=upd(t0+30+PUSH_THROUGH_MS,hz,target(5,t0+30+PUSH_THROUGH_MS,TARGET_CENTER_X+190,h),running());
+      CHECK(AlignFsm::state()==RobotState::ZoneEscape && e.type==DriveIntentType::Reverse);
+      for(uint32_t t=t0+40+PUSH_THROUGH_MS;t<t0+60+PUSH_THROUGH_MS+config::escape::CLEAR_MS;t+=10) upd(t,floor,missing,running());
+      return e.steering; };
+    freshRun();
+    CHECK(escapeAt(T0,fr,STRAIGHT_MIN_HEIGHT_RED-1)==-config::escape::TURN_STEERING);   // red, not close enough: turn
+    freshRun();
+    CHECK(escapeAt(T0,fb,STRAIGHT_MIN_HEIGHT)==0);                                       // blue, close: straight
+    uint32_t t=T0+1000;
+    for(uint8_t i=1;i<STRAIGHT_REPEAT_MAX;++i,t+=600) CHECK(escapeAt(t,fb,STRAIGHT_MIN_HEIGHT)==0);
+    CHECK(escapeAt(t,fb,STRAIGHT_MIN_HEIGHT)==-config::escape::TURN_STEERING);           // one too many: turn
+    CHECK(escapeAt(t+600,fb,STRAIGHT_MIN_HEIGHT)==0);                                    // count starts again
+  }
   {
     // 11/10 pushed-in exits: decided by the side that went in first, kept when fully in.
     using namespace config::escape;
@@ -1004,13 +1145,41 @@ void testAlignFsm() {
     upd(T0,floor,target(1,T0,TARGET_CENTER_X,300),running()); upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X,300),running());
     CHECK(upd(T0+20,floor,close(3,T0+20,TARGET_CENTER_X+TRIGGER_CENTER+1),running()).requestedDuty==CHARGE_DUTY);
     CHECK(upd(T0+30,floor,target(4,T0+30,TARGET_CENTER_X,TRIGGER_HEIGHT-1),running()).requestedDuty==CHARGE_DUTY);
-    // A floor hazard cancels it: escape wins.
+    // A front hazard with the opponent close (11/11 push-through): keep
+    // pushing PUSH_THROUGH_MS, then the escape wins and cancels the attack.
     freshRun();
     upd(T0,floor,target(1,T0,TARGET_CENTER_X,300),running()); upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X,300),running());
     upd(T0+20,floor,close(3,T0+20),running()); upd(T0+20+BRAKE_MS,floor,close(4,T0+20+BRAKE_MS),running());
     SensorSnapshot fl3; hazard(fl3,0,FloorColor::Blue);
-    CHECK(upd(T0+30+BRAKE_MS,fl3,close(5,T0+30+BRAKE_MS),running()).type==DriveIntentType::Reverse);
-    CHECK(AlignFsm::state()==RobotState::ZoneEscape && ForkAttack::phase(T0+40+BRAKE_MS)==ForkPhase::Idle);
+    const uint32_t hit=T0+30+BRAKE_MS;
+    if (PUSH_THROUGH_MS>0) {
+      d=upd(hit,fl3,close(5,hit),running());
+      CHECK(d.type==DriveIntentType::Approach && AlignFsm::state()!=RobotState::ZoneEscape);   // still pushing (charge; fork in cooldown)
+      d=upd(hit+PUSH_THROUGH_MS-1,fl3,close(6,hit+PUSH_THROUGH_MS-1),running());
+      CHECK(d.type==DriveIntentType::Approach && AlignFsm::state()!=RobotState::ZoneEscape);
+    }
+    CHECK(upd(hit+PUSH_THROUGH_MS,fl3,close(7,hit+PUSH_THROUGH_MS),running()).type==DriveIntentType::Reverse);
+    CHECK(AlignFsm::state()==RobotState::ZoneEscape && ForkAttack::phase(hit+PUSH_THROUGH_MS+10)==ForkPhase::Idle);
+    // Push-through only for a close opponent and a front-only hazard.
+    {
+      SensorSnapshot rl; hazard(rl,2,FloorColor::Blue);
+      SensorSnapshot fl4; hazard(fl4,0,FloorColor::Blue);
+      auto charge=[&](uint16_t h){
+        freshRun();
+        upd(T0,floor,target(1,T0,TARGET_CENTER_X+300,h),running());
+        upd(T0+10,floor,target(2,T0+10,TARGET_CENTER_X+150,h),running());
+        upd(T0+20,floor,target(3,T0+20,TARGET_CENTER_X+150,h),running());
+        CHECK(AlignFsm::state()==RobotState::Approach); };
+      charge(PUSH_THROUGH_MIN_HEIGHT);                                   // close: front hit waits
+      upd(T0+30,fl4,target(4,T0+30,TARGET_CENTER_X+150,PUSH_THROUGH_MIN_HEIGHT),running());
+      CHECK(PUSH_THROUGH_MS==0 || AlignFsm::state()==RobotState::Approach);
+      charge(PUSH_THROUGH_MIN_HEIGHT);                                   // close but rear hit: at once
+      upd(T0+30,rl,target(4,T0+30,TARGET_CENTER_X+150,PUSH_THROUGH_MIN_HEIGHT),running());
+      CHECK(AlignFsm::state()==RobotState::ZoneEscape);
+      charge(PUSH_THROUGH_MIN_HEIGHT-1);                                 // far: at once
+      upd(T0+30,fl4,target(4,T0+30,TARGET_CENTER_X+150,PUSH_THROUGH_MIN_HEIGHT-1),running());
+      CHECK(AlignFsm::state()==RobotState::ZoneEscape);
+    }
   }
   // A hazard during the opening move cancels it and escapes.
   fixture(); AlignFsm::begin(); upd(0,floor,missing,running());
@@ -1044,6 +1213,105 @@ void testRunLog() {
   for(uint32_t t=0;t<1000;t+=10) RunLog::alive(t,true,3,960,6,500);
   RunLog::alive(1000,false,0,0,0,0); RunLog::alive(1010,false,0,0,0,0);
   RunLog::process(); CHECK(Serial1.tx.size()==14u*5);
+}
+
+void testHuskyLens() {
+  // Old V1 robot (11/10): HuskyLens color blocks -> the same VisionSnapshot as the Pi.
+  fixture(); HuskyLensLink::begin();
+  auto frameOf=[](uint8_t cmd,std::vector<uint8_t> data){
+    std::vector<uint8_t> f={0x55,0xAA,0x11,static_cast<uint8_t>(data.size()),cmd};
+    f.insert(f.end(),data.begin(),data.end());
+    uint8_t s=0; for(uint8_t b:f) s=static_cast<uint8_t>(s+b); f.push_back(s); return f; };
+  auto u16=[](std::vector<uint8_t>& v,uint16_t x){ v.push_back(x&0xFF); v.push_back(x>>8); };
+  auto block=[&](uint16_t x,uint16_t y,uint16_t w,uint16_t h,uint16_t id){
+    std::vector<uint8_t> d; u16(d,x); u16(d,y); u16(d,w); u16(d,h); u16(d,id); return frameOf(0x2A,d); };
+  auto info=[&](uint16_t n,uint16_t frameNo){
+    std::vector<uint8_t> d; u16(d,n); u16(d,1); u16(d,frameNo); u16(d,0); u16(d,0); return frameOf(0x29,d); };
+  auto txBytes=[](){ return std::vector<uint8_t>(Serial1.tx.begin(),Serial1.tx.end()); };
+  // Like the DFRobot example: knock (0x2C) at 9600 until OK, then request() 0x20.
+  fake::now=1000; HuskyLensLink::poll();
+  CHECK(txBytes()==frameOf(0x2C,{}) && Serial1.baud==9600);
+  CHECK(!HuskyLensLink::latest().linkValid);
+  Serial1.tx.clear(); Serial1.inject(frameOf(0x2E,{})); fake::now=1005; HuskyLensLink::poll();
+  CHECK(txBytes()==frameOf(0x20,{}));                 // then: request blocks
+  // Answer: three learned blocks (TARGET_ID 0 = any ID): the largest is the tower.
+  Serial1.tx.clear();
+  Serial1.inject(info(3,7)); Serial1.inject(block(40,60,10,10,1));
+  Serial1.inject(block(160,120,40,80,1)); Serial1.inject(block(300,10,20,20,2));
+  fake::now=1010; HuskyLensLink::poll();
+  VisionSnapshot v=HuskyLensLink::latest();
+  CHECK(v.linkValid && v.frameFresh && v.targetValid && v.cameraOk && v.pipelineOk);
+  CHECK(v.targetX==960 && v.targetY==540 && v.targetWidth==240 && v.targetHeight==360);
+  CHECK(v.multipleTargets && !v.boxClipped && v.sequence==7);
+  // Waits REQUEST_PERIOD_MS before the next request, never two at once.
+  CHECK(Serial1.tx.empty());
+  fake::now=1010+config::huskylens::REQUEST_PERIOD_MS; HuskyLensLink::poll();
+  CHECK(txBytes()==frameOf(0x20,{}));
+  // Same frame number again: link alive, not a new frame.
+  Serial1.tx.clear(); Serial1.inject(info(0,7)); fake::now+=5; HuskyLensLink::poll();
+  CHECK(HuskyLensLink::status().duplicatePackets==1 && HuskyLensLink::latest().targetValid);
+  // New frame with no tower: target cleared. Clipped box flagged.
+  fake::now+=config::huskylens::REQUEST_PERIOD_MS; HuskyLensLink::poll();
+  Serial1.inject(info(0,8)); fake::now+=5; HuskyLensLink::poll();
+  CHECK(HuskyLensLink::latest().linkValid && !HuskyLensLink::latest().targetValid);
+  fake::now+=config::huskylens::REQUEST_PERIOD_MS; HuskyLensLink::poll();
+  Serial1.inject(info(1,9)); Serial1.inject(block(5,120,20,40,1)); fake::now+=5; HuskyLensLink::poll();
+  CHECK(HuskyLensLink::latest().boxClipped && HuskyLensLink::latest().targetX==30);
+  // A bad checksum is dropped and counted.
+  const uint32_t bad=HuskyLensLink::status().invalidPackets;
+  auto broken=info(0,10); broken.back()^=0xFF;
+  fake::now+=config::huskylens::REQUEST_PERIOD_MS; HuskyLensLink::poll();
+  Serial1.inject(broken); fake::now+=5; HuskyLensLink::poll();
+  CHECK(HuskyLensLink::status().invalidPackets==bad+1);
+  // HuskyLens silent: link drops after LINK_TIMEOUT_MS, target gone (robot searches).
+  fake::now+=config::huskylens::LINK_TIMEOUT_MS+1; HuskyLensLink::poll();
+  CHECK(!HuskyLensLink::latest().linkValid && !HuskyLensLink::latest().targetValid);
+  // An arrow result is counted but never becomes the tower.
+  fake::now+=config::huskylens::RECONNECT_MS; HuskyLensLink::poll();   // silent -> knock again
+  CHECK(txBytes().size()>=6);
+  Serial1.tx.clear(); Serial1.inject(frameOf(0x2E,{})); fake::now+=5; HuskyLensLink::poll();
+  { std::vector<uint8_t> d; u16(d,10); u16(d,20); u16(d,30); u16(d,40); u16(d,1);
+    Serial1.inject(info(1,11)); Serial1.inject(frameOf(0x2B,d)); fake::now+=5; HuskyLensLink::poll(); }
+  CHECK(HuskyLensLink::latest().linkValid && !HuskyLensLink::latest().targetValid);
+  // No answer at 9600: after BAUD_SWITCH_KNOCKS knocks it tries 115200, and back.
+  fixture(); HuskyLensLink::begin();
+  uint32_t t=1000;
+  for(int i=0;i<config::huskylens::BAUD_SWITCH_KNOCKS;++i){ fake::now=t; HuskyLensLink::poll(); t+=config::huskylens::RESPONSE_TIMEOUT_MS+config::huskylens::KNOCK_RETRY_MS; }
+  CHECK(Serial1.baud==9600);
+  fake::now=t; HuskyLensLink::poll();
+  CHECK(Serial1.baud==115200 && HuskyLensLink::activeBaud()==115200);
+  // It answers at 115200: stays there and requests blocks.
+  Serial1.tx.clear(); Serial1.inject(frameOf(0x2E,{})); fake::now=t+5; HuskyLensLink::poll();
+  CHECK(txBytes()==frameOf(0x20,{}) && Serial1.baud==115200);
+  // Review fixes (11/10).
+  // 1) Knock search covers 1000000 too: 9600 -> 115200 -> 1000000 -> 9600.
+  fixture(); HuskyLensLink::begin();
+  t=1000;
+  auto knockRound=[&](){ for(int i=0;i<config::huskylens::BAUD_SWITCH_KNOCKS;++i){ fake::now=t; HuskyLensLink::poll(); t+=config::huskylens::RESPONSE_TIMEOUT_MS+config::huskylens::KNOCK_RETRY_MS; } };
+  knockRound(); fake::now=t; HuskyLensLink::poll(); CHECK(Serial1.baud==115200);
+  knockRound(); fake::now=t; HuskyLensLink::poll(); CHECK(Serial1.baud==1000000);
+  knockRound(); fake::now=t; HuskyLensLink::poll(); CHECK(Serial1.baud==9600);
+  // Connect at 9600 for the next checks.
+  Serial1.tx.clear(); Serial1.inject(frameOf(0x2E,{})); fake::now=t+=5; HuskyLensLink::poll();
+  CHECK(txBytes()==frameOf(0x20,{}));
+  // 2) A long answer is not cut off: bytes keep arriving past RESPONSE_TIMEOUT_MS.
+  Serial1.inject(info(10,20));
+  for(int i=0;i<9;++i){ Serial1.inject(block(10,10,4,4,2)); fake::now=t+=40; HuskyLensLink::poll(); }
+  CHECK(!HuskyLensLink::latest().frameFresh || HuskyLensLink::latest().sequence!=20);
+  Serial1.inject(block(160,120,40,80,1)); fake::now=t+=40; HuskyLensLink::poll();
+  CHECK(HuskyLensLink::latest().sequence==20 && HuskyLensLink::latest().targetValid &&
+        HuskyLensLink::latest().targetX==960);
+  // 3) ID 0 (seen, not learned) is never the tower, even when it is the biggest.
+  fake::now=t+=config::huskylens::REQUEST_PERIOD_MS; HuskyLensLink::poll();
+  Serial1.inject(info(1,21)); Serial1.inject(block(160,120,200,200,0)); fake::now=t+=5; HuskyLensLink::poll();
+  CHECK(HuskyLensLink::latest().sequence==21 && !HuskyLensLink::latest().targetValid);
+  // 4) 0x3D BUSY: no waiting out the timeout, asks again after REQUEST_PERIOD_MS.
+  fake::now=t+=config::huskylens::REQUEST_PERIOD_MS; HuskyLensLink::poll();
+  Serial1.tx.clear(); Serial1.inject(frameOf(0x3D,{})); fake::now=t+=5; HuskyLensLink::poll();
+  fake::now=t+=config::huskylens::REQUEST_PERIOD_MS; HuskyLensLink::poll();
+  CHECK(txBytes()==frameOf(0x20,{}));
+  // The run log stays silent only on HuskyLens builds; this host build uses the Pi.
+  CHECK(!config::uart::VISION_FROM_HUSKYLENS);
 }
 
 void testPoseEstimate() {
@@ -1197,13 +1465,13 @@ int main(int argc,char** argv) {
     if(argc>1 && std::string(argv[1])=="--demo") { demo(); return 0; }
     struct Test { const char* name; void (*run)(); };
     const Test tests[]={{"motor limit/watchdog/rollover",testMotor},{"motor straight trim/NVS",testMotorTrim},
-      {"buttons/ESTOP/race",testButtonsAndEstop},{"system start/fault",testSystem},
+      {"buttons/ESTOP/race",testButtonsAndEstop},{"two-button soft reset (11/11)",testSoftReset},{"boot mode: bench or match (11/11)",testBootMode},{"system start/fault",testSystem},
       {"UART loss/duplicates/reboot/fuzz",testProtocol},{"FSM attack/hazards/loss",testFsm},{"wander/tilt guard",testWanderAndTilt},{"align-only FSM",testAlignFsm},
       {"color sampling/errors/bounded retry",testColorsAndErrors},{"three independent samples",testThreeSamples},
       {"continuous single-exposure floor mode",testContinuousFloorMode},
       {"12-step calibration/NVS",testCalibration},{"nonblocking logs/LED priority",testLogsAndLeds},
       {"power-on battery check",testBattery},
-      {"run log to the Pi",testRunLog},{"log-only pose estimate",testPoseEstimate},{"real main loop integration",testMainIntegration},
+      {"run log to the Pi",testRunLog},{"HuskyLens link (old V1 robot)",testHuskyLens},{"log-only pose estimate",testPoseEstimate},{"real main loop integration",testMainIntegration},
       {"I2C time/optional sensors/boot ESTOP",testRealisticTimingAndBoot}};
     for(const auto& test:tests) { test.run(); ++groups; std::cout<<"PASS "<<test.name<<"\n"; }
     std::cout<<"MODEL "<<COLOR_SENSOR_MODEL<<": "<<groups<<" groups, "<<assertions<<" checks passed\n";

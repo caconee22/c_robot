@@ -169,13 +169,17 @@ bool MotorController::apply(const MotorCommand& command,
     return false;
   }
 
-  // Straight-drive trim (motor_trim.hpp): reduce-only, after the limit.
-  const int16_t left = MotorTrim::scale(
-      applyLimit(clampCommand(command.leftPermille), latestStatus.outputLimitPermille),
-      MotorTrim::left());
-  const int16_t right = MotorTrim::scale(
-      applyLimit(clampCommand(command.rightPermille), latestStatus.outputLimitPermille),
-      MotorTrim::right());
+  // Straight-drive trim (motor_trim.hpp) and the robot output scale
+  // (config::motor::OUTPUT_SCALE_PERMILLE, V1 only): reduce-only, after the limit.
+  const uint16_t scaleLeft = static_cast<uint16_t>(
+      static_cast<uint32_t>(MotorTrim::left()) * config::motor::OUTPUT_SCALE_PERMILLE / 1000);
+  const uint16_t scaleRight = static_cast<uint16_t>(
+      static_cast<uint32_t>(MotorTrim::right()) * config::motor::OUTPUT_SCALE_PERMILLE / 1000);
+  // A scale above x1.0 (V1 24 V motors on 4S) can pass the limit: clamp to 100 %.
+  const int16_t left = clampCommand(MotorTrim::scale(
+      applyLimit(clampCommand(command.leftPermille), latestStatus.outputLimitPermille), scaleLeft));
+  const int16_t right = clampCommand(MotorTrim::scale(
+      applyLimit(clampCommand(command.rightPermille), latestStatus.outputLimitPermille), scaleRight));
 
   if (left == 0 && right == 0) {
     stopLocked(command.stopMode);
@@ -184,10 +188,14 @@ bool MotorController::apply(const MotorCommand& command,
     return true;
   }
 
+  // physicalLeft/Right = what driver 1 / driver 2 get (motor_config.hpp:
+  // SIDES_SWAPPED means driver 1 turns the right wheel).
+  const int16_t toDriver1 = config::motor::SIDES_SWAPPED ? right : left;
+  const int16_t toDriver2 = config::motor::SIDES_SWAPPED ? left : right;
   const int16_t physicalLeft =
-      config::motor::LEFT_MOTOR_INVERTED ? -left : left;
+      config::motor::LEFT_MOTOR_INVERTED ? -toDriver1 : toDriver1;
   const int16_t physicalRight =
-      config::motor::RIGHT_MOTOR_INVERTED ? -right : right;
+      config::motor::RIGHT_MOTOR_INVERTED ? -toDriver2 : toDriver2;
   bool leftOk = true;
   bool rightOk = true;
   if (physicalLeft == 0) {

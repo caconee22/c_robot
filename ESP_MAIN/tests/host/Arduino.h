@@ -13,8 +13,10 @@
 #define IRAM_ATTR
 #define HIGH 1
 #define LOW 0
+#define INPUT 0
 #define OUTPUT 1
 #define INPUT_PULLUP 2
+#define INPUT_PULLDOWN 9
 #define FALLING 2
 #define CHANGE 3
 #define SERIAL_8N1 0
@@ -54,7 +56,9 @@ struct FakeSerial {
   std::string tx;
   int capacity = 4096;
   uint32_t baud = 0;
-  void begin(uint32_t speed, int = 0, int = 0, int = 0) { baud = speed; }
+  void begin(uint32_t speed, int = 0, int rx = 0, int tx = 0) { baud = speed; rxPin = rx; txPin = tx; }
+  int rxPin = 0, txPin = 0;
+  void end() {}
   int available() const { return static_cast<int>(rx.size()); }
   int availableForWrite() const { return capacity; }
   int read() { if (rx.empty()) return -1; int v = rx.front(); rx.pop_front(); return v; }
@@ -80,6 +84,8 @@ extern bool pwmSetupOk;
 extern bool watchdogEnabled;
 extern int criticalDepth;
 extern std::function<void()> writeHook;
+// Called by delay() before time advances (scripts button presses in waiting loops).
+extern std::function<void()> delayHook;
 struct StopLoop {};
 extern bool stopOnDelay;
 extern uint32_t adcMillivolts[64];  // Pin voltage seen by analogReadMilliVolts.

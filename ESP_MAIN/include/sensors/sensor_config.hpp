@@ -86,7 +86,10 @@ static_assert(COLOR_SENSOR_VISITS_PER_UPDATE >= 1 &&
 
 constexpr Tcs34725Integration TCS34725_INTEGRATION =
     Tcs34725Integration::Ms2_4;
-constexpr Tcs34725Gain TCS34725_GAIN = Tcs34725Gain::X16;
+// 11/10 old V1 robot calibration: X16 gave clear counts of only 7-57 (of 1024)
+// and blue overlapped black -> X60 (x3.75, same 2.4 ms so no extra delay).
+// Changing this invalidates the saved calibration (settings signature).
+constexpr Tcs34725Gain TCS34725_GAIN = Tcs34725Gain::X60;
 
 // A color becomes reliable only after this many consecutive identical reads.
 constexpr uint8_t COLOR_CONFIRM_COUNT = 3;

@@ -10,9 +10,12 @@
 #include "sensors/sensor_config.hpp"
 
 namespace {
-// 11/04 decision: yellow is not calibrated (not a hazard, no need to tell it
-// apart). Level and lifted measure all four corners at once; pressed tilts the
-// robot, so front and rear pairs are measured separately.
+// Level and lifted measure all four corners at once; pressed tilts the robot,
+// so front and rear pairs are measured separately.
+// 11/11 (학현): yellow is calibrated too, so it is recognized as yellow and
+// ignored (not a hazard) instead of being mistaken for red/blue. The yellow
+// zone cannot hold all four corners at once, so every yellow pose is measured
+// in two parts: front pair, then rear pair (6 steps).
 struct Step {
   FloorColor color;
   CalibrationPose pose;
@@ -32,6 +35,12 @@ constexpr Step STEPS[] = {
     {FloorColor::Blue, CalibrationPose::Lifted, ALL_SENSORS},
     {FloorColor::Blue, CalibrationPose::Pressed, FRONT_SENSORS},
     {FloorColor::Blue, CalibrationPose::Pressed, REAR_SENSORS},
+    {FloorColor::Yellow, CalibrationPose::Level, FRONT_SENSORS},
+    {FloorColor::Yellow, CalibrationPose::Level, REAR_SENSORS},
+    {FloorColor::Yellow, CalibrationPose::Lifted, FRONT_SENSORS},
+    {FloorColor::Yellow, CalibrationPose::Lifted, REAR_SENSORS},
+    {FloorColor::Yellow, CalibrationPose::Pressed, FRONT_SENSORS},
+    {FloorColor::Yellow, CalibrationPose::Pressed, REAR_SENSORS},
 };
 constexpr uint8_t TOTAL_STEPS = sizeof(STEPS) / sizeof(STEPS[0]);
 static_assert(TOTAL_STEPS == ColorCalibration::STEP_COUNT, "Update STEP_COUNT");
@@ -84,6 +93,11 @@ void printStepPrompt() {
                 calibrationPoseName(latestStatus.pose));
   Serial.printf("[CAL] Set sensor-to-floor gap to %u mm (manual).\n",
                 config::sensors::CALIBRATION_HEIGHT_MM[static_cast<uint8_t>(latestStatus.pose)]);
+  if (latestStatus.pose != CalibrationPose::Pressed && latestStatus.sensorMask != ALL_SENSORS) {
+    Serial.println(latestStatus.sensorMask == FRONT_SENSORS
+                       ? "[CAL] Only the FRONT sensors 1 2 on this color, the rear ones off it."
+                       : "[CAL] Only the REAR sensors 3 4 on this color, the front ones off it.");
+  }
   if (latestStatus.pose == CalibrationPose::Level) {
     Serial.println("[CAL] Keep the robot level.");
   } else if (latestStatus.pose == CalibrationPose::Lifted) {

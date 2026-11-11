@@ -197,3 +197,9 @@ void Bts7960Driver::setEnabled(bool enabled) {
   digitalWrite(pins_.ren, enabled ? HIGH : LOW);
   status_.enabled = enabled;
 }
+
+void Bts7960Driver::clearPermanentDriveInhibit() {
+  portENTER_CRITICAL(&driveInhibitMux);
+  permanentDriveInhibit = false;   // driveInhibit stays true until a start
+  portEXIT_CRITICAL(&driveInhibitMux);
+}

@@ -37,7 +37,8 @@ void clearData(ColorCalibrationData& value) {
 bool allReferencesValid(const ColorCalibrationData& value) {
   for (size_t sensor = 0; sensor < COLOR_SENSOR_COUNT; ++sensor) {
     for (size_t color = 0; color < FLOOR_COLOR_COUNT; ++color) {
-      // Yellow is not calibrated since 11/04; old data with yellow stays valid.
+      // Yellow is optional: 12-step data from before 11/11 (no yellow) stays valid.
+      // New 18-step data includes yellow; the classifier uses whatever is valid.
       if (color == static_cast<size_t>(FloorColor::Yellow)) continue;
       for (size_t pose = 0; pose < CALIBRATION_POSE_COUNT; ++pose) {
         const auto& ref = value.reference[sensor][color][pose];

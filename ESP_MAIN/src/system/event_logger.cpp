@@ -345,3 +345,8 @@ void EventLogger::writeEmergencyStopNow() {
   Serial.println("ESTOP");
   Serial.flush();
 }
+
+void EventLogger::exitEmergencyMode() {
+  emergencyOnly = false;
+  readIndex = writeIndex = queueCount = 0;
+}

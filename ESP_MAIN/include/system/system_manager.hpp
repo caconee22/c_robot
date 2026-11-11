@@ -44,7 +44,10 @@ struct SystemStatus {
 
 // Contract
 // Role: single owner of "may the motors run" (motorAllowed / SafetyStatus).
-//   Combines SW1, SW2 start and aggregate health.
+//   Combines SW1/SW2 (both start when stopped, both stop when running) and
+//   aggregate health. 11/11: the emergency stop is left with the two-button
+//   soft reset (button_interrupts.hpp); then this module goes back to
+//   WaitingForStart and calls the soft-reset handler (FSM state etc.).
 // Called from: loop() twice per pass (before and after sensor/UART work);
 //   other modules read status()/safetyStatus() and never decide on their own.
 // Failure: unhealthy -> immediate stop, start request dropped, no auto restart.
@@ -57,9 +60,13 @@ class SystemManager {
 
   // SW2 only starts operation. A software stop must be requested explicitly.
   static void requestStop();
-  // Software emergency stop (IMU rollover, TiltGuard): the same permanent
-  // latch as SW1, taken over by the next update(); recovery is a reboot.
+  // Software emergency stop (IMU rollover, TiltGuard): the same latch as a
+  // button stop, taken over by the next update(); left with the soft reset.
   static void triggerEmergencyStop();
+  // Called once after each two-button soft reset, before the robot can start
+  // again: resets the drive FSM and helpers. Hardware is not re-initialized.
+  static void setSoftResetHandler(void (*handler)());
+  static uint32_t softResetCount();
 
   // Health setters log only an actual change. The detail value is normally a
   // motor number, sensor channel, or module-specific short identifier.

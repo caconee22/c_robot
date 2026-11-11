@@ -33,7 +33,7 @@ foreach ($model in $models) {
     $arguments = @('-std=c++17', '-O1', '-Wall', '-Wextra', '-Werror',
         '-Wno-unused-variable',
         "-DCOLOR_SENSOR_MODEL=$model", "-DHW_VERSION=$hwVersion",
-        '-DBENCH_V2_MANUAL=1', '-I', (Join-Path $PSScriptRoot 'host'),
+        '-DBENCH_V2_MANUAL=1', '-DMOTOR_OUTPUT_SCALE_PERMILLE=1000', '-DMOTOR_PLAIN_MAPPING=1', '-I', (Join-Path $PSScriptRoot 'host'),
         '-I', (Join-Path $projectRoot 'include')) + $sourceFiles + @('-o', $executable)
     if ($Bench) { $arguments = @('-DBENCH_SOFTWARE_SWITCHES=1') + $arguments }
     & $compilerPath @arguments

@@ -11,6 +11,13 @@ constexpr uint32_t RASPBERRY_TIMEOUT_MS = 120;
 constexpr uint32_t RASPBERRY_FRAME_STALE_MS = 120;
 constexpr uint32_t RASPBERRY_INTER_BYTE_TIMEOUT_MS = 20;
 constexpr size_t RASPBERRY_MAX_BYTES_PER_POLL = 128;
+// UART1 camera source, set by the build environment (communication/vision_link.hpp):
+// 0 = Raspberry Pi (V2 robot), 1 = HuskyLens (old V1 robot, 11/10). With the
+// HuskyLens the ESP->Pi run log is off, because UART1 TX goes to the HuskyLens.
+#ifndef VISION_HUSKYLENS
+#define VISION_HUSKYLENS 0
+#endif
+constexpr bool VISION_FROM_HUSKYLENS = VISION_HUSKYLENS != 0;
 }  // namespace uart
 
 namespace switches {
@@ -19,6 +26,10 @@ constexpr uint32_t DEBOUNCE_MS = 40;
 // being held this long (SW1 stop, SW2 start, SW2 stop while running).
 constexpr uint32_t HOLD_MS = 500;
 constexpr uint32_t ESTOP_LOG_PERIOD_MS = 3000;
+// 11/11 (학현): SW1 and SW2 both start while stopped, both stop while running,
+// and both held HOLD_MS together leave the emergency stop (soft reset). The
+// two presses count as "together" when they start at most this far apart.
+constexpr uint32_t DUAL_PRESS_WINDOW_MS = 300;
 }  // namespace switches
 
 namespace led {

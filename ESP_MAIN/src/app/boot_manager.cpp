@@ -1,6 +1,6 @@
 #include "app/boot_manager.hpp"
 
-#include "communication/raspberry_link.hpp"
+#include "communication/vision_link.hpp"
 #include "hardware/board_io.hpp"
 #include "hardware/reset_manager.hpp"
 #include "interrupts/button_interrupts.hpp"
@@ -25,13 +25,13 @@ BootResult BootManager::begin() {
   ButtonInterrupts::begin();
   StatusLed::begin();
   if (ButtonInterrupts::emergencyLatched()) {
-    ButtonInterrupts::enterEmergencyStopLoop();
+    ButtonInterrupts::waitInEmergencyStop();
   }
   const bool sensorsReady = SensorManager::begin();
   if (ButtonInterrupts::emergencyLatched()) {
-    ButtonInterrupts::enterEmergencyStopLoop();
+    ButtonInterrupts::waitInEmergencyStop();
   }
-  RaspberryLink::begin();
+  VisionLink::begin();
   SystemManager::begin();
   SystemManager::setMotorHealthy(motorReady, FaultCode::Initialization);
   SystemManager::setSensorHealthy(sensorsReady, FaultCode::Initialization);
@@ -48,7 +48,7 @@ BootResult BootManager::begin() {
 
 void BootManager::staySafe() {
   if (ButtonInterrupts::emergencyLatched()) {
-    ButtonInterrupts::enterEmergencyStopLoop();
+    ButtonInterrupts::waitInEmergencyStop();
   }
   MotorController::emergencyStop();
   StatusLed::setBoth(LedOwner::System, LedState::Fault);

@@ -39,7 +39,11 @@ constexpr uint32_t FLIP_MS = 1500;
 
 namespace EscapeMove {
 // wasCharging: the robot was driving forward at the tower (for an unclear entry).
-void start(uint32_t nowMs, const FloorHazardInfo& floor, bool wasCharging = false);
+// straightBack (11/11): reverse without the turn, so the robot keeps facing an
+// opponent it just pushed onto the color and can charge again at once
+// (AlignFsm decides when; see config::control::STRAIGHT_*).
+void start(uint32_t nowMs, const FloorHazardInfo& floor, bool wasCharging = false,
+           bool straightBack = false);
 void cancel();
 bool active();
 // Advances the escape; returns Brake and ends (active() false) once clear.

@@ -53,7 +53,9 @@ def describe(kind: int, a: int, b: int, c: int, d: int) -> str:
         return f"{name(STATES, b)} -> {name(STATES, a)} 타워x={c} h={d}"
     if kind == 3:
         mask = "".join(n for bit, n in ((1, "FL"), (2, "FR"), (4, "RL"), (8, "RR")) if b & bit)
-        return f"먼저={name(SIDES, a)} 모서리={mask or b} 색={name(COLORS, c)} 돌진중={d}"
+        # d: bit0 = charging/fork attack, bit1 = straight back-out (11/11)
+        return (f"먼저={name(SIDES, a)} 모서리={mask or b} 색={name(COLORS, c)} 돌진중={d & 1}"
+                + (" 일자후진" if d & 2 else ""))
     if kind == 4:
         return f"방향={'오른쪽' if a else '왼쪽'} 타워h={b} x={c}"
     if kind == 5:

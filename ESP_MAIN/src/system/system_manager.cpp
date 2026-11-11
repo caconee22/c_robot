@@ -15,6 +15,8 @@ int32_t sensorFaultDetail = 0;
 int32_t motorFaultDetail = 0;
 int32_t applicationFaultDetail = 0;
 uint32_t lastMotorWatchdogCount = 0;
+void (*softResetHandler)() = nullptr;
+uint32_t softResets = 0;
 
 SafetyState safetyStateFor(SystemState state) {
   if (state == SystemState::Running) return SafetyState::Running;
@@ -164,11 +166,17 @@ void SystemManager::begin() {
 
 void SystemManager::triggerEmergencyStop() { ButtonInterrupts::triggerEmergencyStop(); }
 
+void SystemManager::setSoftResetHandler(void (*handler)()) { softResetHandler = handler; }
+
+uint32_t SystemManager::softResetCount() { return softResets; }
+
 void SystemManager::update(uint32_t nowMs) {
+  // SW1 hold is an e-stop only while running (also checked by the watchdog task).
+  ButtonInterrupts::setEmergencyArmed(latestStatus.state == SystemState::Running);
   ButtonInterrupts::update(nowMs);
-  // While driving, every button is an emergency stop (both need the 0.5 s hold).
+  // While driving, either button held 0.5 s is an emergency stop.
   if (latestStatus.state == SystemState::Running &&
-      ButtonInterrupts::startHeldMs(nowMs) >= config::switches::HOLD_MS) {
+      ButtonInterrupts::anyHeldMs(nowMs) >= config::switches::HOLD_MS) {
     ButtonInterrupts::triggerEmergencyStop();
   }
   if (ButtonInterrupts::emergencyLatched()) {
@@ -180,7 +188,21 @@ void SystemManager::update(uint32_t nowMs) {
     latestStatus.safety.faultFlags = latestStatus.faultFlags;
     applyLedState(SystemState::EmergencyStop);
     MotorController::emergencyStop();
-    ButtonInterrupts::enterEmergencyStopLoop();
+    ButtonInterrupts::waitInEmergencyStop();   // returns after the two-button reset
+    // Soft reset: back to "waiting for start" as after boot, without
+    // re-initializing hardware. Health faults stay as they are; a new start
+    // gesture (after releasing both buttons) is needed to drive again.
+    ++softResets;
+    latestStatus.runRequested = false;
+    latestStatus.rearmRequired = false;
+    MotorController::brake();
+    if (softResetHandler != nullptr) softResetHandler();
+    EventLogger::logText(static_cast<uint16_t>(EventId::Custom), LogSeverity::Info,
+                         LogSource::Safety, "soft_reset");
+    updateState(millis());
+    applyLedState(latestStatus.state);
+    ButtonInterrupts::setEmergencyArmed(false);
+    return;
   }
 
   if (ButtonInterrupts::consumeStartEvent()) {

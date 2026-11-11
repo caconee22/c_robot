@@ -1,5 +1,7 @@
 #include "communication/run_log.hpp"
 
+#include "config.hpp"
+
 namespace {
 using namespace config::run_log;
 
@@ -17,6 +19,8 @@ void put16(uint8_t* at, uint16_t value) {
 }  // namespace
 
 void RunLog::push(RunLogKind kind, uint16_t a, uint16_t b, uint16_t c, uint16_t d) {
+  // UART1 TX goes to the HuskyLens on the old V1 robot: no run log there.
+  if (config::uart::VISION_FROM_HUSKYLENS) return;
   if (count >= QUEUE_SIZE) {
     ++droppedFrames;
     return;

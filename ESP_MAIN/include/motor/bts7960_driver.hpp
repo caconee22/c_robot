@@ -47,6 +47,9 @@ class Bts7960Driver {
   static void latchDriveInhibit();
   static void latchPermanentDriveInhibit();
   static void IRAM_ATTR latchPermanentDriveInhibitFromIsr();
+  // 11/11 two-button soft reset only: allows clearDriveInhibit() again. The
+  // drive inhibit itself stays set until the next normal start clears it.
+  static void clearPermanentDriveInhibit();
   static bool clearDriveInhibit();
 
   bool begin();

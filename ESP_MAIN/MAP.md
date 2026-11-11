@@ -67,7 +67,7 @@ StatusLed::update, EventLogger::process, delay(1)
 
 메인 루프 밖의 독립 경로:
 
-- SW1: ISR은 에지 표시만. 0.5초 연속 눌림을 메인 루프와 만료 감시 태스크가 확인하면 영구 구동 금지 래치와 EN LOW. 재부팅 전 복구 없음.
+- SW1/SW2 (11/11): 정지 중 둘 다 시작, 구동 중 둘 다 0.5초 비상정지(SW1은 만료 감시 태스크도 확인). 비상정지는 두 버튼 동시 0.5초 소프트 리셋으로 시작 대기 복귀.
 - 모터 만료 감시 태스크: 5ms마다 명령 기한을 확인하고 만료 시 브레이크. SW1 0.5초 확인도 같이 한다.
 
 ## 4. 모듈 표
@@ -79,7 +79,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | 부팅 | `app/boot_manager.hpp` | `begin`, `staySafe` | `setup` | 예 |
 | 핀 초기화 | `hardware/board_io.hpp` | `setEarlySafeState`, `configurePins` | BootManager | 예 |
 | 리셋 원인 | `hardware/reset_manager.hpp` | `reason`, `requiresRearm` | BootManager, SystemManager | |
-| SW1/SW2 | `interrupts/button_interrupts.hpp` | `update`, `consumeStartEvent`, `enterEmergencyStopLoop` | ISR, SystemManager | 예 |
+| SW1/SW2 | `interrupts/button_interrupts.hpp` | `update`, `consumeStartEvent`, `waitInEmergencyStop` (두 버튼 리셋까지 대기) | ISR, SystemManager | 예 |
 | 안전 관리 | `system/system_manager.hpp` | `update`, `status`, `requestStop`, `set*Healthy` | loop | 예 |
 | 모터 | `motor/motor_controller.hpp` | `apply`, `brake`, `update`, `status` | loop, 감시 태스크 | 예 |
 | 직진 보정 (NVS `motor`/`trimL`·`trimR`, 800~1000) | `motor/motor_trim.hpp` | `load`, `set`, `save`, `scale` | MotorController (apply·begin), 벤치 `TRIM` | |
@@ -95,6 +95,8 @@ StatusLed::update, EventLogger::process, delay(1)
 | 라즈 없을 때 무작위 순회 | `control/wander.hpp` | `reset`, `intent` | RobotFsm | |
 | 뒤집힘 비상정지 (V2) | `system/tilt_guard.hpp` | `begin`, `update` | setup, loop → `SystemManager::triggerEmergencyStop` | 예 |
 | 라즈 UART | `communication/raspberry_link.hpp` | `poll`, `latest`, `status` | loop | |
+| HuskyLens UART (구형 V1 로봇, 11/10) | `communication/huskylens_link.hpp` | `poll`, `latest`, `status` (같은 `VisionSnapshot`) | VisionLink | |
+| 영상 출처 선택 (빌드 `VISION_HUSKYLENS`) | `communication/vision_link.hpp` | `begin`, `poll`, `latest`, `status` | BootManager, loop, 벤치 | |
 | 실행 로그 → 라즈 (11/10, UART1 TX, 버전 0x81) | `communication/run_log.hpp` | `push`, `alive`, `process` | AlignFsm, loop (라즈: `scripts/esp_log_receiver.py`) | |
 | 로그용 위치 추정 (11/10, 자이로 방향 + 명령 거리, FSM 미사용) | `control/pose_estimate.hpp` | `update`, `pose` | loop → RunLog Pose | |
 | 센서 판정 | `sensors/sensor_manager.hpp` | `update`, `snapshot` | loop | |
@@ -125,8 +127,10 @@ StatusLed::update, EventLogger::process, delay(1)
 
 | 환경 | 진입 파일 | 용도 |
 |---|---|---|
-| `yd_esp32_s3_v2` | `src/main.cpp` | 경기용 구동 FSM |
+| `yd_esp32_s3_v2` | `src/main.cpp` (+ `bench_v2/`, `calibration/`) | 경기용 구동 FSM. 11/11부터 벤치 포함: 전원 켤 때 SW1·SW2 1초 → 벤치 (`app/boot_mode.hpp`) |
 | `robot_bench_v2_manual` | `src/bench_v2_main.cpp` → `src/bench_v2/` | 저출력 실물 시험·진단 (PC 쪽: `tools/bench_gui.py`) |
+| `yd_esp32_s3_v1_husky` | `src/main.cpp` | 구형 V1 로봇 경기용: V1 핀, TCS34725, HuskyLens(UART1 115200), IMU·배터리·실행 로그 없음(4S 고정) |
+| `robot_bench_v1_husky` | `src/bench_v2_main.cpp` → `src/bench_v2/` | 구형 V1 로봇 벤치·색 교정 (IMU·배터리·ADC 줄은 비어 있음) |
 
 
 색 교정(12단계, 노랑 제외, NVS 저장)은 벤치 펌웨어 안에서 `CAL START`로 한다 (`bench_v2_app.cpp`가 `ColorCalibration`을 호출,

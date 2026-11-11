@@ -21,6 +21,7 @@ uint32_t pwm[16] = {};
 bool pwmSetupOk = true, watchdogEnabled = false, stopOnDelay = false;
 int criticalDepth = 0;
 std::function<void()> writeHook;
+std::function<void()> delayHook;
 std::vector<uint8_t> nvs;
 std::map<std::string, uint8_t> nvsU8;
 std::map<std::string, uint16_t> nvsU16;
@@ -37,7 +38,7 @@ void reset() {
   now=0; std::fill(pins,pins+64,HIGH); std::fill(pwm,pwm+16,0);
   std::fill(interrupts,interrupts+64,nullptr); deferred.clear(); criticalDepth=0;
   Serial=FakeSerial{}; Serial1=FakeSerial{}; Wire=TwoWire{};
-  writeHook=nullptr; stopOnDelay=false; pwmSetupOk=true;
+  writeHook=nullptr; delayHook=nullptr; stopOnDelay=false; pwmSetupOk=true;
   nvs.clear(); nvsU8.clear(); nvsU16.clear(); nvsReadOk=nvsWriteOk=true; tcaConnected=true; busTransactions=0;
   transactionDelayMs=0;
   for (auto& sensor : sensors) sensor=SensorDevice{};
@@ -72,7 +73,7 @@ void floor(uint8_t index, uint8_t color) {
 }
 }
 uint32_t millis() { return fake::now; }
-void delay(uint32_t ms) { if(fake::stopOnDelay) throw fake::StopLoop{}; fake::advance(ms); }
+void delay(uint32_t ms) { if(fake::stopOnDelay) throw fake::StopLoop{}; if(fake::delayHook) fake::delayHook(); fake::advance(ms); }
 void delayMicroseconds(uint32_t) {}
 void pinMode(int, int) {}
 int digitalRead(int pin) { return fake::pins[pin]; }

@@ -4,6 +4,7 @@ namespace {
 using namespace config::escape;
 
 bool running = false;
+bool straight = false;   // 11/11 straight back-out (no turn)
 bool chargingHint = false;
 bool flipped = false;          // FLIP_MS passed without getting off: other way
 uint32_t directionSinceMs = 0;
@@ -40,9 +41,10 @@ Exit exitFor(HazardSide first) {
 }
 }  // namespace
 
-void EscapeMove::start(uint32_t nowMs, const FloorHazardInfo&, bool wasCharging) {
+void EscapeMove::start(uint32_t nowMs, const FloorHazardInfo&, bool wasCharging, bool straightBack) {
   running = true;
   chargingHint = wasCharging;
+  straight = straightBack;
   flipped = false;
   lastHazardMs = nowMs;
   directionSinceMs = nowMs;
@@ -68,6 +70,7 @@ DriveIntent EscapeMove::update(uint32_t nowMs, const FloorHazardInfo& floor) {
   }
   Exit out = exitFor(floor.first);
   if (flipped) out = {!out.reverse, 0};
+  if (straight && out.reverse) out.steering = 0;   // 11/11: back out facing the opponent
   const bool pushedIn = floor.front() && floor.rear();
   uint16_t duty = pushedIn ? PUSHED_DUTY : (out.reverse ? REVERSE_DUTY : FORWARD_DUTY);
   // Keep the faster wheel under the motor limit so the turn is not clipped
