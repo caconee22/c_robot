@@ -69,12 +69,12 @@ constexpr uint32_t ALIGN_LEAD_MS = 80;
 constexpr uint16_t ALIGN_RESUME_ERROR = 260;
 static_assert(ALIGN_RESUME_ERROR > TARGET_CENTER_DEADBAND, "resume band must be wider than the window");
 constexpr bool CHARGE_ENABLED = true;
-constexpr uint16_t CHARGE_DUTY = 500;      // 11/10: back from the +18 % try (590)
-constexpr int16_t CHARGE_STEERING_MAX = 120;
+constexpr uint16_t CHARGE_DUTY = 800;      // 11/12: charge/push state higher, always (500 -> 800)
+constexpr int16_t CHARGE_STEERING_MAX = 150;   // 11/12: with CHARGE 800 (120)
 constexpr uint8_t CHARGE_CONFIRM_FRAMES = 2;
 constexpr uint16_t CHARGE_ABORT_ERROR = 400;     // px off center -> back to align
 constexpr uint32_t CHARGE_LOST_HOLD_MS = 300;    // keep going straight through a drop
-static_assert(CHARGE_DUTY + CHARGE_STEERING_MAX <= 710, "charge must fit under the motor limit");
+static_assert(CHARGE_DUTY + CHARGE_STEERING_MAX <= 1000, "charge must fit under the motor limit");
 // Push-through (11/11, 학현): opponent close (tower box at least
 // PUSH_THROUGH_MIN_HEIGHT, seen within LOCKON_RECENT_MS) while charging or in
 // the fork attack, and a hazard (red or blue) on the FRONT sensors only ->
@@ -82,7 +82,7 @@ static_assert(CHARGE_DUTY + CHARGE_STEERING_MAX <= 710, "charge must fit under t
 // opponent fully in. Rear or front+rear hazard, or a far tower -> escape at
 // once as before. 0 = off. Start 0.1 s and lengthen on the field; every 0.1 s
 // at the charge duty carries the front further over the groove edge.
-constexpr uint32_t PUSH_THROUGH_MS = 100;
+constexpr uint32_t PUSH_THROUGH_MS = 0;   // 11/12 (학현): off (was 100); 0 = escape at once
 constexpr uint16_t PUSH_THROUGH_MIN_HEIGHT = 300;   // 11/11 log: pushing at h 300-420
 // Straight back-out (11/11, 학현): when the escape starts while charging or in
 // the fork attack, the opponent is close (tower seen within LOCKON_RECENT_MS)

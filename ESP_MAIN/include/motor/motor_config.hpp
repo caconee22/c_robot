@@ -17,7 +17,9 @@ constexpr uint32_t PWM_MAX_DUTY = (1UL << PWM_RESOLUTION_BITS) - 1UL;
 constexpr int16_t ABSOLUTE_OUTPUT_LIMIT = COMMAND_MAX;
 // 11/08 (학현): 650 -> 710 so PUSH/ATTACK_CHARGE 650 + PUSH_STEERING_MAX 60
 // is not clipped. Not yet verified on the robot (current, heat, traction).
-constexpr int16_t DEFAULT_OUTPUT_LIMIT = 710;
+// 11/12 (학현): 710 -> 1000 only so the charge can go higher; every other
+// duty is still under 710 and unchanged.
+constexpr int16_t DEFAULT_OUTPUT_LIMIT = 1000;
 
 constexpr uint32_t DEFAULT_COMMAND_TIMEOUT_MS = 100;
 constexpr uint32_t WATCHDOG_POLL_MS = 5;

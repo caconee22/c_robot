@@ -27,7 +27,8 @@ constexpr uint16_t TURN_DUTY = 400;   // 11/10 3S logs: 400 x 1.167 gave 43-44 d
 // 11/10 14:08 log (3S, trim R900): 220 ms gave ~34 deg, 440 ms ~70 deg -> 290/565.
 // 11/11: new ESP chip on V2 = empty NVS, trim back to 1000/1000, and the turns
 // went too far -> back to 220/440 (gave 43-44 deg on 3S without trim, 11/10).
-constexpr uint32_t TURN_LEFT_45_MS = 220;
+// 11/11 21:21 log (3S, R920): 220 ms gave ~34 deg -> 255 ms.
+constexpr uint32_t TURN_LEFT_45_MS = 255;
 constexpr uint16_t FORWARD_DUTY = 400;
 constexpr uint32_t FORWARD_MS = 2000;   // 11/10 field: 900 went half the distance -> 2 s
 constexpr uint32_t TURN_LEFT_90_MS = 440;
@@ -41,7 +42,7 @@ constexpr uint32_t PAUSE_MS = 150;
 constexpr uint16_t FOUR_CELL_SCALE_PERMILLE = 1000;
 // 11/10 field on 3S: 1333 went too far, 1000 a little short -> halfway.
 constexpr uint16_t THREE_CELL_SCALE_PERMILLE = 1167;
-constexpr uint16_t DUTY_MAX = 710;   // motor DEFAULT_OUTPUT_LIMIT
+constexpr uint16_t DUTY_MAX = 1000;   // motor DEFAULT_OUTPUT_LIMIT (11/12; opening duties unchanged)
 static_assert(TURN_DUTY * THREE_CELL_SCALE_PERMILLE / 1000 <= DUTY_MAX &&
               FORWARD_DUTY * THREE_CELL_SCALE_PERMILLE / 1000 <= DUTY_MAX,
               "scaled opening duty must stay under the motor limit");

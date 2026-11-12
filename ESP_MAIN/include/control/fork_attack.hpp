@@ -26,11 +26,11 @@ constexpr uint16_t TRIGGER_CENTER = 200;   // px off center at most (11/10 log: 
 constexpr uint32_t BRAKE_MS = 90;
 constexpr uint16_t INSERT_DUTY = 480;
 constexpr uint32_t INSERT_MS = 250;
-constexpr uint16_t BURST_DUTY = 650;
-constexpr int16_t STEERING_MAX = 60;       // BURST_DUTY + STEERING_MAX stays at the 710 limit
+constexpr uint16_t BURST_DUTY = 800;    // 11/12 (학현): same as the charge 800 (650)
+constexpr int16_t STEERING_MAX = 60;       // BURST_DUTY + STEERING_MAX stays under the 1000 limit
 constexpr uint32_t BURST_MS = 800;
 constexpr uint32_t COOLDOWN_MS = 1500;
-static_assert(BURST_DUTY + STEERING_MAX <= 710 && INSERT_DUTY + STEERING_MAX <= 710,
+static_assert(BURST_DUTY + STEERING_MAX <= 1000 && INSERT_DUTY + STEERING_MAX <= 1000,
               "fork attack must fit under the motor limit");
 }  // namespace fork
 }  // namespace config

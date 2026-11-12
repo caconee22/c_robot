@@ -29,6 +29,9 @@ uint8_t straightCount = 0;
 uint32_t straightWindowMs = 0;
 HazardSide straightSide = HazardSide::None;
 uint32_t pushThroughStartMs = 0;
+// Copy of PUSH_THROUGH_MS kept non-const: with 0 the compiler flags "< 0" on
+// an unsigned value as always false (-Werror=type-limits).
+uint32_t pushThroughHoldMs = config::control::PUSH_THROUGH_MS;
 uint8_t centeredFrames = 0;
 bool frameKnown = false;
 uint8_t lastSequence = 0;
@@ -189,7 +192,7 @@ DriveIntent AlignFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
         pushThroughActive = true;
         pushThroughStartMs = nowMs;
       }
-      holdEscape = nowMs - pushThroughStartMs < config::control::PUSH_THROUGH_MS;
+      holdEscape = nowMs - pushThroughStartMs < pushThroughHoldMs;
     }
   }
 
