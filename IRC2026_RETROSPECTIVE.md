@@ -8,7 +8,7 @@
 | 무엇 | 어디 |
 |---|---|
 | 우승 기체 펌웨어 + 라즈 스크립트 | git 태그 **`irc2026-final`** (커밋 `0030f0b`), 빌드 환경 `yd_esp32_s3_v2` |
-| 주행 로그 80개 + 부팅·리셋 기록 `boots.csv` | `pi_backup/runs/` (11/10~11/13) |
+| 주행 로그 80개 + 부팅·리셋 기록 `boots.csv` | 노트북 `D:\c_robot\pi_backup\runs\` (11/10~11/13). `.gitignore`의 `runs/` 규칙 때문에 git에는 없다 |
 | 로그 전체 묶음 (주행·벤치/교정 118개·라즈 전원 로그·core dump·부팅 캡처) | 노트북 `D:\c_robot_pi_backup\irc2026_all_logs_20261114.tgz` (git 밖, 약 7.7 MB) |
 | 라즈 전체 백업 (11/10) | 노트북 `D:\c_robot_pi_backup\20261110\`, git 쪽은 `pi_backup/`, 복구 순서는 `PI_RECOVERY.md` |
 | 로그 분석 스크립트 | `ESP_MAIN/tools/run_log_stats.py` (`python ESP_MAIN/tools/run_log_stats.py [폴더]`) |
