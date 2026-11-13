@@ -8,7 +8,9 @@ description, no tool output). System reminders, hook text and tool results are
 left out (they can hold file contents, logs or secrets). Private data is
 masked (see SCRUB).
 
-  python conversation_logs/export_transcripts.py [jsonl folder] [output folder]
+  python conversation_logs/export_transcripts.py ["folder1;folder2"] [output folder]
+
+Passwords typed in chat are not caught by SCRUB: check the output before committing.
 
 Written 2026-11-14 to keep the 2026 IRC development record (IRC2026_RETROSPECTIVE.md).
 """
@@ -20,6 +22,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+# Several session folders (one per PC) can be joined with ";".
 SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/.claude/projects/D--c-robot")
 OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(os.path.abspath(__file__))
 KST = timezone(timedelta(hours=9))
@@ -28,6 +31,7 @@ KST = timezone(timedelta(hours=9))
 SCRUB = [
     (re.compile(r"[A-Za-z0-9._%+-]+@gmail\.com"), "[email]"),
     (re.compile(r"(?i)\b(psk|password|passwd)\s*[=:]\s*\S+"), r"\1=[masked]"),
+    (re.compile(r"01[016789][- ]?\d{3,4}[- ]?\d{4}"), "[phone]"),
     (re.compile(r"tskey-[A-Za-z0-9-]+"), "[tailscale-key]"),
     (re.compile(r"(?i)\b(ghp|github_pat)_[A-Za-z0-9_]+"), "[token]"),
 ]
@@ -50,7 +54,7 @@ def stamp(ts: str):
 def records():
     """Unique user/assistant records from every session file, in time order."""
     seen, out = set(), []
-    for path in sorted(glob.glob(os.path.join(SRC, "*.jsonl"))):
+    for path in sorted(p for folder in SRC.split(";") for p in glob.glob(os.path.join(folder, "*.jsonl"))):
         for raw in open(path, encoding="utf-8"):
             try:
                 rec = json.loads(raw)
@@ -120,8 +124,9 @@ def main() -> None:
         f.write("# C_ROBOT ↔ Claude 대화 기록 (2026 IRC)\n\n"
                 "2026 IRC 씨름 로봇 개발 중 Claude Code와 나눈 대화를 날짜별로 정리했다(시간 KST).\n"
                 "사용자 메시지와 Claude 답변, 도구 호출 이름만 남겼다. 도구 결과와 원본 세션 파일(.jsonl)은\n"
-                "넣지 않았다(원본은 작성자 노트북 `D:\\c_robot_pi_backup\\claude_transcripts\\`).\n"
-                "다시 만들기: `python conversation_logs/export_transcripts.py`.\n\n"
+                "넣지 않았다(원본은 작성자 노트북 `D:\\c_robot_pi_backup\\claude_transcripts\\`와 메인컴 `~/.claude/projects/D--C-ROBOT/`).\n"
+                "두 PC의 기록을 합쳤다. 다시 만들 때는 두 폴더를 모두 넘긴다: `python conversation_logs/export_transcripts.py \"폴더1;폴더2\"`.\n"
+                "채팅에 친 비밀번호는 자동으로 못 가리니 커밋 전에 확인한다.\n\n"
                 "| 날짜 | 파일 | 사용자 메시지 |\n|---|---|---|\n")
         for day, name, count in index:
             f.write(f"| {day} | [{name}]({name}) | {count} |\n")
