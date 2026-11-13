@@ -19,8 +19,9 @@
 //   are ready; armWatchdog at the end) and loop() (feedWatchdog, update,
 //   record every pass; plain RAM writes). SystemManager calls noteStopped when
 //   the emergency stop latches.
-// Auto resume (11/13, 학현): a watchdog reset while driving starts the run
-//   again at once, skipping the opening move. Health checks and the battery
+// Auto resume (11/13, 학현): a watchdog reset starts the run (11/13 2nd: also
+//   when waiting or the RTC copy was lost; not after an emergency stop)
+//   at once, skipping the opening move. Health checks and the battery
 //   start hold still apply (SystemManager). Not for power-on, reset button,
 //   brownout or panic. Safety code: the resume decision, yes.
 // Failure: Pi missing -> the frame is simply lost (run log policy). No flash,
@@ -49,9 +50,10 @@ void record(uint32_t nowMs, bool running, uint8_t robotState, uint8_t intentType
 // Emergency stop latched: the RTC copy says "not driving", so a later
 // watchdog restart never resumes a run that was stopped on purpose.
 void noteStopped();
-// True when this boot came from a watchdog reset (interrupt/task/other WDT)
-// while the robot was driving (RTC copy valid, not stopped): main() then
-// starts the run without a button (SystemManager::requestAutoStart).
+// True when this boot came from a watchdog reset (interrupt/task/other WDT),
+// unless the RTC copy says an emergency stop was latched (11/13 2nd: also when
+// it was waiting or the copy was lost): main() then starts the run without a
+// button (SystemManager::requestAutoStart).
 bool resumeRequested();
 // Match firmware only: task watchdog WDT_TIMEOUT_S with panic (reset +
 // core dump), the loop task subscribed. feedWatchdog() once per loop pass.

@@ -17,6 +17,7 @@ struct LastState {
   uint8_t robotState;
   uint8_t intentType;
   uint8_t running;
+  uint8_t stopped;   // emergency stop latched (noteStopped), cleared by the next loop pass
   uint8_t check;   // XOR of the bytes above, so power-on garbage is not trusted
 };
 
@@ -45,7 +46,9 @@ bool ResetReport::abnormal(uint8_t reason) {
 void ResetReport::begin(uint8_t reason, uint32_t nowMs) {
   const bool valid = last.magic == MAGIC && last.check == checksum(last);
   // esp_reset_reason_t 5 INT_WDT, 6 TASK_WDT, 7 WDT
-  resume = config::reset_report::RESUME_AFTER_WATCHDOG && valid && last.running &&
+  // 11/13 (2nd, 학현): any watchdog reset starts driving at once, also when the
+  // RTC copy was lost or it was waiting; only an emergency stop blocks it.
+  resume = config::reset_report::RESUME_AFTER_WATCHDOG && !(valid && last.stopped) &&
            (reason == 5 || reason == 6 || reason == 7);
   // Boot frame: a reset reason | boot id << 8 (random, so the Pi records each
   // boot once even though the frame repeats), b previous robot state (+0x100 when it was
@@ -80,6 +83,7 @@ void ResetReport::record(uint32_t nowMs, bool running, uint8_t robotState, uint8
   last.robotState = robotState;
   last.intentType = intentType;
   last.running = running ? 1 : 0;
+  last.stopped = 0;
   last.magic = MAGIC;
   last.check = checksum(last);
 }
@@ -87,6 +91,7 @@ void ResetReport::record(uint32_t nowMs, bool running, uint8_t robotState, uint8
 void ResetReport::noteStopped() {
   if (last.magic != MAGIC) return;
   last.running = 0;
+  last.stopped = 1;
   last.check = checksum(last);
 }
 

@@ -1261,10 +1261,10 @@ void testResetReport() {
   ResetReport::record(5000,true,2,2,500); ResetReport::begin(6,0); CHECK(ResetReport::resumeRequested());
   ResetReport::record(5000,true,2,2,500); ResetReport::begin(9,0); CHECK(!ResetReport::resumeRequested());   // brownout
   ResetReport::record(5000,true,2,2,500); ResetReport::begin(1,0); CHECK(!ResetReport::resumeRequested());   // power-on
-  ResetReport::record(5000,false,1,0,0);  ResetReport::begin(6,0); CHECK(!ResetReport::resumeRequested());   // was waiting
+  ResetReport::record(5000,false,1,0,0);  ResetReport::begin(6,0); CHECK(ResetReport::resumeRequested());    // waiting too (11/13 2nd)
   ResetReport::record(5000,true,2,2,500); ResetReport::noteStopped(); ResetReport::begin(5,0);
   CHECK(!ResetReport::resumeRequested());                                                                    // ESTOP before
-  ResetReport::begin(6,0); CHECK(!ResetReport::resumeRequested());                                           // no RTC copy
+  ResetReport::begin(6,0); CHECK(ResetReport::resumeRequested());                                            // no RTC copy: still resume
 }
 
 void testHuskyLens() {
