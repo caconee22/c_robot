@@ -228,6 +228,11 @@ ul.ho-check li.done::before{content:"☑ ";color:var(--site)}
 
   <div class="gauges" id="gauges"></div>
 
+  <section class="ho-goal" style="border-color:var(--site);box-shadow:0 0 0 1px var(--site)">
+    <h2>🏆 2026 IRC 씨름 로봇 대회 1위 (11/13, 1점 차 우승)</h2>
+    <p class="lead" style="margin:0">모두 수고했습니다. 아래 계획과 일정은 대회 전 기록으로 남겨 둡니다. 전체 기록은 GitHub 저장소의 <code>README.md</code>, <code>docs/TIMELINE.md</code>, <code>IRC2026_RETROSPECTIVE.md</code>에 있습니다.</p>
+  </section>
+
   <section class="ho-goal">
     <h2>대회까지 계획 (11/10 기준)</h2>
     <p class="lead">11/10 새벽 실물 주행 로그(130초, 1,600줄)를 보고 세운 계획입니다. 원칙: <b>11/11 저녁에 펌웨어를 얼립니다.</b> 11/12 이동일과 11/13 대회 당일에는 값 조정(시간·출력·HSV)만 하고 코드 구조는 바꾸지 않습니다.</p>
@@ -304,6 +309,8 @@ ul.ho-check li.done::before{content:"☑ ";color:var(--site)}
       <div>
         <h3 class="mini">최근 바뀐 것 (최신순)</h3>
         <ul class="plain">
+          <li><b>11/14 정리:</b> 우승 펌웨어 태그 <code>irc2026-final</code>, 대회 회고(<code>IRC2026_RETROSPECTIVE.md</code>), 주행 로그 80개·리셋 기록 보존, Claude 대화 기록 보존, README 전면 개편과 타임라인(<code>docs/TIMELINE.md</code>). 기체는 다른 팀원에게 넘어감.</li>
+          <li><b>11/13: 🏆 대회 1위 (1점 차 우승).</b> 경기 중 ESP 정지(모터 혼자 후진)를 LDO·ESP·벅 교체, 라즈 EMI 해결, 리셋 원인 보고, 1초 워치독 + 자동 재개로 버팀. 마지막에 시작 루틴을 빼고 바로 탐색으로 시작.</li>
           <li><b>11/10 새벽 로그 분석 (130초):</b> 방향 로그로 시작 루틴이 <b>45°→39°, 90°→76°</b>(약 15% 덜 돎, 3S 11.2V). 마지막 6초 "서 있음"은 <b>탐색 회전 명령인데 실제로 안 돎</b>(방향 ±20° 흔들림만) → 낮은 전압에서 출력 300이 회전 하한에 걸린 것으로 추정. 88–98초 <b>뒤 파란 홈·앞 상대에 끼여 회피 10초</b>(1.5초마다 앞뒤 뒤집기). 같은 홈 앞 돌진·회피 반복 4구간. 위치 x·y는 밀리면 의미 없음(방향만 쓸 만함).</li>
           <li><b>11/10 펌웨어 (일부 커밋 전):</b> 경기 FSM을 단계별로 다시 짬(<code>AlignFsm</code>): 시작 루틴(왼쪽 45° → 직진 2초 → 왼쪽 90°, 3S 배율 1.167) → 정렬 → 돌진(출력 500) · 바닥 회피는 <b>먼저 밟은 쪽</b> 기준, 밀려서 다 들어가도 방향 유지 · <b>가운데 빨간 원 돌아가기</b>(빨강 + 먼 타워) · 회피 중에도 락온 유지 · 정렬 150–200px 사각지대(멈춰 서던 원인) 수정 · <b>직진 보정</b>(벤치 TRIM, NVS) · 배터리 스위치는 이제 "출발을 막지 않음"(전압은 계속 재서 3S/4S 판단) · 코드 리뷰 10건 중 5건 수정. PC 시험·빌드 통과, 보드에 업로드.</li>
           <li><b>11/10 라즈:</b> <b>추적 화면</b>(송신을 멈추지 않고 보기, 바탕화면 "C_ROBOT 추적 화면", 검출 60fps 유지) · <b>실행 로그</b>: ESP32가 UART로 상태·판단·0.2초 생존·위치(자이로 방향)를 보내고 라즈가 경기마다 <code>logs/runs/run_*.csv</code>로 저장(비상정지는 신호 끊김으로 닫힘) · 라즈 USB 컨트롤러가 주행 뒤 멈추는 문제 2회(재시작으로 복구).</li>
