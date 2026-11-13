@@ -12,6 +12,7 @@
 | 로그 전체 묶음 (주행·벤치/교정 118개·라즈 전원 로그·core dump·부팅 캡처) | 노트북 `D:\c_robot_pi_backup\irc2026_all_logs_20261114.tgz` (git 밖, 약 7.7 MB) |
 | 라즈 전체 백업 (11/10) | 노트북 `D:\c_robot_pi_backup\20261110\`, git 쪽은 `pi_backup/`, 복구 순서는 `PI_RECOVERY.md` |
 | 로그 분석 스크립트 | `ESP_MAIN/tools/run_log_stats.py` (`python ESP_MAIN/tools/run_log_stats.py [폴더]`) |
+| Claude Code와 나눈 개발 대화 (날짜별, 개인정보 가림) | `conversation_logs/` (원본 세션 파일은 노트북 `D:\c_robot_pi_backup\claude_transcripts\`, git 밖) |
 
 **보존하지 못한 것 (기체·라즈가 넘어간 뒤라 읽을 수 없음)**
 - ESP의 NVS: 색 교정값, 직진 트림(L1000/R950), 배터리 판정 설정. 새 기체·칩에서는 교정을 다시 해야 한다.
