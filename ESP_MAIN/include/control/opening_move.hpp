@@ -19,7 +19,7 @@
 
 namespace config {
 namespace opening {
-constexpr bool ENABLED = true;
+constexpr bool ENABLED = false;   // 11/13 (학현): no opening move; a run starts straight in search/align
 // 11/10: false = after the move the robot just brakes and stays (tracker off,
 // for tuning the move alone). true = align/search toward the tower afterwards.
 constexpr bool TRACK_AFTER = true;

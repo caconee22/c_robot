@@ -903,7 +903,11 @@ void testAlignFsm() {
   // Opening move steps, even with the tower in view.
   fixture(); AlignFsm::begin();
   CHECK(upd(0,floor,missing,SafetyStatus{}).type==DriveIntentType::Brake && AlignFsm::state()==RobotState::WaitStart);
-  {
+  if (!config::opening::ENABLED) {
+    // 11/13: no opening move -> the first pass of a run already tracks the tower.
+    const auto d=upd(0,floor,target(0,0,1900),running());
+    CHECK(AlignFsm::state()==RobotState::TrackAlign && d.type==DriveIntentType::AlignRight);
+  } else {
     using namespace config::opening;
     auto at=[&](uint32_t t){ return upd(t,floor,target(static_cast<uint8_t>(t/10),t,1900),running()); };
     auto d=at(0); CHECK(AlignFsm::state()==RobotState::Opening && d.type==DriveIntentType::SearchLeft && d.requestedDuty==TURN_DUTY);
@@ -1201,8 +1205,9 @@ void testAlignFsm() {
     }
   }
   // A hazard during the opening move cancels it and escapes.
+  // (11/13: opening off -> the same hazard escapes from the search state.)
   fixture(); AlignFsm::begin(); upd(0,floor,missing,running());
-  CHECK(AlignFsm::state()==RobotState::Opening);
+  CHECK(AlignFsm::state()==(config::opening::ENABLED ? RobotState::Opening : RobotState::Search));
   d=upd(config::opening::TURN_LEFT_45_MS+config::opening::PAUSE_MS+100,fl,missing,running());
   CHECK(AlignFsm::state()==RobotState::ZoneEscape && d.type==DriveIntentType::Reverse);
   for(uint32_t t=config::opening::TURN_LEFT_45_MS+config::opening::PAUSE_MS+110;t<5000;t+=10) upd(t,floor,missing,running());
