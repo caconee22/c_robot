@@ -115,6 +115,7 @@ C_ROBOT은 **2026 IRC 씨름 로봇 대회**에 나간 자율주행 스모 로�
 - 휠베이스 129mm: 제자리 회전 시 횡슬립이 180mm 대비 약 28% 줄어든다 (`π × 휠베이스`, 565 → 405mm).
 - 벨트: 전륜-후륜 129mm 구간 360mm, 모터-전륜 79mm 구간 260mm, 아이들러로 장력.
 - 무게중심 목표: 앞축 65~70%, 높이 약 60mm.
+- 최종 기체 3D 모델: [`3D/`](3D/) (Fusion 360 `.f3z`, V6.2)
 - 전체 기록: [`docs/DESIGN_20261010.md`](docs/DESIGN_20261010.md), 벨트 도면: [`mechanical/belt/`](mechanical/belt/), 무게중심 계산기: [`robot-cg-simulator.html`](robot-cg-simulator.html)
 
 </details>
@@ -301,6 +302,7 @@ c_robot/
 ├── scripts/                   🍓 라즈: 검출기, 송신, 설정 앱, 로그 수신, systemd 서비스
 ├── tests/                     라즈 쪽 파이썬 시험
 ├── pi_backup/                 라즈 설정 백업 + 대회 주행 로그 80개 (runs/)
+├── 3D/                       🧊 Fusion 360 전체 기체 모델 (씨름 로봇 V6.2.f3z)
 ├── PCB/  PCBV2/               🔌 V1·V2 회로·PCB (KiCad)
 ├── mechanical/belt/           벨트 구동계 계산·DXF·STEP
 ├── fsm_sim/                   브라우저 2D FSM 시뮬레이터 (10/18)
