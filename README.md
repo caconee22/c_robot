@@ -124,7 +124,7 @@ C_ROBOT은 **2026 IRC 씨름 로봇 대회**에 나간 자율주행 스모 로�
 ## 🧭 시스템 구조
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph PI["🍓 Raspberry Pi 5"]
         CAM["Camera Module 3 Wide<br/>720p · 60fps · 셔터 1ms"] --> DET["tower_detector_hsv.py<br/>HSV · 모양 · ROI"]
         DET --> TX["pi_vision_sender.py<br/>14바이트 패킷 · 50Hz"]
@@ -156,8 +156,9 @@ flowchart LR
 **메인 루프 한 바퀴 (약 1~2ms)** — [`ESP_MAIN/src/main.cpp`](ESP_MAIN/src/main.cpp)
 
 ```text
-① 안전 확인 → ② 라즈 좌표 (최대 128바이트) → ③ 바닥 색 (짧은 I2C 단계) → ④ 배터리·IMU
-→ ⑤ 안전 재확인 (의도된 반복) → ⑥ FSM → ⑦ 좌우 출력 계산 → ⑧ 모터 (80ms 기한) → ⑨ LED·로그 (가장 낮은 우선순위)
+① 안전 확인        ② 라즈 좌표 (최대 128바이트)   ③ 바닥 색 (짧은 I2C 단계)
+④ 배터리·IMU       ⑤ 안전 재확인 (의도된 반복)    ⑥ FSM 판단
+⑦ 좌우 출력 계산   ⑧ 모터 (80ms 기한)             ⑨ LED·로그 (가장 낮은 우선순위)
 ```
 
 라즈 통신은 **CRC를 일부러 쓰지 않는다.** 짧은 고정 배선이라 헤더·버전·길이·상태 비트·좌표 범위·sequence·신선도 검사로 충분하다고 판단했다.
