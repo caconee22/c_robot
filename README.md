@@ -310,6 +310,7 @@ c_robot/
 ├── schedule/                  📅 팀 일정 페이지 (일정, 인수인계, 규정 점검, 로봇 설명, 순서도)
 ├── conversation_logs/         💬 Claude Code 개발 대화 (날짜별, 개인정보 가림)
 ├── docs/                      📚 타임라인, 라즈 안내, 예전 설계·영상 기록, 이미지
+├── videos/irc2026_match_day/  🎬 대회 당일(11/13) 경기 영상 6개 (Git LFS)
 ├── dataset/ img/ samples/     영상·사진 원본 (보존)
 ├── IRC2026_RETROSPECTIVE.md   🏆 대회 회고
 ├── PI_RECOVERY.md             라즈 SD 카드를 새로 만들 때
@@ -382,6 +383,8 @@ pie showData
 | 비정상 리셋 | 10번 (태스크 워치독 5, 인터럽트 워치독 5) | 모두 11/13. core dump 비어 있음 — 전원 쪽 추정, 미확정 |
 
 원본: [`pi_backup/runs/`](pi_backup/runs/) (주행 80개 + `boots.csv`)
+
+🎬 대회 당일 경기 영상: [`videos/irc2026_match_day/`](videos/irc2026_match_day/) (11/13 10:33–16:37, 6개, 약 0.65GB, Git LFS)
 
 ---
 
