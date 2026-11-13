@@ -15,6 +15,7 @@
 #include "control/opening_move.hpp"
 #include "control/pose_estimate.hpp"
 #include "control/robot_fsm.hpp"
+#include "hardware/reset_manager.hpp"
 #include "motor/motor_controller.hpp"
 #include "sensors/imu_monitor.hpp"
 #include "sensors/sensor_manager.hpp"
@@ -23,6 +24,7 @@
 #include "system/status_led.hpp"
 #include "system/system_manager.hpp"
 #include "system/tilt_guard.hpp"
+#include "system/reset_report.hpp"
 
 namespace {
 
@@ -100,11 +102,21 @@ void setup() {
   if (config::control::ALIGN_ONLY_FSM) AlignFsm::begin(); else RobotFsm::begin();
   SystemManager::setSoftResetHandler(softReset);
   BatteryMonitor::begin(millis());
+  // 11/13: why the last run ended (reset reason + state before it) -> Pi run log.
+  ResetReport::begin(static_cast<uint8_t>(ResetManager::reason()), millis());
   ImuMonitor::begin(millis());
   TiltGuard::begin();
   EventLogger::logText(static_cast<uint16_t>(EventId::Custom),
                        LogSeverity::Info, LogSource::System,
                        "fsm_ready");
+  // 11/13: watchdog restart while driving -> drive on at once, no opening move.
+  if (ResetReport::resumeRequested()) {
+    AlignFsm::skipOpeningOnce();
+    SystemManager::requestAutoStart();
+    EventLogger::logText(static_cast<uint16_t>(EventId::Custom), LogSeverity::Warning,
+                         LogSource::System, "auto_resume");
+  }
+  ResetReport::armWatchdog();
 }
 
 void loop() {
@@ -114,6 +126,7 @@ void loop() {
     return;
   }
 #endif
+  ResetReport::feedWatchdog();
   uint32_t nowMs = millis();
 
   // Safety comes first; each sensor step only performs short I2C transfers.
@@ -151,6 +164,10 @@ void loop() {
     MotorController::brake();
   }
 
+  ResetReport::update(nowMs, system.motorAllowed);
+  ResetReport::record(nowMs, system.motorAllowed,
+                      static_cast<uint8_t>(config::control::ALIGN_ONLY_FSM ? AlignFsm::state() : RobotFsm::state()),
+                      static_cast<uint8_t>(driveIntent.type), driveIntent.requestedDuty);
   // Run log to the Pi over UART1 (11/10): 5 Hz alive frame while driving, low priority.
   const bool aliveSent = RunLog::alive(nowMs, system.motorAllowed && config::control::ALIGN_ONLY_FSM,
                 static_cast<uint8_t>(AlignFsm::state()),

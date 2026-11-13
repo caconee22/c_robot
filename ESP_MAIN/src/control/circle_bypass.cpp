@@ -6,6 +6,10 @@ using namespace config::circle;
 bool running = false;
 bool right = true;       // turn direction away from the circle
 uint32_t startedMs = 0;
+bool backing = true;          // step 1 (reverse) still running
+uint32_t frontClearSinceMs = 0;
+bool frontClear = false;
+uint32_t turnStartMs = 0;     // set when the reverse ends
 
 DriveIntent drive(DriveIntentType type, uint16_t duty, int16_t steering = 0) {
   DriveIntent result;
@@ -20,6 +24,8 @@ void CircleBypass::start(uint32_t nowMs, bool turnRight) {
   running = true;
   right = turnRight;
   startedMs = nowMs;
+  backing = true;
+  frontClear = false;
 }
 
 void CircleBypass::cancel() { running = false; }
@@ -38,19 +44,31 @@ DriveIntent CircleBypass::update(uint32_t nowMs, const FloorHazardInfo& floor,
     result = BypassResult::NeedEscape;
     return drive(DriveIntentType::Brake, 0);
   }
-  const uint32_t elapsed = nowMs - startedMs;
-  if (elapsed < BACK_MS) {
+  if (backing) {
     if (floor.rear()) {
       running = false;
       result = BypassResult::NeedEscape;
       return drive(DriveIntentType::Brake, 0);
     }
-    return drive(DriveIntentType::Reverse, BACK_DUTY);   // straight back
+    const uint32_t backFor = nowMs - startedMs;
+    if (floor.front()) {
+      frontClear = false;
+    } else if (!frontClear) {
+      frontClear = true;
+      frontClearSinceMs = nowMs;
+    }
+    const bool cleared = frontClear && nowMs - frontClearSinceMs >= BACK_CLEAR_MS;
+    if (backFor < BACK_MAX_MS && (backFor < BACK_MS || !cleared)) {
+      return drive(DriveIntentType::Reverse, BACK_DUTY);   // straight back
+    }
+    backing = false;
+    turnStartMs = nowMs;
   }
-  if (elapsed < BACK_MS + TURN_MS) {
+  const uint32_t elapsed = nowMs - turnStartMs;
+  if (elapsed < TURN_MS) {
     return drive(right ? DriveIntentType::SearchRight : DriveIntentType::SearchLeft, TURN_DUTY);
   }
-  if (elapsed < BACK_MS + TURN_MS + ARC_MS) {
+  if (elapsed < TURN_MS + ARC_MS) {
     if (floor.front()) {   // touched the circle again: next step around it
       start(nowMs, right);
       return drive(DriveIntentType::Brake, 0);

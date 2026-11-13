@@ -10,6 +10,12 @@ Start (SW2) opens logs/runs/run_YYYYmmdd_HHMMSS.csv, Stop closes it. SW1 / SW2
 emergency stop sends nothing more (the ESP enters its permanent ESTOP loop),
 so the file is also closed when no frame arrives for SILENCE_S.
 
+Boot (11/13): every ESP power-on sends a frame (repeated every 2 s until the
+first start, recorded once thanks to a random boot id) with esp_reset_reason and,
+when it survived in RTC RAM, the state just before the restart. It is appended
+to logs/runs/boots.csv (and into the run file when one is still open), so a
+brownout or watchdog restart in a match is on record.
+
 Reads the same /dev/ttyAMA0 the vision sender writes to; it only reads, so the
 sender is not touched. Runs as the c-robot-esplog service.
 
@@ -29,7 +35,7 @@ VERSION, LENGTH, FRAME = 0x81, 10, 14
 SILENCE_S = 1.0
 DEFAULT_DIR = Path(__file__).resolve().parents[1] / "logs" / "runs"
 
-KINDS = {1: "시작", 2: "상태", 3: "회피", 4: "원돌기", 5: "생존", 6: "정지", 7: "위치"}
+KINDS = {1: "시작", 2: "상태", 3: "회피", 4: "원돌기", 5: "생존", 6: "정지", 7: "위치", 8: "부팅"}
 STATES = ["Boot", "대기", "탐색", "TargetConfirm", "정렬", "돌진", "ContactCheck", "DiveReady",
           "포크브레이크", "포크삽입", "UndercutDrive", "포크밀기", "ScoreHold", "Backoff", "LostTarget",
           "WallEscape", "회피", "StuckRecovery", "비상정지", "정지", "Wander", "시작루틴", "원돌기"]
@@ -38,6 +44,10 @@ COLORS = {0: "빨강", 1: "노랑", 2: "파랑", 3: "검정", 255: "모름"}
 INTENTS = ["정지", "Coast", "탐색좌", "탐색우", "정렬좌", "정렬우", "전진", "AttackCharge", "SpokeInsert",
            "Push", "DiveBrake", "후진", "EscapeLeft", "EscapeRight"]
 SAFETY = ["리셋잠금", "시작대기", "구동", "비상정지"]
+# esp_reset_reason_t (11/13). Abnormal = not a power-on or reset button.
+RESETS = {0: "모름", 1: "전원켜짐", 2: "리셋핀", 3: "소프트웨어재시작", 4: "패닉(크래시)",
+          5: "인터럽트워치독", 6: "태스크워치독", 7: "워치독", 8: "딥슬립", 9: "브라운아웃(전압강하)", 10: "SDIO"}
+ABNORMAL = {3, 4, 5, 6, 7, 9}
 
 
 def name(table, i):
@@ -63,6 +73,13 @@ def describe(kind: int, a: int, b: int, c: int, d: int) -> str:
         return f"{name(STATES, a)} 타워 {tower} 동작={name(INTENTS, c)} {d}"
     if kind == 6:
         return f"이유={name(SAFETY, a)}"
+    if kind == 8:   # a: reset reason | boot id << 8; state before it (b 0xFFFF = not kept)
+        reason = a & 0xFF
+        head = f"리셋원인={name(RESETS, reason)}({reason})" + (" ⚠비정상" if reason in ABNORMAL else "")
+        if b == 0xFFFF:
+            return head + " 직전상태=없음(전원이 끊겼거나 첫 부팅)"
+        return (head + f" 직전상태={name(STATES, b & 0xFF)} 구동중={1 if b & 0x100 else 0}"
+                f" 부팅후={c / 10:.1f}s 직전동작={name(INTENTS, d >> 12)} {d & 0x0FFF}")
     if kind == 7:   # rough pose: heading 0.1 deg, x/y mm, signed
         s16 = lambda v: v - 65536 if v >= 32768 else v
         return f"방향={s16(a) / 10:.1f}도 x={s16(b)}mm y={s16(c)}mm IMU={'정상' if d else '없음'}"
@@ -119,6 +136,37 @@ class RunFile:
             print(f"log closed: {why}", flush=True)
 
 
+def last_boot(folder: Path):
+    """Payload (a, b, c, d) of the last boot in boots.csv, so a receiver restart
+    does not record the boot the ESP is still repeating a second time."""
+    try:
+        lines = (folder / "boots.csv").read_text(encoding="utf-8").strip().splitlines()
+        raw = bytes.fromhex(lines[-1].rsplit(",", 1)[1].replace(" ", ""))
+        return struct.unpack_from("<4H", raw, 6) if len(raw) == FRAME else None
+    except (OSError, IndexError, ValueError, struct.error):
+        return None
+
+
+def note_boot(folder: Path, a, b, c, d, raw) -> bool:
+    """Append one ESP boot to boots.csv (kept across runs and Pi reboots).
+    The ESP repeats the frame every 2 s until the first start; the random boot
+    id in a makes each boot's payload unique, so repeats are skipped. True when
+    it was a new boot."""
+    if last_boot(folder) == (a, b, c, d):
+        return False
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "boots.csv"
+    new = not path.exists()
+    with path.open("a", encoding="utf-8") as f:
+        if new:
+            f.write("시각,리셋원인번호,비정상,내용,원본\n")
+        reason = a & 0xFF
+        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S},{reason},{1 if reason in ABNORMAL else 0},"
+                f"{describe(8, a, b, c, d)},{raw.hex(' ').upper()}\n")
+    print(f"부팅 {describe(8, a, b, c, d)}", flush=True)
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ESP32 run log -> files")
     parser.add_argument("--port", default="/dev/ttyAMA0")
@@ -133,6 +181,10 @@ def main() -> None:
         while True:
             buffer += port.read(256)
             for seq, kind, a, b, c, d, raw in parse(buffer):
+                if kind == 8:
+                    if note_boot(args.dir, a, b, c, d, raw) and run.file:
+                        run.write(seq, kind, a, b, c, d, raw)
+                    continue
                 if kind == 1:
                     run.open()
                 elif run.file is None:

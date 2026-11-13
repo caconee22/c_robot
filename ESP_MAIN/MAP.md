@@ -98,6 +98,7 @@ StatusLed::update, EventLogger::process, delay(1)
 | HuskyLens UART (구형 V1 로봇, 11/10) | `communication/huskylens_link.hpp` | `poll`, `latest`, `status` (같은 `VisionSnapshot`) | VisionLink | |
 | 영상 출처 선택 (빌드 `VISION_HUSKYLENS`) | `communication/vision_link.hpp` | `begin`, `poll`, `latest`, `status` | BootManager, loop, 벤치 | |
 | 실행 로그 → 라즈 (11/10, UART1 TX, 버전 0x81) | `communication/run_log.hpp` | `push`, `alive`, `process` | AlignFsm, loop (라즈: `scripts/esp_log_receiver.py`) | |
+| 리셋 원인 → 라즈 (11/13, RTC RAM, 부팅 프레임 kind 8) | `system/reset_report.hpp` | `begin`, `record` | setup, loop (라즈: `logs/runs/boots.csv`) | |
 | 로그용 위치 추정 (11/10, 자이로 방향 + 명령 거리, FSM 미사용) | `control/pose_estimate.hpp` | `update`, `pose` | loop → RunLog Pose | |
 | 센서 판정 | `sensors/sensor_manager.hpp` | `update`, `snapshot` | loop | |
 | 센서 I2C (꺼진 채널 최대 3번 재초기화) | `sensors/color_sensor_manager.hpp` | `update`, `sample` | SensorManager | |

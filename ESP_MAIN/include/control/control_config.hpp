@@ -12,13 +12,13 @@ namespace control {
 // 11/04 bench (V2, 3S pack): below ~250 the robot does not spin in place and
 // at 260 one wheel stalls so it pivots (looks like driving forward/back);
 // 300 spins cleanly. Spin duties stay at or above that floor.
-constexpr uint16_t SEARCH_DUTY = 300;   // 11/10: tried 360 (+20 %), no clear gain, back to 300
+constexpr uint16_t SEARCH_DUTY = 500;   // 11/13 match day (학현): too slow, stuck turning in the groove (300 -> 500)
 constexpr uint16_t TARGET_CONFIRM_DUTY = 300;
 // Align spin ramps with the tower's distance from center: MIN just outside the
 // center window, MAX at ALIGN_FULL_ERROR px and beyond (bench ALIGN: less
 // overshoot and left/right swinging than one fixed duty).
-constexpr uint16_t ALIGN_MIN_DUTY = 280;   // 11/10: back from the +20 % try
-constexpr uint16_t ALIGN_MAX_DUTY = 380;   // 11/10: back from the +20 % try (455)
+constexpr uint16_t ALIGN_MIN_DUTY = 350;   // 11/13: turn out of the groove (280 -> 350)
+constexpr uint16_t ALIGN_MAX_DUTY = 450;   // 11/13: (380 -> 450); 455 rocked on 11/10, lower first if it rocks
 constexpr uint16_t ALIGN_FULL_ERROR = 700;
 constexpr uint16_t APPROACH_DUTY = 450;
 constexpr uint16_t ATTACK_CHARGE_DUTY = 650;

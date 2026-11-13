@@ -8,7 +8,9 @@ window, pink = pixels inside the color range.
   drag          pick the color from the box (into the selected range, or a new one)
   Shift+click   widen the range to include that spot
   Ctrl+click    narrow the range to drop that spot
-Rejected labels are small / big / flat (작음 / 큼 / 납작).
+  Alt+click     put the upper-zone line at that height (크기·모양 tab)
+Rejected labels are small / big / flat / high (작음 / 큼 / 납작 / 선 위에서 작음).
+Yellow line = upper zone: blobs wholly above it need the larger size (11/12).
 Right tabs: 색 / 크기·모양 / 카메라 / 프리셋·도구. "저장" writes
 config/tower_hsv.json and config/camera.json; the boot sender uses both.
 """
@@ -29,7 +31,7 @@ import numpy as np
 
 import camera_settings
 from tower_detector_hsv import (HSV_HIGH, HSV_LOW, MAX_AREA_FRACTION, MIN_AREA_FRACTION, RANGE_FILE,
-                                TALL_RATIO, save_settings)
+                                ROI_LINE, ROI_MIN_AREA, TALL_RATIO, save_settings)
 
 VIEW = (640, 360)
 REFRESH_MS = 66                      # ~15 view updates per second; detection stays at 50 fps
@@ -158,6 +160,7 @@ class App:
         self.canvas.bind("<ButtonRelease-1>", self._drag_end)
         self.canvas.bind("<Shift-Button-1>", lambda e: self._click(e, widen))
         self.canvas.bind("<Control-Button-1>", lambda e: self._click(e, narrow))
+        self.canvas.bind("<Alt-Button-1>", self._set_roi_line)
         bar = ttk.Frame(left)
         bar.pack(fill="x", pady=4)
         for name in ("겹쳐 보기", "원본", "마스크"):
@@ -287,6 +290,18 @@ class App:
             row=3, column=0, columnspan=3, sticky="w", pady=6)
         ttk.Label(f, text="화면 면적 대비 %. 회색 박스에 '작음/큼/납작'이 뜨면 이 값들을 조정하세요.",
                   foreground="#666", wraplength=380).grid(row=4, column=0, columnspan=3, sticky="w")
+        ttk.Separator(f).grid(row=5, column=0, columnspan=3, sticky="ew", pady=8)
+        self.roi_line = tk.DoubleVar()
+        self.roi_min = tk.DoubleVar()
+        self.roi_on = tk.BooleanVar(value=True)
+        ttk.Checkbutton(f, text="위쪽 구역 사용 (경기장 밖 초록 거르기)", variable=self.roi_on).grid(
+            row=6, column=0, columnspan=3, sticky="w")
+        self._row(f, "선 높이 (위에서 %)", self.roi_line, 0, 100, 1, row=7)
+        self._row(f, "선 위 최소 크기 (%)", self.roi_min, 0, 20, 0.05, row=8, fmt="%.2f")
+        ttk.Label(f, text="노란 선보다 완전히 위에 있는 덩어리는 이 크기 이상만 인정합니다 (회색 'high'). "
+                          "바닥에 선 타워는 선 아래까지 내려오므로 영향 없음. 체크를 끄면 선 위치는 그대로 두고 거르기만 멈춥니다. "
+                          "Alt+클릭으로 그 높이에 선을 놓을 수 있습니다.",
+                  foreground="#666", wraplength=380).grid(row=9, column=0, columnspan=3, sticky="w")
 
     def _camera_tab(self, f) -> None:
         v = self.cam_vars = {k: (tk.BooleanVar() if isinstance(d, bool) else
@@ -347,6 +362,9 @@ class App:
         self.max_size.set(round(t.max_area * 100))
         self.tall.set(t.tall_ratio)
         self.track.set(t.track)
+        self.roi_line.set(round(t.roi_line * 100))
+        self.roi_min.set(round(t.roi_min_area * 100, 2))
+        self.roi_on.set(t.roi_on)
         for key, var in self.cam_vars.items():
             var.set(self.cam[key])
         self.exposure_label.set(self.exposure_names[self.cam["exposure_mode"]])
@@ -363,6 +381,9 @@ class App:
             self.tower.max_area = max(low + 1e-4, min(max(float(self.max_size.get()), 1.0), 100.0) / 100)
             self.tower.tall_ratio = min(max(float(self.tall.get()), 0.0), 5.0)
             self.tower.track = bool(self.track.get())
+            self.tower.roi_line = min(max(float(self.roi_line.get()), 0.0), 100.0) / 100
+            self.tower.roi_min_area = min(max(float(self.roi_min.get()), 0.0), 100.0) / 100
+            self.tower.roi_on = bool(self.roi_on.get())
             cam = camera_settings.clean({k: var.get() for k, var in self.cam_vars.items()})
         except (tk.TclError, ValueError):
             return   # half-typed number in a box; keep the last good values
@@ -413,6 +434,8 @@ class App:
         self.tower.active = 0
         self.tower.min_area, self.tower.max_area = MIN_AREA_FRACTION, MAX_AREA_FRACTION
         self.tower.tall_ratio, self.tower.track = TALL_RATIO, True
+        self.tower.roi_line, self.tower.roi_min_area = ROI_LINE, ROI_MIN_AREA
+        self.tower.roi_on = True
         self.cam = dict(camera_settings.DEFAULTS)
         self._load_into_vars()
         self.message.set("기본값으로 바꿨습니다 (저장 전에는 파일이 그대로입니다)")
@@ -445,7 +468,9 @@ class App:
         presets[name] = {"tower": {"ranges": [{"name": r["name"], "low": list(r["low"]), "high": list(r["high"]),
                                                "on": r["on"]} for r in t.ranges],
                                    "min_area": t.min_area,
-                                   "max_area": t.max_area, "tall_ratio": t.tall_ratio, "track": t.track},
+                                   "max_area": t.max_area, "tall_ratio": t.tall_ratio, "track": t.track,
+                                   "roi_line": t.roi_line, "roi_min_area": t.roi_min_area,
+                                   "roi_on": t.roi_on},
                          "camera": self.cam}
         self._write_presets(presets)
         self.message.set(f"프리셋 '{name}' 저장")
@@ -462,6 +487,9 @@ class App:
         t.active = 0
         t.min_area, t.max_area = tw["min_area"], tw["max_area"]
         t.tall_ratio, t.track = tw["tall_ratio"], tw["track"]
+        t.roi_line = tw.get("roi_line", ROI_LINE)            # presets saved before 11/12 have none
+        t.roi_min_area = tw.get("roi_min_area", ROI_MIN_AREA)
+        t.roi_on = tw.get("roi_on", True)
         self.cam = camera_settings.clean(p["camera"])
         self._load_into_vars()
         self.message.set(f"프리셋 '{self.preset.get()}' 적용 (저장을 눌러야 부팅 송신에도 반영)")
@@ -530,6 +558,11 @@ class App:
             self._set_range(*change(self.tower.low, self.tower.high, hsv))
             self.message.set(f"{'넓힘' if change is widen else '좁힘'}: 클릭한 곳 HSV {hsv}")
         return "break"   # keep the plain click from starting a drag
+
+    def _set_roi_line(self, event) -> str:
+        self.roi_line.set(round(100 * min(max(event.y, 0), VIEW[1]) / VIEW[1]))
+        self.message.set(f"위쪽 구역 선: 위에서 {self.roi_line.get():.0f}%")
+        return "break"   # not a drag
 
     def _drag_start(self, event) -> None:
         self.drag = (event.x, event.y, event.x, event.y)
@@ -617,6 +650,18 @@ class App:
         for i, c in enumerate(candidates[:2]):
             x, y, w, h = (int(v * k) for v in c["bbox"])
             cv2.rectangle(shown, (x, y), (x + w, y + h), (0, 255, 0) if i == 0 else (0, 200, 255), 2)
+        if t.roi_line > 0 and t.roi_on:   # upper zone: yellow line, area above slightly darkened
+            ry = int(t.roi_line * VIEW[1])
+            shown[:ry] = (shown[:ry] * 0.7).astype(np.uint8)
+            cv2.line(shown, (0, ry), (VIEW[0], ry), (0, 255, 255), 2)
+            cv2.putText(shown, f"min {t.roi_min_area * 100:.2f}%", (4, max(12, ry - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+        elif t.roi_line > 0:              # switched off: thin grey dashed line where it would be
+            ry = int(t.roi_line * VIEW[1])
+            for x in range(0, VIEW[0], 16):
+                cv2.line(shown, (x, ry), (x + 8, ry), (150, 150, 150), 1)
+            cv2.putText(shown, "ROI off", (4, max(12, ry - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                        (150, 150, 150), 1)
         cx = VIEW[0] // 2
         cv2.line(shown, (cx, 0), (cx, VIEW[1]), (255, 255, 255), 1)
         band = int(ALIGN_WINDOW * VIEW[0])

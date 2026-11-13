@@ -83,6 +83,10 @@ class SystemManager {
   // While held, SW2 presses are dropped like a fault would drop them; a new
   // press is needed after release. Not a fault: state and LEDs are unchanged.
   static void holdStart(bool held);
+  // 11/13: start the run once without a button (watchdog restart while
+  // driving, system/reset_report.hpp). Taken at the next update() while
+  // waiting for start and not held; the same health checks as a button start.
+  static void requestAutoStart();
 
   static SystemStatus status();
   static SafetyStatus safetyStatus();

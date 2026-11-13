@@ -1,6 +1,7 @@
 #include "interrupts/button_interrupts.hpp"
 
 #include <Arduino.h>
+#include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <soc/gpio_struct.h>
 
@@ -351,6 +352,7 @@ void ButtonInterrupts::waitInEmergencyStop() {
     update(nowMs);   // debounce only: nothing here can drive a motor
     if (resetRequested) break;
     StatusLed::update(nowMs);
+    esp_task_wdt_reset();   // 11/13: the loop task is watched in the match firmware
     delay(1);
   }
 

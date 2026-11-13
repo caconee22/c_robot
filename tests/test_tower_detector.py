@@ -112,6 +112,32 @@ class CalibratorTests(unittest.TestCase):
         d.min_area, d.max_area = 1e-4, 0.01            # largest allowed 1 %
         self.assertEqual(d.detect(image).candidates, [])
 
+    def test_upper_zone_needs_a_bigger_blob(self):
+        # 11/12: green outside the field, above the line, is dropped unless large;
+        # a tower whose box reaches below the line keeps the normal limits.
+        d = T.TowerDetector(NO_FILE)
+        outside = (100, 20, 30, 40)       # wholly above y=90, 1200 px = 0.52 %
+        tower = (400, 60, 30, 80)         # 60..140 crosses the line
+        self.assertEqual(len(d.detect(frame(outside, tower)).candidates), 2)   # zone off
+        d.roi_line, d.roi_min_area = 0.25, 0.01                                 # line y=90, 1 %
+        r = d.detect(frame(outside, tower))
+        self.assertEqual([c["bbox"] for c in r.candidates], [tower])
+        self.assertIn(((100, 20, 30, 40), "high"), d.rejected)
+        d.roi_on = False                                                        # switch off, line kept
+        self.assertEqual(len(d.detect(frame(outside, tower)).candidates), 2)
+        d.roi_on = True
+        d.roi_min_area = 0.004             # 0.4 % (contour area 29x39 = 0.49 %): big enough
+        self.assertEqual(len(d.detect(frame(outside, tower)).candidates), 2)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "tower_hsv.json"
+            T.save_settings(d, path)
+            self.assertEqual(T.load_roi(path), (0.25, 0.004))
+            d.roi_on = False
+            T.save_settings(d, path)
+            self.assertFalse(T.TowerDetector(path).roi_on)
+            T.save_range((50, 90, 40), (66, 255, 255), path)                    # no zone keys
+            self.assertEqual(T.load_roi(path), (T.ROI_LINE, T.ROI_MIN_AREA))
+
     def test_zero_min_area_skips_a_one_pixel_line(self):
         # 11/09 Pi: min_area 0.0 saved from the app, a 1 px line (area 0) crashed detect
         d = T.TowerDetector(NO_FILE)

@@ -38,6 +38,10 @@ enum class RunLogKind : uint8_t {
   Stop = 6,     // a SafetyState
   Pose = 7,     // a heading 0.1 deg, b x mm, c y mm (int16 as uint16), d IMU ok
                 // (control/pose_estimate.hpp, rough; sent right after each Alive)
+  Boot = 8,     // every 2 s until the first start (11/13, system/reset_report.hpp):
+                // a esp_reset_reason | random boot id << 8,
+                // b previous RobotState (+0x100 driving, 0xFFFF unknown),
+                // c previous uptime 0.1 s, d previous intent << 12 | duty
 };
 
 namespace RunLog {

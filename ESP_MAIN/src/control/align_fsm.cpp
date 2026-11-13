@@ -22,6 +22,7 @@ uint16_t lastTargetHeight = 0;
 bool bypassTurnedRight = true;   // last circle bypass turn, for the search side after it
 uint32_t bypassStartMs = 0;
 bool runStarted = false;   // false until the first motor-allowed pass of a run
+bool skipOpening = false;  // skipOpeningOnce: resumed run, no opening move
 bool charging = false;
 bool pushThroughActive = false;   // 11/11 push-through window running
 // 11/11 straight back-out repeat limit (same front side within the window).
@@ -168,7 +169,9 @@ DriveIntent AlignFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
   // Every new run (SW2) starts with the fixed opening move.
   if (!runStarted) {
     runStarted = true;
-    if (config::opening::ENABLED) OpeningMove::start(nowMs);
+    const bool opening = config::opening::ENABLED && !skipOpening;
+    skipOpening = false;
+    if (opening) OpeningMove::start(nowMs);
     RunLog::push(RunLogKind::Start, config::opening::ENABLED ? OpeningMove::scalePermille() : 0,
                  MotorTrim::left(), MotorTrim::right(), OpeningMove::batteryCells());
     if (config::opening::ENABLED) {
@@ -361,5 +364,7 @@ DriveIntent AlignFsm::update(uint32_t nowMs, const SensorSnapshot& sensors,
 }
 
 RobotState AlignFsm::state() { return currentState; }
+
+void AlignFsm::skipOpeningOnce() { skipOpening = true; }
 
 FloorColor AlignFsm::escapeColor() { return escapeColorNow; }

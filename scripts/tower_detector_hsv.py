@@ -48,6 +48,13 @@ TALL_RATIO = 0.5            # height / width; real tower boxes were 0.7-1.3, mat
 TRACK_FRAMES = 10           # frames the last position is trusted after a miss
 TRACK_GATE = 0.25           # max jump to the nearest candidate, fraction of frame width
 TRACK_MIN_SHARE = 0.25      # tracking only picks among candidates >= this share of the largest
+# Upper zone (11/12, 학현: green outside the field showed up above the field).
+# A blob whose box lies entirely above ROI_LINE (share of the frame height from
+# the top) needs at least ROI_MIN_AREA (share of the frame) to count. A tower on
+# the field stands below the line, so its box always reaches below it and the
+# normal size limits apply. ROI_LINE 0 = off.
+ROI_LINE = 0.0
+ROI_MIN_AREA = 0.01
 KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
 
@@ -107,9 +114,31 @@ def load_ranges(path: Path = RANGE_FILE) -> list[dict]:
     return [{"name": "범위 1", "low": low, "high": high, "on": True}]
 
 
+def load_roi(path: Path = RANGE_FILE) -> tuple[float, float]:
+    """Saved upper-zone line (share of the height) and its minimum size, or the defaults."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        line, area = float(data["roi_line"]), float(data["roi_min_area"])
+        if 0 <= line <= 1 and 0 <= area <= 1:
+            return line, area
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return ROI_LINE, ROI_MIN_AREA
+
+
+def load_roi_on(path: Path = RANGE_FILE) -> bool:
+    """Saved upper-zone switch; on when missing (the line height 0 still means off)."""
+    try:
+        return bool(json.loads(path.read_text(encoding="utf-8")).get("roi_on", True))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return True
+
+
 def save_range(low, high, path: Path = RANGE_FILE,
                min_area: float = MIN_AREA_FRACTION, max_area: float = MAX_AREA_FRACTION,
-               tall_ratio: float = TALL_RATIO, track: bool = True, ranges: list | None = None) -> None:
+               tall_ratio: float = TALL_RATIO, track: bool = True, ranges: list | None = None,
+               roi_line: float = ROI_LINE, roi_min_area: float = ROI_MIN_AREA,
+               roi_on: bool = True) -> None:
     if not valid_range(low, high):
         raise ValueError(f"bad HSV range {low} {high}")
     ranges = ranges or [{"name": "범위 1", "low": low, "high": high, "on": True}]
@@ -117,11 +146,15 @@ def save_range(low, high, path: Path = RANGE_FILE,
         raise ValueError("bad HSV range in the list")
     if not 0 <= min_area < max_area <= 1:
         raise ValueError(f"bad size limits {min_area} {max_area}")
+    if not (0 <= roi_line <= 1 and 0 <= roi_min_area <= 1):
+        raise ValueError(f"bad upper zone {roi_line} {roi_min_area}")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"low": [int(v) for v in low], "high": [int(v) for v in high],
                                "min_area": min_area, "max_area": max_area,
                                "tall_ratio": tall_ratio, "track": bool(track),
+                               "roi_line": float(roi_line), "roi_min_area": float(roi_min_area),
+                               "roi_on": bool(roi_on),
                                "ranges": [{"name": r["name"], "low": [int(v) for v in r["low"]],
                                            "high": [int(v) for v in r["high"]], "on": bool(r["on"])}
                                           for r in ranges]},
@@ -143,7 +176,8 @@ def load_shape(path: Path = RANGE_FILE) -> tuple[float, bool]:
 
 def save_settings(detector: "TowerDetector", path: Path = RANGE_FILE) -> None:
     save_range(detector.low, detector.high, path, detector.min_area, detector.max_area,
-               detector.tall_ratio, detector.track, detector.ranges)
+               detector.tall_ratio, detector.track, detector.ranges,
+               detector.roi_line, detector.roi_min_area, detector.roi_on)
 
 
 class TowerDetector:
@@ -158,6 +192,8 @@ class TowerDetector:
         self.active = 0                                          # range the sliders edit
         self.min_area, self.max_area = load_sizes(range_file)   # share of the frame area
         self.tall_ratio, self.track = load_shape(range_file)
+        self.roi_line, self.roi_min_area = load_roi(range_file)   # upper zone, shares of height / frame
+        self.roi_on = load_roi_on(range_file)                     # switch; keeps the line when off
 
     # low/high = the active range, so single-range callers keep working.
     @property
@@ -210,6 +246,8 @@ class TowerDetector:
         contours, _ = cv2.findContours(self.mask(frame, small), cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
         min_area, max_area = self.min_area * width * height, self.max_area * width * height
+        roi_y = self.roi_line * height if self.roi_on else 0  # 0 = upper zone off
+        roi_min = self.roi_min_area * width * height
         tall, rejected = [], []
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -218,6 +256,10 @@ class TowerDetector:
                     rejected.append((cv2.boundingRect(contour), "small"))
                 continue
             x, y, w, h = cv2.boundingRect(contour)
+            if roi_y > 0 and y + h <= roi_y and area < roi_min:   # wholly above the line and small
+                if len(rejected) < 12:
+                    rejected.append(((x, y, w, h), "high"))
+                continue
             if area > max_area:
                 rejected.append(((x, y, w, h), "big"))
                 continue

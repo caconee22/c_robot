@@ -30,6 +30,8 @@ class AlignFsm {
   static DriveIntent update(uint32_t nowMs, const SensorSnapshot& sensors,
                             const VisionSnapshot& vision, const SafetyStatus& safety);
   static RobotState state();
+  // 11/13: the next run starts without the opening move (watchdog resume).
+  static void skipOpeningOnce();
   // Hazard color that started the current escape (for the LED).
   static FloorColor escapeColor();
 };

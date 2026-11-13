@@ -3,6 +3,7 @@
 #include "hardware/reset_manager.hpp"
 #include "interrupts/button_interrupts.hpp"
 #include "motor/motor_controller.hpp"
+#include "system/reset_report.hpp"
 #include "system/status_led.hpp"
 
 namespace {
@@ -16,6 +17,7 @@ int32_t motorFaultDetail = 0;
 int32_t applicationFaultDetail = 0;
 uint32_t lastMotorWatchdogCount = 0;
 void (*softResetHandler)() = nullptr;
+bool autoStartPending = false;   // requestAutoStart, until the next start
 uint32_t softResets = 0;
 
 SafetyState safetyStateFor(SystemState state) {
@@ -168,6 +170,8 @@ void SystemManager::triggerEmergencyStop() { ButtonInterrupts::triggerEmergencyS
 
 void SystemManager::setSoftResetHandler(void (*handler)()) { softResetHandler = handler; }
 
+void SystemManager::requestAutoStart() { autoStartPending = true; }
+
 uint32_t SystemManager::softResetCount() { return softResets; }
 
 void SystemManager::update(uint32_t nowMs) {
@@ -188,6 +192,8 @@ void SystemManager::update(uint32_t nowMs) {
     latestStatus.safety.faultFlags = latestStatus.faultFlags;
     applyLedState(SystemState::EmergencyStop);
     MotorController::emergencyStop();
+    autoStartPending = false;
+    ResetReport::noteStopped();   // a watchdog restart after this must not resume
     ButtonInterrupts::waitInEmergencyStop();   // returns after the two-button reset
     // Soft reset: back to "waiting for start" as after boot, without
     // re-initializing hardware. Health faults stay as they are; a new start
@@ -205,7 +211,10 @@ void SystemManager::update(uint32_t nowMs) {
     return;
   }
 
-  if (ButtonInterrupts::consumeStartEvent()) {
+  const bool autoStart = autoStartPending && !latestStatus.startHeld &&
+                         latestStatus.state == SystemState::WaitingForStart;
+  if (autoStart) autoStartPending = false;
+  if (ButtonInterrupts::consumeStartEvent() || autoStart) {
     if (!latestStatus.motorsHealthy ||
         !latestStatus.applicationHealthy || !latestStatus.sensorsHealthy ||
         latestStatus.startHeld) {

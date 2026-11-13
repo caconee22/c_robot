@@ -24,16 +24,16 @@
 
 namespace config {
 namespace escape {
-constexpr uint16_t REVERSE_DUTY = 450;   // 11/10: back from the +20 % try
-constexpr uint16_t FORWARD_DUTY = 450;   // 11/10: back from the +20 % try
+constexpr uint16_t REVERSE_DUTY = 650;   // 11/13 match field: climbing out over the groove lip takes longer (450 -> 650)
+constexpr uint16_t FORWARD_DUTY = 650;   // 11/13: same as REVERSE_DUTY (450 -> 650)
 constexpr int16_t TURN_STEERING = 150;   // front corner first, while reversing
 constexpr int16_t REAR_STEERING = 120;   // rear corner first, while going forward
 constexpr int16_t SIDE_STEERING = 250;   // pushed in sideways
 // Front and rear both on the color (pushed all the way in): push back harder.
-constexpr uint16_t PUSHED_DUTY = 620;    // 11/10: back from the try; duty + steering capped at 710
-constexpr uint16_t MOTOR_LIMIT = 710;   // motor DEFAULT_OUTPUT_LIMIT: duty + steering stays under it
-constexpr uint32_t CLEAR_MS = 200;       // keep moving this long after the floor is clear
-constexpr uint32_t FLIP_MS = 1500;
+constexpr uint16_t PUSHED_DUTY = 750;    // 11/13: above REVERSE/FORWARD 650 (was 620); duty + steering capped at MOTOR_LIMIT
+constexpr uint16_t MOTOR_LIMIT = 1000;   // motor DEFAULT_OUTPUT_LIMIT (1000 since 11/12): duty + steering stays under it
+constexpr uint32_t CLEAR_MS = 200;       // keep moving this long after the floor is clear (11/13: 200 -> 500 backed off too far -> 200; duty stays 650)
+constexpr uint32_t FLIP_MS = 2500;       // 11/13: 1500 -> 2500, the lip makes the way out slower; do not flip too early
 }  // namespace escape
 }  // namespace config
 
